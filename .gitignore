@@ -51,3 +51,6 @@ ui_*.h
 *.log
 *.tmp
 *.bak
+
+# Local AI-agent scratch files
+.ai-bridge/

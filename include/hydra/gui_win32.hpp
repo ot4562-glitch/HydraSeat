@@ -35,6 +35,7 @@ struct VisualDeviceTile {
     std::wstring displayLabel; // e.g. "1.1", "1.2", "KBD 1", "MOU 1"
     DeviceCategory type{DeviceCategory::Keyboard};
     uintptr_t nativeHandle{0};
+    std::wstring deviceId;
     std::wstring devicePath;
     PartitionOwner owner{PartitionOwner::Pool};
     uint64_t flashUntil{0};

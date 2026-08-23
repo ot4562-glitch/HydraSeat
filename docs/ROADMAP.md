@@ -2,25 +2,25 @@
 
 ---
 
-## Phase 0: Research & Foundation (Current)
+## Phase 0: Research & Foundation (Complete)
 - [x] Establish C++20 / Qt 6 project workspace architecture
 - [x] Configure `.agents/AGENTS.md` autonomous iteration rules
 - [x] Document Windows input/display architectural design
-- [ ] Evaluate open-source libraries: Interception, HidHide, ViGEmBus, Virtual Display Driver (IDD)
+- [x] Evaluate open-source libraries: Interception, HidHide, ViGEmBus, Virtual Display Driver (IDD)
 
 ---
 
-## Phase 1: Hardware Detection
-- [ ] Implement `HardwareDetector` module
-- [ ] Detect and list physical display monitors & virtual displays
-- [ ] Differentiate distinct physical keyboards by HID device path (`RAWINPUTHEADER.hDevice`)
-- [ ] Differentiate distinct mice and touchpads
-- [ ] Differentiate controllers (XInput, DualSense, HID)
-- [ ] Build CLI hardware detection tool for verification
+## Phase 1: Hardware Detection (Complete)
+- [x] Implement `HardwareDetector` module
+- [x] Detect and list physical display monitors & virtual displays
+- [x] Differentiate distinct physical keyboards by HID device path (`RAWINPUTHEADER.hDevice`)
+- [x] Differentiate distinct mice and touchpads
+- [x] Differentiate controllers (XInput, DualSense, HID)
+- [x] Build CLI hardware detection tool for verification
 
 ---
 
-## Phase 2: Device Assignment UI & Workspace Matrix
+## Phase 2: Device Assignment UI & Workspace Matrix (Current)
 - [ ] Build Qt 6 drag-and-drop workspace assignment UI
 - [ ] Implement `WorkspaceManager` state machine
 - [ ] Save and load workspace profiles to JSON

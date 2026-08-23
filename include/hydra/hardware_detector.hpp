@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <optional>
 
 namespace hydra {
 
@@ -19,6 +20,12 @@ struct DeviceInfo {
     std::wstring devicePath;
     DeviceType type;
     uintptr_t nativeHandle{0};
+    bool isLikelyVirtual{false};
+};
+
+struct DetectionError {
+    std::wstring operation;
+    uint32_t systemError{0};
 };
 
 class HardwareDetector {
@@ -40,6 +47,15 @@ public:
 
     // Print summary of all detected hardware
     void printReport();
+
+    // Error from the most recent category query, if enumeration itself failed.
+    const std::optional<DetectionError>& lastError() const noexcept { return m_lastError; }
+
+private:
+    void beginQuery() noexcept { m_lastError.reset(); }
+    void recordError(std::wstring operation, uint32_t systemError);
+
+    std::optional<DetectionError> m_lastError;
 };
 
 } // namespace hydra

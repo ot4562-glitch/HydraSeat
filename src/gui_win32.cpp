@@ -1,11 +1,12 @@
 #include "hydra/gui_win32.hpp"
+#include "hydra/hid_usage.hpp"
+#include "hydra/raw_input_utils.hpp"
 
 #ifdef _WIN32
-#include <iostream>
-#include <sstream>
-#include <iomanip>
+#include <algorithm>
+#include <cwctype>
 #include <fstream>
-#include <unordered_set>
+#include <iostream>
 
 #pragma comment(lib, "comctl32.lib")
 
@@ -23,33 +24,14 @@ static void openDiagLog() {
     }
 }
 
-// Extract clean hardware base ID key (strips HID sub-collections like &Col01, &Col02)
-static std::wstring getGuiHardwareDeviceKey(const std::wstring& devPath) {
-    std::wstring pathUpper = devPath;
-    for (auto& c : pathUpper) c = ::towupper(c);
-
-    // Remove any embedded null characters that come from Win32 API
-    pathUpper.erase(std::remove(pathUpper.begin(), pathUpper.end(), L'\0'), pathUpper.end());
-
-    // Find the VID&PID or ACPI device identifier portion
-    size_t start = pathUpper.find(L"HID#");
-    if (start == std::wstring::npos) start = pathUpper.find(L"ACPI#");
-    if (start != std::wstring::npos) {
-        size_t firstHash = pathUpper.find(L"#", start);
-        if (firstHash != std::wstring::npos) {
-            size_t secondHash = pathUpper.find(L"#", firstHash + 1);
-            if (secondHash != std::wstring::npos) {
-                std::wstring key = pathUpper.substr(firstHash + 1, secondHash - firstHash - 1);
-                // Strip sub-collection suffix (&COL01, &COL02, etc.)
-                size_t colPos = key.find(L"&COL");
-                if (colPos != std::wstring::npos) {
-                    key.erase(colPos);
-                }
-                return key;
-            }
-        }
+static std::wstring_view stableIdCategory(DWORD rawDevType) {
+    if (rawDevType == RIM_TYPEKEYBOARD) {
+        return L"Keyboard";
     }
-    return pathUpper;
+    if (rawDevType == RIM_TYPEMOUSE || rawDevType == RIM_TYPEHID) {
+        return L"Mouse";
+    }
+    return {};
 }
 
 // Check if a raw input device type is compatible with a tile's device category
@@ -378,16 +360,18 @@ void Win32App::triggerDeviceFlash(uintptr_t handle, const std::wstring& devPath,
         }
     }
 
-    // 2. Fallback: match by device path base hardware ID + DEVICE TYPE
+    // 2. Fallback: resolve the interface to the same stable ID used by HardwareDetector.
     if (!devPath.empty()) {
-        std::wstring incomingKey = getGuiHardwareDeviceKey(devPath);
+        const auto category = stableIdCategory(rawDevType);
+        const auto incomingId = category.empty()
+                                    ? std::wstring{}
+                                    : win32::makeStableRawInputDeviceId(category, devPath);
         for (size_t tIdx = 0; tIdx < m_deviceTiles.size(); tIdx++) {
             auto& tilePtr = m_deviceTiles[tIdx];
             if (!tilePtr) continue;
             // TYPE CHECK: Only match tiles compatible with the raw device type
             if (!isTypeCompatible(rawDevType, tilePtr->type)) continue;
-            std::wstring tileKey = getGuiHardwareDeviceKey(tilePtr->devicePath);
-            if (!incomingKey.empty() && incomingKey == tileKey) {
+            if (!incomingId.empty() && incomingId == tilePtr->deviceId) {
                 tilePtr->flashUntil = now + 250;
                 InvalidateRect(tilePtr->hwndControl, NULL, FALSE);
                 // Cache this handle for future O(1) lookups
@@ -403,42 +387,14 @@ void Win32App::triggerDeviceFlash(uintptr_t handle, const std::wstring& devPath,
         }
     }
 
-    // 3. Last resort fallback for unmapped handles with no path match
+    // Do not guess by device type: that can associate input with the wrong
+    // physical keyboard or mouse on a multiseat system.
     if (g_diagLog.is_open()) {
         const wchar_t* typeStr = (rawDevType == RIM_TYPEKEYBOARD) ? L"KBD" :
                                  (rawDevType == RIM_TYPEMOUSE) ? L"MOUSE" :
                                  (rawDevType == RIM_TYPEHID) ? L"HID" : L"UNK";
         g_diagLog << L"[FALLBACK] handle=0x" << std::hex << handle << std::dec
                   << L" type=" << typeStr << L" isTouchpad=" << isTouchpad << std::endl;
-    }
-    for (size_t tIdx = 0; tIdx < m_deviceTiles.size(); tIdx++) {
-        auto& tilePtr = m_deviceTiles[tIdx];
-        if (!tilePtr) continue;
-        bool matched = false;
-        if (rawDevType == RIM_TYPEKEYBOARD && tilePtr->type == DeviceCategory::Keyboard) {
-            matched = true;
-        } else if (rawDevType == RIM_TYPEMOUSE) {
-            if (isTouchpad && tilePtr->type == DeviceCategory::Touchpad) {
-                matched = true;
-            } else if (!isTouchpad && tilePtr->type == DeviceCategory::Mouse) {
-                matched = true;
-            }
-        } else if (rawDevType == RIM_TYPEHID && tilePtr->type == DeviceCategory::Touchpad) {
-            matched = true;
-        }
-        if (matched) {
-            tilePtr->flashUntil = now + 250;
-            InvalidateRect(tilePtr->hwndControl, NULL, FALSE);
-            // Cache non-zero handles for future O(1) lookups
-            if (handle != 0) {
-                m_handleToTileIndex[handle] = tIdx;
-                if (g_diagLog.is_open()) {
-                    g_diagLog << L"[FALLBACK-CACHE] handle=0x" << std::hex << handle << std::dec
-                              << L" -> tile[" << tIdx << L"] " << tilePtr->displayLabel << std::endl;
-                }
-            }
-            break;
-        }
     }
 }
 
@@ -589,6 +545,7 @@ void Win32App::refreshHardware() {
         tile->displayLabel = L"1." + std::to_wstring(i + 1);
         tile->type = DeviceCategory::Display;
         tile->nativeHandle = m_displays[i].nativeHandle;
+        tile->deviceId = m_displays[i].id;
         tile->devicePath = m_displays[i].devicePath;
         tile->owner = PartitionOwner::Pool;
 
@@ -607,6 +564,7 @@ void Win32App::refreshHardware() {
         tile->displayLabel = L"KBD " + std::to_wstring(i + 1);
         tile->type = DeviceCategory::Keyboard;
         tile->nativeHandle = m_keyboards[i].nativeHandle;
+        tile->deviceId = m_keyboards[i].id;
         tile->devicePath = m_keyboards[i].devicePath;
         tile->owner = PartitionOwner::Pool;
 
@@ -630,16 +588,14 @@ void Win32App::refreshHardware() {
         std::wstring nameUpper = tile->name;
         for (auto& c : nameUpper) c = ::towupper(c);
 
-        std::wstring pathUpper = m_mice[i].devicePath;
-        for (auto& c : pathUpper) c = ::towupper(c);
-
-        if (nameUpper.find(L"TOUCHPAD") != std::wstring::npos || pathUpper.find(L"ACPI") != std::wstring::npos || pathUpper.find(L"MSFT0001") != std::wstring::npos || pathUpper.find(L"SYN") != std::wstring::npos || pathUpper.find(L"ELAN") != std::wstring::npos || pathUpper.find(L"ITE5570") != std::wstring::npos || pathUpper.find(L"PNP0C50") != std::wstring::npos) {
+        if (nameUpper.find(L"TOUCHPAD") != std::wstring::npos) {
             tile->type = DeviceCategory::Touchpad;
         } else {
             tile->type = DeviceCategory::Mouse;
         }
 
         tile->nativeHandle = m_mice[i].nativeHandle;
+        tile->deviceId = m_mice[i].id;
         tile->devicePath = m_mice[i].devicePath;
         tile->owner = PartitionOwner::Pool;
 
@@ -655,10 +611,8 @@ void Win32App::refreshHardware() {
     }
 
     // ================================================================
-    // CRITICAL FIX: Map ALL raw input device handles to their correct tiles.
-    // Composite USB devices have MULTIPLE HID sub-collection handles
-    // (Col01, Col02, Col03...). Raw input events can arrive on ANY handle.
-    // We match by BOTH base hardware ID AND device type compatibility.
+    // Map every Raw Input handle to the matching physical input tile. Composite
+    // collection paths are correlated through SetupAPI/ConfigMgr identities.
     // ================================================================
     openDiagLog();
     if (g_diagLog.is_open()) {
@@ -674,88 +628,93 @@ void Win32App::refreshHardware() {
             g_diagLog << L"  tile[" << i << L"] " << m_deviceTiles[i]->displayLabel
                       << L" cat=" << catStr
                       << L" handle=0x" << std::hex << m_deviceTiles[i]->nativeHandle << std::dec
-                      << L" baseKey=" << getGuiHardwareDeviceKey(m_deviceTiles[i]->devicePath)
+                      << L" id=" << m_deviceTiles[i]->deviceId
                       << L" path=" << cleanPath << std::endl;
         }
     }
 
-    UINT totalRawDevices = 0;
-    GetRawInputDeviceList(NULL, &totalRawDevices, sizeof(RAWINPUTDEVICELIST));
-    if (totalRawDevices > 0) {
-        std::vector<RAWINPUTDEVICELIST> allRawDevices(totalRawDevices);
-        if (GetRawInputDeviceList(allRawDevices.data(), &totalRawDevices, sizeof(RAWINPUTDEVICELIST)) != (UINT)-1) {
-            if (g_diagLog.is_open()) {
-                g_diagLog << L"\n=== ALL RAW INPUT DEVICE HANDLES (" << totalRawDevices << L") ===" << std::endl;
+    const auto allRawDevices = win32::enumerateRawInputDevices();
+    if (allRawDevices) {
+        if (g_diagLog.is_open()) {
+            g_diagLog << L"\n=== ALL RAW INPUT DEVICE HANDLES ("
+                      << allRawDevices.devices.size() << L") ===" << std::endl;
+        }
+        for (const auto& rawDev : allRawDevices.devices) {
+            if (rawDev.dwType == RIM_TYPEHID) {
+                const auto details = win32::rawInputDeviceInfo(rawDev.hDevice);
+                if (!details || details->dwType != RIM_TYPEHID ||
+                    !hid::isMouseLikeCollection(
+                        details->hid.usUsagePage, details->hid.usUsage)) {
+                    continue;
+                }
             }
-            for (const auto& rawDev : allRawDevices) {
-                uintptr_t rawHandle = reinterpret_cast<uintptr_t>(rawDev.hDevice);
+            uintptr_t rawHandle = reinterpret_cast<uintptr_t>(rawDev.hDevice);
 
-                // Get this raw device's path
-                UINT nameSize = 0;
-                GetRawInputDeviceInfoW(rawDev.hDevice, RIDI_DEVICENAME, NULL, &nameSize);
-                if (nameSize == 0) continue;
-                std::wstring rawPath(nameSize, L'\0');
-                if (GetRawInputDeviceInfoW(rawDev.hDevice, RIDI_DEVICENAME, rawPath.data(), &nameSize) == (UINT)-1) {
-                    continue;
-                }
+            const auto rawPath = win32::rawInputDeviceName(rawDev.hDevice);
+            if (!rawPath) {
+                continue;
+            }
 
-                const wchar_t* typeStr = (rawDev.dwType == RIM_TYPEKEYBOARD) ? L"KBD" :
-                                         (rawDev.dwType == RIM_TYPEMOUSE) ? L"MOUSE" :
-                                         (rawDev.dwType == RIM_TYPEHID) ? L"HID" : L"UNK";
+            const wchar_t* typeStr = (rawDev.dwType == RIM_TYPEKEYBOARD) ? L"KBD" :
+                                     (rawDev.dwType == RIM_TYPEMOUSE) ? L"MOUSE" :
+                                     (rawDev.dwType == RIM_TYPEHID) ? L"HID" : L"UNK";
 
-                // Skip if already mapped
-                if (m_handleToTileIndex.count(rawHandle) > 0) {
-                    if (g_diagLog.is_open()) {
-                        size_t tIdx = m_handleToTileIndex[rawHandle];
-                        g_diagLog << L"  handle=0x" << std::hex << rawHandle << std::dec
-                                  << L" type=" << typeStr
-                                  << L" ALREADY -> tile[" << tIdx << L"]";
-                        if (tIdx < m_deviceTiles.size() && m_deviceTiles[tIdx]) {
-                            g_diagLog << L" " << m_deviceTiles[tIdx]->displayLabel;
-                        }
-                        g_diagLog << std::endl;
-                    }
-                    continue;
-                }
-
-                // Compute base hardware ID for this raw device
-                std::wstring rawBaseKey = getGuiHardwareDeviceKey(rawPath);
-                if (rawBaseKey.empty()) continue;
-
-                // Find matching tile by BOTH base hardware ID AND device type
-                bool mapped = false;
-                for (size_t tIdx = 0; tIdx < m_deviceTiles.size(); tIdx++) {
-                    auto& tile = m_deviceTiles[tIdx];
-                    if (!tile || tile->devicePath.empty()) continue;
-
-                    // TYPE CHECK: Only map to tiles compatible with the raw device type
-                    if (!isTypeCompatible(rawDev.dwType, tile->type)) continue;
-
-                    std::wstring tileBaseKey = getGuiHardwareDeviceKey(tile->devicePath);
-                    if (tileBaseKey == rawBaseKey) {
-                        m_handleToTileIndex[rawHandle] = tIdx;
-                        mapped = true;
-                        if (g_diagLog.is_open()) {
-                            std::wstring cleanRawPath = rawPath;
-                            cleanRawPath.erase(std::remove(cleanRawPath.begin(), cleanRawPath.end(), L'\0'), cleanRawPath.end());
-                            g_diagLog << L"  handle=0x" << std::hex << rawHandle << std::dec
-                                      << L" type=" << typeStr
-                                      << L" MAPPED -> tile[" << tIdx << L"] " << tile->displayLabel
-                                      << L" path=" << cleanRawPath << std::endl;
-                        }
-                        break;
-                    }
-                }
-                if (!mapped && g_diagLog.is_open()) {
-                    std::wstring cleanRawPath = rawPath;
-                    cleanRawPath.erase(std::remove(cleanRawPath.begin(), cleanRawPath.end(), L'\0'), cleanRawPath.end());
+            // Skip if already mapped
+            if (m_handleToTileIndex.count(rawHandle) > 0) {
+                if (g_diagLog.is_open()) {
+                    size_t tIdx = m_handleToTileIndex[rawHandle];
                     g_diagLog << L"  handle=0x" << std::hex << rawHandle << std::dec
                               << L" type=" << typeStr
-                              << L" UNMAPPED baseKey=" << rawBaseKey
-                              << L" path=" << cleanRawPath << std::endl;
+                              << L" ALREADY -> tile[" << tIdx << L"]";
+                    if (tIdx < m_deviceTiles.size() && m_deviceTiles[tIdx]) {
+                        g_diagLog << L" " << m_deviceTiles[tIdx]->displayLabel;
+                    }
+                    g_diagLog << std::endl;
+                }
+                continue;
+            }
+
+            const auto category = stableIdCategory(rawDev.dwType);
+            const auto rawStableId = category.empty()
+                                         ? std::wstring{}
+                                         : win32::makeStableRawInputDeviceId(category, *rawPath);
+            if (rawStableId.empty()) continue;
+
+            // Find the matching tile by resolved identity and compatible type.
+            bool mapped = false;
+            for (size_t tIdx = 0; tIdx < m_deviceTiles.size(); tIdx++) {
+                auto& tile = m_deviceTiles[tIdx];
+                if (!tile || tile->devicePath.empty()) continue;
+
+                // TYPE CHECK: Only map to tiles compatible with the raw device type
+                if (!isTypeCompatible(rawDev.dwType, tile->type)) continue;
+
+                if (tile->deviceId == rawStableId) {
+                    m_handleToTileIndex[rawHandle] = tIdx;
+                    mapped = true;
+                    if (g_diagLog.is_open()) {
+                        std::wstring cleanRawPath = *rawPath;
+                        cleanRawPath.erase(std::remove(cleanRawPath.begin(), cleanRawPath.end(), L'\0'), cleanRawPath.end());
+                        g_diagLog << L"  handle=0x" << std::hex << rawHandle << std::dec
+                                  << L" type=" << typeStr
+                                  << L" MAPPED -> tile[" << tIdx << L"] " << tile->displayLabel
+                                  << L" path=" << cleanRawPath << std::endl;
+                    }
+                    break;
                 }
             }
+            if (!mapped && g_diagLog.is_open()) {
+                std::wstring cleanRawPath = *rawPath;
+                cleanRawPath.erase(std::remove(cleanRawPath.begin(), cleanRawPath.end(), L'\0'), cleanRawPath.end());
+                g_diagLog << L"  handle=0x" << std::hex << rawHandle << std::dec
+                          << L" type=" << typeStr
+                          << L" UNMAPPED id=" << rawStableId
+                          << L" path=" << cleanRawPath << std::endl;
+            }
         }
+    } else if (g_diagLog.is_open()) {
+        g_diagLog << L"Raw Input enumeration failed with Win32 error "
+                  << allRawDevices.error << std::endl;
     }
 
     if (g_diagLog.is_open()) {

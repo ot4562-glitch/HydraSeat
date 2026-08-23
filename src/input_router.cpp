@@ -1,4 +1,7 @@
 #include "hydra/input_router.hpp"
+#include "hydra/hardware_identity.hpp"
+#include "hydra/hid_usage.hpp"
+#include "hydra/raw_input_utils.hpp"
 
 #include <iostream>
 
@@ -57,8 +60,11 @@ LRESULT CALLBACK InputRouter::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
 void InputRouter::handleRawInput(HRAWINPUT hRawInput) {
     UINT dwSize = 0;
-    GetRawInputData(hRawInput, RID_INPUT, NULL, &dwSize, sizeof(RAWINPUTHEADER));
-    if (dwSize == 0) return;
+    if (GetRawInputData(hRawInput, RID_INPUT, NULL, &dwSize,
+                        sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1) ||
+        dwSize < sizeof(RAWINPUTHEADER)) {
+        return;
+    }
 
     std::vector<BYTE> lpb(dwSize);
     if (GetRawInputData(hRawInput, RID_INPUT, lpb.data(), &dwSize, sizeof(RAWINPUTHEADER)) != dwSize) {
@@ -71,13 +77,8 @@ void InputRouter::handleRawInput(HRAWINPUT hRawInput) {
     event.rawDevType = raw->header.dwType;
 
     if (raw->header.hDevice != NULL) {
-        UINT nameSize = 0;
-        GetRawInputDeviceInfoW(raw->header.hDevice, RIDI_DEVICENAME, NULL, &nameSize);
-        if (nameSize > 0) {
-            std::wstring nameBuf(nameSize, L'\0');
-            if (GetRawInputDeviceInfoW(raw->header.hDevice, RIDI_DEVICENAME, nameBuf.data(), &nameSize) != (UINT)-1) {
-                event.devicePath = nameBuf;
-            }
+        if (const auto deviceName = win32::rawInputDeviceName(raw->header.hDevice)) {
+            event.devicePath = *deviceName;
         }
     }
 
@@ -96,16 +97,7 @@ void InputRouter::handleRawInput(HRAWINPUT hRawInput) {
         // Detect if this mouse event is actually from a touchpad
         // Windows Precision Touchpads route motion through RIM_TYPEMOUSE
         if (!event.devicePath.empty()) {
-            std::wstring pathUp = event.devicePath;
-            for (auto& c : pathUp) c = ::towupper(c);
-            if (pathUp.find(L"ELAN") != std::wstring::npos ||
-                pathUp.find(L"SYN") != std::wstring::npos ||
-                pathUp.find(L"ITE") != std::wstring::npos ||
-                pathUp.find(L"ACPI") != std::wstring::npos ||
-                pathUp.find(L"MSFT0001") != std::wstring::npos ||
-                pathUp.find(L"PNP0C50") != std::wstring::npos) {
-                event.isTouchpad = true;
-            }
+            event.isTouchpad = hardware::isLikelyTouchpadPath(event.devicePath);
         }
 
         // CRITICAL: Windows Precision Touchpads frequently send RIM_TYPEMOUSE
@@ -116,8 +108,16 @@ void InputRouter::handleRawInput(HRAWINPUT hRawInput) {
             event.isTouchpad = true;
         }
     } else if (raw->header.dwType == RIM_TYPEHID) {
+        const auto details = win32::rawInputDeviceInfo(raw->header.hDevice);
+        if (!details || details->dwType != RIM_TYPEHID ||
+            !hid::isMouseLikeCollection(
+                details->hid.usUsagePage, details->hid.usUsage)) {
+            return;
+        }
         event.messageType = WM_MOUSEMOVE;
-        event.isTouchpad = true;
+        event.isTouchpad = hid::classifyCollection(
+                               details->hid.usUsagePage, details->hid.usUsage) ==
+                           hid::CollectionKind::Touchpad;
     }
 
     // Trigger device specific callback if registered
