@@ -218,8 +218,38 @@ ArchitectureDetectionResult detectProcessArchitecture(HANDLE process) noexcept {
         observation.nativeMachine = nativeMachine;
         if (!observation.modernApiSucceeded) {
             observation.systemError = GetLastError();
+            return resolveProcessArchitecture(observation);
         }
-        return resolveProcessArchitecture(observation);
+
+        auto resolved = resolveProcessArchitecture(observation);
+        if (resolved || processMachine != kImageFileMachineUnknown ||
+            resolved.status != ArchitectureDetectionStatus::Unsupported) {
+            return resolved;
+        }
+
+        // A non-WOW64 process reports IMAGE_FILE_MACHINE_UNKNOWN for the
+        // process machine. On an ARM64 host an emulated x64 process can then
+        // have nativeMachine=ARM64, which identifies the host rather than the
+        // executable image. Read the target image's PE machine before deciding
+        // that the controlled x86/x64 process is unsupported.
+        std::array<wchar_t, 32768> imagePath{};
+        DWORD imagePathLength = static_cast<DWORD>(imagePath.size());
+        if (QueryFullProcessImageNameW(
+                process, 0, imagePath.data(), &imagePathLength) == FALSE) {
+            return failure(ArchitectureDetectionStatus::SystemError,
+                           "process image path query failed", GetLastError());
+        }
+        const auto imageArchitecture = detectPortableExecutableArchitecture(
+            std::filesystem::path(
+                std::wstring_view(imagePath.data(), imagePathLength)));
+        if (!imageArchitecture) {
+            return failure(
+                imageArchitecture.status,
+                "process image architecture detection failed: " +
+                    imageArchitecture.error,
+                imageArchitecture.systemError);
+        }
+        return imageArchitecture;
     }
 
     BOOL wow64 = FALSE;
