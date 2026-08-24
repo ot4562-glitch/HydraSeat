@@ -196,10 +196,15 @@ ArchitectureDetectionResult resolveProcessArchitecture(
 
 #ifdef _WIN32
 ArchitectureDetectionResult detectProcessArchitecture(HANDLE process) noexcept {
-    if (process == nullptr || process == INVALID_HANDLE_VALUE) {
+    if (process == nullptr) {
         return failure(ArchitectureDetectionStatus::SystemError,
-                       "process handle is invalid", ERROR_INVALID_HANDLE);
+                       "process handle is null", ERROR_INVALID_HANDLE);
     }
+
+    // GetCurrentProcess() is a valid pseudo-handle whose value is -1, the
+    // same bit pattern used by INVALID_HANDLE_VALUE. Process APIs accept that
+    // pseudo-handle, so rejecting INVALID_HANDLE_VALUE here would incorrectly
+    // reject every current-process architecture query.
 
     ProcessArchitectureObservation observation;
     using IsWow64Process2Function = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
