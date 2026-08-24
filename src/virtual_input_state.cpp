@@ -146,6 +146,27 @@ bool VirtualInputState::applyControl(std::uint64_t sequence,
     return true;
 }
 
+void VirtualInputState::setVirtualCursor(std::int32_t x,
+                                         std::int32_t y) noexcept {
+    m_cursorX = x;
+    m_cursorY = y;
+    clampCursor();
+}
+
+bool VirtualInputState::setVirtualClip(bool enabled, std::int32_t left,
+                                       std::int32_t top,
+                                       std::int32_t right,
+                                       std::int32_t bottom) noexcept {
+    if (enabled && (right <= left || bottom <= top)) return false;
+    m_clipEnabled = enabled;
+    m_clipLeft = enabled ? left : 0;
+    m_clipTop = enabled ? top : 0;
+    m_clipRight = enabled ? right : 0;
+    m_clipBottom = enabled ? bottom : 0;
+    clampCursor();
+    return true;
+}
+
 bool VirtualInputState::keyDown(std::uint32_t vkey) const noexcept {
     return bit(m_keyDownBits, vkey);
 }

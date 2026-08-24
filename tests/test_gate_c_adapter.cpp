@@ -8,6 +8,11 @@
 
 namespace {
 
+static_assert(sizeof(HydraGateCAdapterClipRectV2) ==
+              HYDRA_GATE_C_ADAPTER_CLIP_RECT_V2_BYTES);
+static_assert(sizeof(HydraGateCAdapterWindowStateV2) ==
+              HYDRA_GATE_C_ADAPTER_WINDOW_STATE_V2_BYTES);
+
 void check(bool condition, std::string_view message) {
     if (!condition) {
         std::cerr << "[FAIL] " << message << '\n';
@@ -49,6 +54,26 @@ void testApiAndIndependentContexts() {
     HydraGateCAdapterHandle second = hydra_gate_c_adapter_create();
     check(first != nullptr && second != nullptr,
           "two independent adapter contexts are created");
+
+    HydraGateCAdapterWindowStateV2 firstWindows{};
+    firstWindows.struct_size = sizeof(firstWindows);
+    firstWindows.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    firstWindows.process_id = 101;
+    firstWindows.target_window = 0x1001u;
+    auto legacyWindows = firstWindows;
+    legacyWindows.api_version = 1;
+    check(hydra_gate_c_adapter_configure_window_state(
+              first, &legacyWindows) ==
+              HYDRA_GATE_C_ADAPTER_STRUCT_VERSION_MISMATCH,
+          "adapter v1/v2 window-state mismatch fails closed");
+    HydraGateCAdapterWindowStateV2 secondWindows = firstWindows;
+    secondWindows.process_id = 202;
+    secondWindows.target_window = 0x2002u;
+    check(hydra_gate_c_adapter_configure_window_state(
+              first, &firstWindows) == HYDRA_GATE_C_ADAPTER_OK &&
+              hydra_gate_c_adapter_configure_window_state(
+                  second, &secondWindows) == HYDRA_GATE_C_ADAPTER_OK,
+          "independent fixed-width logical window state is configured");
 
     auto firstControl = controlState(10, 20);
     auto secondControl = controlState(70, 80);
@@ -148,6 +173,58 @@ void testApiAndIndependentContexts() {
               HYDRA_GATE_C_ADAPTER_OK &&
               (mouseButtons & 1u) != 0 && wheelAccumulator == 120,
           "C API exposes process-local mouse button and wheel state directly");
+
+    firstWindows = {};
+    firstWindows.struct_size = sizeof(firstWindows);
+    secondWindows = {};
+    secondWindows.struct_size = sizeof(secondWindows);
+    check(hydra_gate_c_adapter_get_window_state(first, &firstWindows) ==
+              HYDRA_GATE_C_ADAPTER_OK &&
+              hydra_gate_c_adapter_get_window_state(second, &secondWindows) ==
+              HYDRA_GATE_C_ADAPTER_OK &&
+              firstWindows.logical_foreground_window == 0x1001u &&
+              firstWindows.logical_active_window == 0x1001u &&
+              firstWindows.logical_focus_window == 0x1001u &&
+              firstWindows.virtual_capture_window == 0x1001u &&
+              secondWindows.logical_foreground_window == 0x2002u &&
+              secondWindows.virtual_capture_window == 0x2002u,
+          "control flags resolve to each adapter's own logical target");
+
+    HydraGateCAdapterClipRectV2 negativeClip{};
+    negativeClip.struct_size = sizeof(negativeClip);
+    negativeClip.enabled = 1;
+    negativeClip.left = -100;
+    negativeClip.top = -50;
+    negativeClip.right = 0;
+    negativeClip.bottom = 25;
+    check(hydra_gate_c_adapter_set_virtual_clip(first, &negativeClip) ==
+              HYDRA_GATE_C_ADAPTER_OK &&
+              hydra_gate_c_adapter_set_virtual_cursor(first, 500, -500) ==
+              HYDRA_GATE_C_ADAPTER_OK,
+          "negative logical clip coordinates and cursor clamping are accepted");
+    controlSnapshot = {};
+    controlSnapshot.struct_size = sizeof(controlSnapshot);
+    check(hydra_gate_c_adapter_get_control_state(
+              first, &controlSnapshot) == HYDRA_GATE_C_ADAPTER_OK &&
+              controlSnapshot.cursor_x == -1 &&
+              controlSnapshot.cursor_y == -50,
+          "cursor clamps to right/bottom-exclusive negative clip boundaries");
+    auto invalidClip = negativeClip;
+    invalidClip.right = invalidClip.left;
+    check(hydra_gate_c_adapter_set_virtual_clip(first, &invalidClip) ==
+              HYDRA_GATE_C_ADAPTER_INVALID_STATE,
+          "invalid clip rectangle fails without changing adapter state");
+
+    std::uint64_t previousCapture = 0;
+    check(hydra_gate_c_adapter_set_virtual_capture(
+              first, 0x3003u, &previousCapture) ==
+              HYDRA_GATE_C_ADAPTER_OK && previousCapture == 0x1001u &&
+              hydra_gate_c_adapter_release_virtual_capture(first) ==
+              HYDRA_GATE_C_ADAPTER_OK,
+          "virtual capture returns the previous logical HWND and releases locally");
+    check(hydra_gate_c_adapter_invalidate_window(first, 0x1001u) ==
+              HYDRA_GATE_C_ADAPTER_OK,
+          "destroyed logical target can be invalidated without touching another context");
 
     std::array<std::uint8_t, 256> keyboard{};
     check(hydra_gate_c_adapter_get_keyboard_state(

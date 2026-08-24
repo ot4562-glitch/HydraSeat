@@ -110,6 +110,8 @@ struct ProbeOptions {
     bool baselineSelfTest{false};
     bool pollingShim{false};
     bool pollingShimSelfTest{false};
+    bool cursorFocusShim{false};
+    bool cursorFocusShimSelfTest{false};
     std::wstring shimPath;
     bool testMissingWindow{false};
     bool testNoHandshake{false};
@@ -124,6 +126,7 @@ void printUsage(std::ostream& output) {
         << "  hydra_gate_c_api_probe --pipe <name> --seat <id> --token <32-hex> [--headless]\n"
         << "  hydra_gate_c_api_probe --baseline-self-test\n\n"
         << "  hydra_gate_c_api_probe --polling-shim-self-test --shim <hydra_gate_c_shim.dll>\n\n"
+        << "  hydra_gate_c_api_probe --cursor-focus-shim-self-test --shim <hydra_gate_c_shim.dll>\n\n"
         << "The probe reads ordinary Win32 APIs and the direct Gate C adapter side\n"
         << "by side. The polling mode loads only the explicitly supplied HydraSeat\n"
         << "shim at startup and restores its process-local IAT before unload.\n";
@@ -193,6 +196,13 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
         } else if (argument == L"--polling-shim-self-test") {
             options.pollingShim = true;
             options.pollingShimSelfTest = true;
+        } else if (argument == L"--cursor-focus-shim") {
+            options.pollingShim = true;
+            options.cursorFocusShim = true;
+        } else if (argument == L"--cursor-focus-shim-self-test") {
+            options.pollingShim = true;
+            options.cursorFocusShim = true;
+            options.cursorFocusShimSelfTest = true;
         } else if (argument == L"--shim" && index + 1 < argc) {
             options.shimPath = argv[++index];
         } else if (argument == L"--test-missing-window") {
@@ -211,7 +221,8 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
     const bool connectedMode = !options.pipeName.empty() ||
         options.seatId != 0 || options.tokenSet;
     if (!options.showHelp && !options.baselineSelfTest &&
-        !options.pollingShimSelfTest && !connectedMode) {
+        !options.pollingShimSelfTest &&
+        !options.cursorFocusShimSelfTest && !connectedMode) {
         valid = false;
     }
     if (connectedMode &&
@@ -221,7 +232,8 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
     }
     if (options.testMissingWindow && options.testNoHandshake) valid = false;
     if (options.pollingShim && options.shimPath.empty()) valid = false;
-    if (options.pollingShimSelfTest && connectedMode) valid = false;
+    if ((options.pollingShimSelfTest ||
+         options.cursorFocusShimSelfTest) && connectedMode) valid = false;
     return options;
 }
 
@@ -229,7 +241,7 @@ class ShimOwner {
 public:
     using ApiVersionFunction = std::uint32_t(HYDRA_GATE_C_SHIM_CALL*)(void);
     using InstallFunction = HydraGateCShimResult(HYDRA_GATE_C_SHIM_CALL*)(
-        HydraGateCAdapterHandle, const HydraGateCShimConfigV1*);
+        HydraGateCAdapterHandle, const HydraGateCShimConfigV2*);
     using MarkUnavailableFunction =
         HydraGateCShimResult(HYDRA_GATE_C_SHIM_CALL*)(void);
     using UninstallFunction =
@@ -251,8 +263,9 @@ public:
 
     bool loadAndInstall(const std::wstring& path,
                         HydraGateCAdapterHandle adapter,
-                        std::uint32_t seatId) {
-        if (m_module != nullptr || path.empty() || adapter == nullptr) {
+                        std::uint32_t seatId, HWND targetWindow) {
+        if (m_module != nullptr || path.empty() || adapter == nullptr ||
+            targetWindow == nullptr) {
             return false;
         }
         m_module = LoadLibraryW(path.c_str());
@@ -273,11 +286,12 @@ public:
             m_module = nullptr;
             return false;
         }
-        HydraGateCShimConfigV1 config{};
+        HydraGateCShimConfigV2 config{};
         config.struct_size = sizeof(config);
         config.api_version = HYDRA_GATE_C_SHIM_API_VERSION;
         config.seat_id = seatId;
         config.process_id = GetCurrentProcessId();
+        config.target_window = runtimeWindowValue(targetWindow);
         const auto result = m_install(adapter, &config);
         m_installed = result == HYDRA_GATE_C_SHIM_OK ||
                       result == HYDRA_GATE_C_SHIM_ALREADY_INSTALLED;
@@ -294,7 +308,7 @@ public:
         return value && value->lifecycle == HYDRA_GATE_C_SHIM_ACTIVE &&
                value->adapter_available == 1u &&
                value->patched_api_mask ==
-                   HYDRA_GATE_C_SHIM_POLLING_API_MASK;
+                   HYDRA_GATE_C_SHIM_ALL_API_MASK;
     }
 
     std::optional<HydraGateCShimStatusV1> status() const {
@@ -322,7 +336,7 @@ public:
             value->lifecycle == HYDRA_GATE_C_SHIM_INACTIVE &&
             value->patched_api_mask == 0u &&
             value->restored_api_mask ==
-                HYDRA_GATE_C_SHIM_POLLING_API_MASK &&
+                HYDRA_GATE_C_SHIM_ALL_API_MASK &&
             value->rollback_complete == 1u;
         return m_unloadSafe;
     }
@@ -395,6 +409,8 @@ ProbeComparison captureComparison(HydraGateCAdapterHandle adapter,
     }
     comparison.os.foregroundWindowRuntimeValue =
         runtimeWindowValue(GetForegroundWindow());
+    comparison.os.activeWindowRuntimeValue =
+        runtimeWindowValue(GetActiveWindow());
     comparison.os.focusWindowRuntimeValue = runtimeWindowValue(GetFocus());
     comparison.os.captureWindowRuntimeValue = runtimeWindowValue(GetCapture());
 
@@ -451,6 +467,23 @@ ProbeComparison captureComparison(HydraGateCAdapterHandle adapter,
         hydra_gate_c_adapter_get_mouse_state(
             adapter, &comparison.adapter.mouseButtonsDown,
             &comparison.adapter.wheelAccumulator));
+
+    HydraGateCAdapterWindowStateV2 windows{};
+    windows.struct_size = sizeof(windows);
+    comparison.adapter.windowStateResult = static_cast<std::uint32_t>(
+        hydra_gate_c_adapter_get_window_state(adapter, &windows));
+    if (comparison.adapter.windowStateResult ==
+        static_cast<std::uint32_t>(HYDRA_GATE_C_ADAPTER_OK)) {
+        comparison.adapter.targetWindowRuntimeValue = windows.target_window;
+        comparison.adapter.logicalForegroundWindowRuntimeValue =
+            windows.logical_foreground_window;
+        comparison.adapter.logicalActiveWindowRuntimeValue =
+            windows.logical_active_window;
+        comparison.adapter.logicalFocusWindowRuntimeValue =
+            windows.logical_focus_window;
+        comparison.adapter.virtualCaptureWindowRuntimeValue =
+            windows.virtual_capture_window;
+    }
 
     hydra::gatec::updateProbeComparison(comparison);
     return comparison;
@@ -565,7 +598,8 @@ int runLocalPollingShimSelfTest(HINSTANCE instance,
     }
 
     ShimOwner shim;
-    if (!shim.loadAndInstall(shimPath, adapter.get(), 1) || !shim.active()) {
+    if (!shim.loadAndInstall(shimPath, adapter.get(), 1, window) ||
+        !shim.active()) {
         DestroyWindow(window);
         return 17;
     }
@@ -601,6 +635,170 @@ int runLocalPollingShimSelfTest(HINSTANCE instance,
     return EXIT_SUCCESS;
 }
 
+int runLocalCursorFocusShimSelfTest(HINSTANCE instance,
+                                    const std::wstring& shimPath) {
+    AdapterOwner adapter;
+    if (!adapter || !registerProbeWindowClass(instance)) return 28;
+    const HWND target = CreateWindowExW(
+        0, kWindowClass, L"HydraSeat Cursor Focus Shim Self-Test",
+        WS_OVERLAPPEDWINDOW, 0, 0, 320, 200,
+        nullptr, nullptr, instance, nullptr);
+    const HWND alternate = CreateWindowExW(
+        0, kWindowClass, L"HydraSeat Cursor Focus Alternate",
+        WS_OVERLAPPEDWINDOW, 0, 0, 200, 120,
+        nullptr, nullptr, instance, nullptr);
+    if (target == nullptr || alternate == nullptr) {
+        if (target != nullptr) DestroyWindow(target);
+        if (alternate != nullptr) DestroyWindow(alternate);
+        return 29;
+    }
+
+    const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    const auto nativeGetCursorPos = reinterpret_cast<BOOL(WINAPI*)(LPPOINT)>(
+        GetProcAddress(user32, "GetCursorPos"));
+    const auto nativeGetClipCursor = reinterpret_cast<BOOL(WINAPI*)(LPRECT)>(
+        GetProcAddress(user32, "GetClipCursor"));
+    const auto nativeGetForegroundWindow =
+        reinterpret_cast<HWND(WINAPI*)(void)>(
+            GetProcAddress(user32, "GetForegroundWindow"));
+    const auto nativeGetCapture = reinterpret_cast<HWND(WINAPI*)(void)>(
+        GetProcAddress(user32, "GetCapture"));
+    POINT nativeCursorBefore{};
+    RECT nativeClipBefore{};
+    if (nativeGetCursorPos == nullptr || nativeGetClipCursor == nullptr ||
+        nativeGetForegroundWindow == nullptr || nativeGetCapture == nullptr ||
+        nativeGetCursorPos(&nativeCursorBefore) == FALSE ||
+        nativeGetClipCursor(&nativeClipBefore) == FALSE) {
+        DestroyWindow(alternate);
+        DestroyWindow(target);
+        return 30;
+    }
+    const HWND nativeForegroundBefore = nativeGetForegroundWindow();
+    const HWND nativeCaptureBefore = nativeGetCapture();
+
+    ShimOwner shim;
+    if (!shim.loadAndInstall(shimPath, adapter.get(), 1, target) ||
+        !shim.active()) {
+        DestroyWindow(alternate);
+        DestroyWindow(target);
+        return 31;
+    }
+    ControlStateMessage control;
+    control.cursorX = 10;
+    control.cursorY = 20;
+    control.clipEnabled = true;
+    control.virtualForeground = true;
+    control.virtualCapture = true;
+    control.clipLeft = 0;
+    control.clipTop = 0;
+    control.clipRight = 100;
+    control.clipBottom = 100;
+    auto adapterControl = toAdapterControl(control);
+    if (hydra_gate_c_adapter_apply_control(adapter.get(), 1,
+                                           &adapterControl) !=
+        HYDRA_GATE_C_ADAPTER_OK) {
+        (void)shim.uninstall();
+        DestroyWindow(alternate);
+        DestroyWindow(target);
+        return 32;
+    }
+
+    POINT cursor{};
+    RECT clip{};
+    const RECT initialClip{0, 0, 100, 100};
+    const bool initialQueries =
+        GetCursorPos(&cursor) != FALSE && cursor.x == 10 && cursor.y == 20 &&
+        GetClipCursor(&clip) != FALSE &&
+        EqualRect(&clip, &initialClip) != FALSE &&
+        GetForegroundWindow() == target && GetActiveWindow() == target &&
+        GetFocus() == target && GetCapture() == target;
+
+    RECT replacementClip{-10, -20, 30, 40};
+    const HWND previousCapture = SetCapture(alternate);
+    const bool virtualMutations =
+        ClipCursor(&replacementClip) != FALSE &&
+        SetCursorPos(100, 100) != FALSE &&
+        GetCursorPos(&cursor) != FALSE && cursor.x == 29 && cursor.y == 39 &&
+        GetClipCursor(&clip) != FALSE &&
+        EqualRect(&clip, &replacementClip) != FALSE &&
+        previousCapture == target && GetCapture() == alternate;
+
+    HydraGateCAdapterWindowStateV2 destroyedState{};
+    destroyedState.struct_size = sizeof(destroyedState);
+    destroyedState.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    destroyedState.process_id = GetCurrentProcessId();
+    destroyedState.target_window = runtimeWindowValue(alternate);
+    destroyedState.logical_foreground_window = destroyedState.target_window;
+    destroyedState.logical_active_window = destroyedState.target_window;
+    destroyedState.logical_focus_window = destroyedState.target_window;
+    destroyedState.virtual_capture_window = destroyedState.target_window;
+    const bool destructionConfigured =
+        hydra_gate_c_adapter_configure_window_state(
+            adapter.get(), &destroyedState) == HYDRA_GATE_C_ADAPTER_OK;
+    DestroyWindow(alternate);
+    SetLastError(ERROR_SUCCESS);
+    const bool staleRejected = destructionConfigured &&
+        GetForegroundWindow() == nullptr &&
+        GetLastError() == ERROR_INVALID_WINDOW_HANDLE &&
+        GetActiveWindow() == nullptr && GetFocus() == nullptr &&
+        GetCapture() == nullptr;
+
+    HydraGateCAdapterWindowStateV2 restoredState{};
+    restoredState.struct_size = sizeof(restoredState);
+    restoredState.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    restoredState.process_id = GetCurrentProcessId();
+    restoredState.target_window = runtimeWindowValue(target);
+    restoredState.logical_foreground_window = restoredState.target_window;
+    restoredState.logical_active_window = restoredState.target_window;
+    restoredState.logical_focus_window = restoredState.target_window;
+    const bool targetRestored = hydra_gate_c_adapter_configure_window_state(
+        adapter.get(), &restoredState) == HYDRA_GATE_C_ADAPTER_OK;
+
+    RECT invalidClip{5, 5, 5, 10};
+    SetLastError(ERROR_SUCCESS);
+    const bool invalidRejected = ClipCursor(&invalidClip) == FALSE &&
+        GetLastError() == ERROR_INVALID_PARAMETER &&
+        GetClipCursor(&clip) != FALSE &&
+        EqualRect(&clip, &replacementClip) != FALSE;
+    SetLastError(ERROR_SUCCESS);
+    const bool foreignCaptureRejected =
+        SetCapture(GetDesktopWindow()) == nullptr &&
+        GetLastError() == ERROR_INVALID_WINDOW_HANDLE;
+    RECT unclipped{};
+    const bool releaseAndUnclip = targetRestored &&
+        SetCapture(target) == nullptr && ReleaseCapture() != FALSE &&
+        GetCapture() == nullptr && ClipCursor(nullptr) != FALSE &&
+        GetClipCursor(&unclipped) != FALSE &&
+        unclipped.left == (std::numeric_limits<LONG>::min)() &&
+        unclipped.top == (std::numeric_limits<LONG>::min)() &&
+        unclipped.right == (std::numeric_limits<LONG>::max)() &&
+        unclipped.bottom == (std::numeric_limits<LONG>::max)();
+
+    POINT nativeCursorAfter{};
+    RECT nativeClipAfter{};
+    const bool nativePreserved =
+        nativeGetCursorPos(&nativeCursorAfter) != FALSE &&
+        nativeGetClipCursor(&nativeClipAfter) != FALSE &&
+        nativeCursorAfter.x == nativeCursorBefore.x &&
+        nativeCursorAfter.y == nativeCursorBefore.y &&
+        EqualRect(&nativeClipAfter, &nativeClipBefore) != FALSE &&
+        nativeGetForegroundWindow() == nativeForegroundBefore &&
+        nativeGetCapture() == nativeCaptureBefore;
+    const bool restored = shim.uninstall();
+    DestroyWindow(target);
+    if (!initialQueries || !virtualMutations || !staleRejected ||
+        !invalidRejected || !foreignCaptureRejected || !releaseAndUnclip ||
+        !nativePreserved ||
+        !restored) {
+        return 33;
+    }
+    std::cout
+        << "HydraSeat Gate C cursor/focus shim self-test passed: ordinary "
+           "cursor, clip, logical focus, and virtual capture APIs used "
+           "adapter state without mutating native global state.\n";
+    return EXIT_SUCCESS;
+}
+
 class ControlledProbe {
 public:
     explicit ControlledProbe(ProbeOptions options)
@@ -612,17 +810,19 @@ public:
                               HYDRA_GATE_C_ADAPTER_API_VERSION) {
             return 19;
         }
-        if (m_options.pollingShim &&
+        if (!m_options.testMissingWindow && !createWindow(showCommand)) {
+            return finish(20);
+        }
+        if (m_options.pollingShim && !m_options.testMissingWindow &&
             !m_shim.loadAndInstall(m_options.shimPath, m_adapter.get(),
-                                   m_options.seatId)) {
+                                   m_options.seatId, m_hwnd.load())) {
+            destroyWindow();
             return 18;
         }
         if (m_options.testNoHandshake) {
             Sleep(2000);
+            destroyWindow();
             return finish(78);
-        }
-        if (!m_options.testMissingWindow && !createWindow(showCommand)) {
-            return finish(20);
         }
         if (!connectAndHandshake()) {
             destroyWindow();
@@ -776,9 +976,11 @@ private:
             response.frame->sequence != 1 || !ack.accepted) {
             return false;
         }
-        const auto requiredCapabilities = m_options.pollingShim
-            ? hydra::gatec::kControlledPollingProbeCapabilities
-            : hydra::gatec::kControlledApiProbeCapabilities;
+        const auto requiredCapabilities = m_options.cursorFocusShim
+            ? hydra::gatec::kControlledCursorFocusProbeCapabilities
+            : (m_options.pollingShim
+                   ? hydra::gatec::kControlledPollingProbeCapabilities
+                   : hydra::gatec::kControlledApiProbeCapabilities);
         if ((ack.grantedCapabilities &
              hydra::gatec::testCapabilityBits(requiredCapabilities)) !=
             hydra::gatec::testCapabilityBits(requiredCapabilities)) {
@@ -839,6 +1041,21 @@ private:
             if (result != HYDRA_GATE_C_ADAPTER_OK) {
                 return sendError(frame.sequence,
                     1200u + static_cast<std::uint32_t>(result));
+            }
+            if (m_options.cursorFocusShim) {
+                RECT clip{message.clipLeft, message.clipTop,
+                          message.clipRight, message.clipBottom};
+                const BOOL clipResult = ClipCursor(
+                    message.clipEnabled ? &clip : nullptr);
+                const BOOL cursorResult = SetCursorPos(
+                    message.cursorX, message.cursorY);
+                const BOOL captureResult = message.virtualCapture
+                    ? (SetCapture(m_hwnd.load()), TRUE)
+                    : ReleaseCapture();
+                if (clipResult == FALSE || cursorResult == FALSE ||
+                    captureResult == FALSE) {
+                    return sendError(frame.sequence, 1207);
+                }
             }
             notifyStateChanged();
             return true;
@@ -1042,6 +1259,10 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (options.pollingShimSelfTest) {
         return runLocalPollingShimSelfTest(
+            GetModuleHandleW(nullptr), options.shimPath);
+    }
+    if (options.cursorFocusShimSelfTest) {
+        return runLocalCursorFocusShimSelfTest(
             GetModuleHandleW(nullptr), options.shimPath);
     }
     ControlledProbe probe(options);

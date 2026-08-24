@@ -204,7 +204,7 @@ Two controlled probes call the ordinary polling APIs and receive their own Seat 
 
 ## P3-API-03 — Cursor, clip, focus, and capture shim
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -230,11 +230,16 @@ Initial controlled allowlist:
 - `include/hydra/gate_c_cursor_focus_policy.hpp`
 - `tests/test_gate_c_cursor_focus_shim.cpp`
 - adapter ABI version/migration tests if new fields are required
+- `include/hydra/gate_c_adapter.h`
+- `include/hydra/win32_iat_patch.hpp`
+- `src/gate_c_shim.cpp`
+- controlled probe/host, CMake, CI, and Gate C documentation
 
 **Implementation skeleton**
 
 1. Define policy for pure query, virtual mutation, and pass-through APIs.
-2. Convert between screen, client, and Seat-local coordinates explicitly.
+2. Define the controlled v1 coordinate domain explicitly; defer unproven
+   client/physical/per-monitor-DPI transforms rather than guessing them.
 3. Store virtual clip/capture/focus in the adapter, not static DLL globals.
 4. make setters affect only virtual state when profile policy requires virtualization;
 5. preserve original behavior when the shim is inactive;
@@ -244,7 +249,8 @@ Initial controlled allowlist:
 
 - no global `ClipCursor` call for two-Seat mode;
 - one Seat cannot alter another Seat's adapter state;
-- coordinate conversions are DPI-aware;
+- v1 performs no implicit DPI conversion and exposes only its declared
+  logical screen-coordinate contract;
 - invalid/stale HWNDs produce explicit failure;
 - actual and virtual foreground are both diagnostic fields.
 
@@ -263,6 +269,29 @@ Controlled probes use the ordinary API calls and observe independent Seat-local 
 **Suggested commit**
 
 `feat: implement P3-API-03 cursor and focus shim`
+
+**Code-complete implementation note (2026-08-25)**
+
+- the existing startup-loaded `hydra_gate_c_shim.dll` now owns one combined
+  lifecycle for the validated three polling imports and a separate bounded
+  ten-entry cursor/focus/capture patch set;
+- adapter ABI v2 adds fixed-width clip and transient process-local logical
+  HWND state while retaining the existing cursor/clip storage as the single
+  source of truth;
+- active setters update only adapter state. They never call native
+  `SetCursorPos`, `ClipCursor`, `SetCapture`, `ReleaseCapture`, or a focus
+  mutation API;
+- controlled v1 coordinates are signed 32-bit logical screen coordinates,
+  clip right/bottom are exclusive, negative values are valid, and cursor
+  setters clamp to an enabled valid clip rectangle;
+- logical foreground, active, and focus share the validated controlled target
+  in v1. Capture may point at another validated window owned by the same
+  controlled process;
+- `ShowCursor` is explicitly deferred because its counter/thread contract is
+  not defined by this packet;
+- strict portable component evidence is green. Native Windows/MSVC x64/x86,
+  cross-architecture, ordinary-API, and global-state-preservation execution is
+  still required before this packet may become `VALIDATED`.
 
 ---
 

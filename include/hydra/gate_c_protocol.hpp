@@ -51,7 +51,8 @@ enum class TestCapability : std::uint64_t {
     VirtualFocusState = 1ull << 3,
     SnapshotQuery = 1ull << 4,
     ApiProbeBaselineSnapshot = 1ull << 5,
-    PollingApiShim = 1ull << 6
+    PollingApiShim = 1ull << 6,
+    CursorFocusApiShim = 1ull << 7
 };
 
 constexpr TestCapability operator|(TestCapability left,
@@ -78,6 +79,9 @@ inline constexpr TestCapability kControlledApiProbeCapabilities =
 
 inline constexpr TestCapability kControlledPollingProbeCapabilities =
     kControlledApiProbeCapabilities | TestCapability::PollingApiShim;
+
+inline constexpr TestCapability kControlledCursorFocusProbeCapabilities =
+    kControlledPollingProbeCapabilities | TestCapability::CursorFocusApiShim;
 
 struct DecodedFrame {
     MessageType type{MessageType::Error};

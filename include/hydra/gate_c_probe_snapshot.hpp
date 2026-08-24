@@ -11,9 +11,9 @@
 namespace hydra::gatec {
 
 inline constexpr std::uint32_t kProbeSnapshotMagic = 0x31535048u; // "HPS1".
-inline constexpr std::uint16_t kProbeSnapshotSchemaVersion = 1;
+inline constexpr std::uint16_t kProbeSnapshotSchemaVersion = 2;
 inline constexpr std::uint16_t kProbeSnapshotHeaderBytes = 16;
-inline constexpr std::size_t kProbeSnapshotWireBytes = 792;
+inline constexpr std::size_t kProbeSnapshotWireBytes = 848;
 inline constexpr std::size_t kMaximumProbeSnapshotBytes = 1024;
 
 struct ProbeRect {
@@ -44,6 +44,7 @@ struct OsInputSnapshot {
     ProbeRect clipRectangle{};
 
     std::uint64_t foregroundWindowRuntimeValue{0};
+    std::uint64_t activeWindowRuntimeValue{0};
     std::uint64_t focusWindowRuntimeValue{0};
     std::uint64_t captureWindowRuntimeValue{0};
 
@@ -56,6 +57,7 @@ struct AdapterInputSnapshot {
     std::uint32_t keyboardStateResult{0};
     std::uint32_t controlStateResult{0};
     std::uint32_t mouseStateResult{0};
+    std::uint32_t windowStateResult{0};
 
     std::uint64_t lastAppliedSequence{0};
     std::uint16_t asyncKeyState{0};
@@ -72,6 +74,11 @@ struct AdapterInputSnapshot {
     bool virtualForeground{false};
     bool virtualCapture{false};
     ProbeRect clipRectangle{};
+    std::uint64_t targetWindowRuntimeValue{0};
+    std::uint64_t logicalForegroundWindowRuntimeValue{0};
+    std::uint64_t logicalActiveWindowRuntimeValue{0};
+    std::uint64_t logicalFocusWindowRuntimeValue{0};
+    std::uint64_t virtualCaptureWindowRuntimeValue{0};
 
     bool operator==(const AdapterInputSnapshot&) const = default;
 };
@@ -95,8 +102,11 @@ struct ProbeComparison {
     bool cursorMatches{false};
     bool clipRectangleMatches{false};
     bool foregroundMatches{false};
+    bool activeMatches{false};
+    bool focusMatches{false};
     bool captureMatches{false};
     bool osForegroundIsTarget{false};
+    bool osActiveIsTarget{false};
     bool osFocusIsTarget{false};
     bool osCaptureIsTarget{false};
 
@@ -116,7 +126,7 @@ struct ProbeSnapshotDecodeResult {
 void updateProbeComparison(ProbeComparison& comparison) noexcept;
 
 // The wire format is fixed-width little-endian, versioned, and exactly
-// kProbeSnapshotWireBytes bytes for schema version 1.
+// kProbeSnapshotWireBytes bytes for schema version 2.
 std::vector<std::byte> encodeProbeComparison(
     const ProbeComparison& comparison);
 ProbeSnapshotDecodeResult decodeProbeComparison(

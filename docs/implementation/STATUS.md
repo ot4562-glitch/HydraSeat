@@ -4,8 +4,8 @@
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
 - Current default packet: **P3-API-03 — Cursor, clip, focus, and capture shim**
-- Current validated implementation baseline: `f3bb863cc9f606aa6e83804a344ec906afcb9e21` (P3-API-02 implementation)
-- Current validated Windows CI evidence: run `32780563364`; x64/x86 full CTest and dedicated x64-host-to-x64/x86 polling-shim cross-architecture jobs passed
+- Current validated fork-main baseline: `c67e024dc410d1920eb1b26dae7275abd60fe86a` (merged P3-API-02)
+- Current validated Windows CI evidence: run `32781616765`; x64/x86 full CTest and dedicated x64-host-to-x64/x86 polling-shim cross-architecture jobs passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -37,7 +37,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | --- | --- | --- | --- |
 | P3-API-01 | VALIDATED | P3-STATE-01 | Controlled Win32 API probe baseline — Windows/MSVC run `32722277035`; 15/15 tests including both API probe self-tests passed |
 | P3-API-02 Startup-loaded polling shim for controlled probe | VALIDATED | P3-API-01, P3-ARCH-01 | Windows run `32780563364`: native x64/x86 polling-shim CTest plus x64-host-to-x64/x86 ordinary-API two-probe isolation passed |
-| P3-API-03 Cursor/focus/capture shim for controlled probe | READY | P3-API-02 | Probe sees Seat-local cursor/clip/focus/capture while global state remains unchanged and polling-shim regressions stay green |
+| P3-API-03 Cursor/focus/capture shim for controlled probe | CODE_COMPLETE | P3-API-02 | Portable/component implementation is complete; Windows x64/x86 ordinary-API, cross-architecture, and global-state-preservation execution is pending |
 | P3-RAW-01 Raw Input registration/data probe | BLOCKED | P3-API-01 | Controlled probe records real registration/data behavior before interposition |
 | P3-RAW-02 Raw Input virtualization shim | BLOCKED | P3-RAW-01, P3-API-02 | Two probes receive only their Seat synthetic Raw Input stream |
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
@@ -134,6 +134,21 @@ Manual evidence: none required by the packet; Gate A/B/C physical acceptance rem
 Known limitations: v1 does not virtualize toggle low bits, cursor/focus/capture, Raw Input, physical suppression, third-party/commercial targets, or protected processes; physical Gate A/B/C acceptance remains separate
 Rollback result: the component suite proved all-or-rollback install, byte-exact reverse restoration, idempotent uninstall/reinstall, and retry after an uninstall write failure; controlled probe teardown refuses DLL unload unless restoration succeeds
 Next packet: P3-API-03 is READY for a controlled cursor/clip/focus/capture shim while P3-API-02 regressions remain required
+
+### 2026-08-25 — P3-API-03
+
+State: CODE_COMPLETE
+Branch/commit: `feat/p3-api-03-cursor-focus-shim` (packet implementation commit)
+Windows CI: pending; no local MSVC/CMake toolchain was available, so x64/x86 and cross-architecture execution is not claimed
+Automated tests:
+- strict GCC 15 syntax checks passed with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion` for the changed Gate C implementation and tests
+- portable adapter, protocol, probe-snapshot v2, cursor/focus policy, bounded IAT transaction, combined polling-plus-cursor rollback, malformed-plan, retry-uninstall, negative/extreme coordinate, and exact-restoration tests passed
+- C11/C++ fixed-width ABI assertions cover adapter v2 clip/window structures and shim v1-to-v2 config mismatch; Windows CI will execute the actual DLL ABI smoke tests in x86 and x64
+- declared Windows CTest additions cover local ordinary cursor/focus shim behavior and two controlled x64/x86 probes, including polling regression and host-native global-state preservation
+Manual evidence: none claimed; physical Gate A/B/C, watchdog/crash recovery, Raw Input, device suppression/cloaking, commercial games, and protected processes remain pending/out of scope
+Known limitations: v1 uses caller-declared 32-bit logical screen coordinates with no inferred DPI/client/physical transform; logical foreground/active/focus share one validated controlled target; `ShowCursor` remains deferred; Windows execution evidence is still required before `VALIDATED`
+Rollback result: portable component tests prove cursor/focus all-or-rollback, combined rollback of the already-installed polling set, reverse exact pointer restoration, retry after uninstall failure, and fail-closed legacy ABI rejection; Windows native IAT restoration remains pending CI
+Next packet: P3-API-03 remains the current validation target; do not start P3-RAW-01/02 or P3-REC-01 from this branch
 
 ## Next Codex task
 

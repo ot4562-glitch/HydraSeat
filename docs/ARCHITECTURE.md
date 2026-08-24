@@ -169,7 +169,22 @@ Gate C introduces a process boundary without attaching to a third-party game.
 
 #### `hydra_gate_c_adapter`
 
-The adapter is a normally loaded shared library with a versioned C ABI. It owns one process-local `VirtualInputState` per adapter context and exposes controlled-test equivalents for async/key/keyboard state, mouse buttons/wheel, cursor/clip and virtual foreground/capture queries. It does not install hooks or modify Windows APIs.
+The adapter is a normally loaded shared library with a versioned C ABI. It owns one process-local `VirtualInputState` per adapter context and exposes controlled-test equivalents for async/key/keyboard state, mouse buttons/wheel, cursor/clip and virtual foreground/capture queries. ABI v2 also stores fixed-width transient controlled-target, logical foreground/active/focus, and virtual-capture HWND runtime values; those values are never persisted as identity. It does not install hooks or modify Windows APIs.
+
+The startup-loaded `hydra_gate_c_shim.dll` is confined to a HydraSeat-owned
+probe's own IAT. One lifecycle owns both the validated three-function polling
+set and a separate closed ten-function cursor/clip/focus/capture set. Active
+cursor/capture mutators update only adapter state, while inactive calls use
+the exact saved original pointer. Install is all-or-rollback across both sets;
+uninstall blocks new virtual calls, drains in-flight adapter calls, restores
+cursor/focus then polling entries in reverse, and refuses unload after an
+incomplete restoration.
+
+P3-API-03 controlled v1 coordinates are signed 32-bit logical screen values
+with no inferred DPI/client/physical transform. Clip right/bottom are
+exclusive. Logical foreground/active/focus share one validated controlled
+target; capture may use another same-process validated window. `ShowCursor`
+is deferred.
 
 #### `hydra_gate_c_host` and `hydra_gate_c_target`
 
@@ -180,7 +195,7 @@ The adapter is a normally loaded shared library with a versioned C ABI. It owns 
 - synthetic Windows CI starts two processes and proves different A/B key edges, mouse state, cursor state and virtual foreground state do not cross between them;
 - the target displays virtual state beside actual OS foreground state to make the current limitation visible.
 
-The current target calls the adapter C ABI directly. Gate C remains incomplete until HydraSeat-owned probe binaries observe these values through the actual Raw Input, polling, cursor and focus API surfaces. No commercial-process injection, physical suppression or anti-cheat interaction is implemented.
+The current target calls the adapter C ABI directly. Polling interposition is Windows-validated and cursor/focus interposition is code-complete pending native x64/x86 validation. Gate C remains incomplete until that validation passes and HydraSeat-owned probes cover the separate Raw Input surface. No commercial-process injection, physical suppression or anti-cheat interaction is implemented.
 
 See [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
 
