@@ -1,4 +1,5 @@
 #include "hydra/gate_c_adapter.h"
+#include "hydra/gate_c_architecture.hpp"
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/gate_c_probe_snapshot.hpp"
 #include "hydra/gate_c_transport.hpp"
@@ -13,6 +14,7 @@
 #include <cstdint>
 #include <deque>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -54,9 +56,13 @@ using hydra::gatec::TransportStatus;
 
 struct HostOptions {
     std::wstring targetPath;
+    std::wstring artifactRoot;
+    hydra::gatec::ProcessArchitecture requestedArchitecture{
+        hydra::gatec::ProcessArchitecture::Unknown};
     std::string profilePath{"workspace_config.json"};
     std::string tracePath{"hydra_gate_c_host.jsonl"};
     bool selfTest{false};
+    bool architectureSelfTest{false};
     bool baselineSelfTest{false};
     bool protocolErrorSelfTest{false};
     bool showHelp{false};
@@ -67,6 +73,8 @@ void printUsage(std::ostream& output) {
         << "HydraSeat Gate C controlled-process host\n\n"
         << "Usage:\n"
         << "  hydra_gate_c_host --self-test [--target <hydra_gate_c_target.exe>]\n"
+        << "  hydra_gate_c_host --architecture-self-test --artifact-root <gate-c>\n"
+        << "                     --target-architecture <x86|x64>\n"
         << "  hydra_gate_c_host --baseline-self-test --target <hydra_gate_c_api_probe.exe>\n"
         << "  hydra_gate_c_host --protocol-error-self-test [--target <hydra_gate_c_target.exe>]\n"
         << "  hydra_gate_c_host [--profile <workspace_config.json>] [--trace <file.jsonl>]\n"
@@ -175,12 +183,21 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
         const std::wstring argument = argv[index];
         if (argument == L"--target" && index + 1 < argc) {
             options.targetPath = argv[++index];
+        } else if (argument == L"--artifact-root" && index + 1 < argc) {
+            options.artifactRoot = argv[++index];
+        } else if (argument == L"--target-architecture" && index + 1 < argc) {
+            const auto parsed = hydra::gatec::parseProcessArchitecture(
+                wideToUtf8(argv[++index]));
+            if (!parsed) return false;
+            options.requestedArchitecture = *parsed;
         } else if (argument == L"--profile" && index + 1 < argc) {
             options.profilePath = wideToUtf8(argv[++index]);
         } else if (argument == L"--trace" && index + 1 < argc) {
             options.tracePath = wideToUtf8(argv[++index]);
         } else if (argument == L"--self-test") {
             options.selfTest = true;
+        } else if (argument == L"--architecture-self-test") {
+            options.architectureSelfTest = true;
         } else if (argument == L"--baseline-self-test") {
             options.baselineSelfTest = true;
         } else if (argument == L"--protocol-error-self-test") {
@@ -192,9 +209,18 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
         }
     }
     const int selfTestModes = static_cast<int>(options.selfTest) +
+        static_cast<int>(options.architectureSelfTest) +
         static_cast<int>(options.baselineSelfTest) +
         static_cast<int>(options.protocolErrorSelfTest);
     if (selfTestModes > 1) {
+        return false;
+    }
+    const bool hasArtifactRoot = !options.artifactRoot.empty();
+    const bool hasArchitecture = options.requestedArchitecture !=
+        hydra::gatec::ProcessArchitecture::Unknown;
+    if (hasArtifactRoot != hasArchitecture ||
+        (hasArtifactRoot && !options.targetPath.empty()) ||
+        (options.architectureSelfTest && !hasArtifactRoot)) {
         return false;
     }
     return true;
@@ -291,6 +317,8 @@ struct TargetSession {
     std::wstring pipeName;
     PipeChannel channel;
     ChildProcess process;
+    hydra::gatec::ProcessArchitecture architecture{
+        hydra::gatec::ProcessArchitecture::Unknown};
     std::uint64_t targetWindow{0};
     std::uint64_t nextSequence{2};
     bool connected{false};
@@ -453,20 +481,57 @@ class GateCHost {
 public:
     explicit GateCHost(HostOptions options)
         : m_options(std::move(options)) {
-        if (m_options.targetPath.empty()) {
+        if (m_options.targetPath.empty() && m_options.artifactRoot.empty()) {
             m_options.targetPath = siblingTargetPath(
                 m_options.baselineSelfTest);
         }
     }
 
     int run() {
+        if (!m_options.artifactRoot.empty()) {
+            const auto kind = m_options.baselineSelfTest
+                ? hydra::gatec::GateCArtifactKind::ApiProbe
+                : hydra::gatec::GateCArtifactKind::ControlledTarget;
+            const auto selected = hydra::gatec::resolveGateCArtifacts(
+                std::filesystem::path(m_options.artifactRoot),
+                hydra::gatec::defaultGateCArtifactManifest(),
+                m_options.requestedArchitecture, kind);
+            if (!selected) {
+                std::cerr << "Gate C artifact selection failed ["
+                          << hydra::gatec::artifactSelectionStatusName(
+                                 selected.status)
+                          << "]: " << selected.error << '\n';
+                return 20;
+            }
+            m_options.targetPath =
+                selected.selection->executablePath.wstring();
+            m_expectedArchitecture = selected.selection->architecture;
+        }
         if (GetFileAttributesW(m_options.targetPath.c_str()) ==
             INVALID_FILE_ATTRIBUTES) {
             std::cerr << "Controlled target was not found: "
                       << wideToUtf8(m_options.targetPath) << '\n';
             return 20;
         }
-        if (m_options.selfTest) {
+        const auto imageArchitecture =
+            hydra::gatec::detectPortableExecutableArchitecture(
+                std::filesystem::path(m_options.targetPath));
+        if (!imageArchitecture) {
+            std::cerr << "Controlled target PE architecture detection failed ["
+                      << hydra::gatec::architectureDetectionStatusName(
+                             imageArchitecture.status)
+                      << "]: " << imageArchitecture.error << '\n';
+            return 21;
+        }
+        if (m_expectedArchitecture ==
+            hydra::gatec::ProcessArchitecture::Unknown) {
+            m_expectedArchitecture = imageArchitecture.architecture;
+        } else if (m_expectedArchitecture != imageArchitecture.architecture) {
+            std::cerr << "Controlled target PE architecture does not match "
+                         "the selected artifact architecture.\n";
+            return 22;
+        }
+        if (m_options.selfTest || m_options.architectureSelfTest) {
             return runProcessSelfTest();
         }
         if (m_options.baselineSelfTest) {
@@ -531,6 +596,21 @@ private:
         CloseHandle(process.hThread);
         session.process.assign(process.hProcess, process.dwProcessId);
 
+        const auto processArchitecture =
+            hydra::gatec::detectProcessArchitecture(session.process.handle());
+        if (!processArchitecture ||
+            processArchitecture.architecture != m_expectedArchitecture) {
+            std::cerr << "Controlled child architecture validation failed for Seat "
+                      << session.seatId << ": "
+                      << (processArchitecture.error.empty()
+                              ? "architecture mismatch"
+                              : processArchitecture.error)
+                      << '\n';
+            session.process.terminate(90);
+            return false;
+        }
+        session.architecture = processArchitecture.architecture;
+
         if (!hydra::gatec::waitForGateCClient(
                 session.channel, handshakeTimeoutMs, &error, &systemError)) {
             std::cerr << "Pipe connection failed for Seat " << session.seatId
@@ -552,7 +632,9 @@ private:
         HelloMessage hello;
         if (!hydra::gatec::decodeHello(*helloResult.frame, hello, &error) ||
             hello.token != session.token || hello.seatId != session.seatId ||
-            hello.processId != session.process.processId()) {
+            hello.processId != session.process.processId() ||
+            hello.architectureBits !=
+                static_cast<std::uint16_t>(session.architecture)) {
             std::cerr << "Hello identity validation failed for Seat "
                       << session.seatId << ": " << error << '\n';
             rejectHello(session, 2002);
@@ -822,7 +904,9 @@ private:
         std::cout
             << "HydraSeat Gate C process self-test passed: two separate target "
                "processes retained independent keyboard, async-edge, mouse, "
-               "cursor, clip, and virtual-focus state.\n";
+               "cursor, clip, and virtual-focus state; selected architecture "
+            << hydra::gatec::processArchitectureName(m_expectedArchitecture)
+            << ".\n";
         return EXIT_SUCCESS;
     }
 
@@ -1247,6 +1331,8 @@ private:
     }
 
     HostOptions m_options;
+    hydra::gatec::ProcessArchitecture m_expectedArchitecture{
+        hydra::gatec::ProcessArchitecture::Unknown};
 };
 
 #endif

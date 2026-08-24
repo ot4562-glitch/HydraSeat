@@ -1,4 +1,5 @@
 #include "hydra/gate_c_adapter.h"
+#include "hydra/gate_c_architecture.hpp"
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/gate_c_transport.hpp"
 
@@ -403,8 +404,16 @@ private:
         hello.token = m_options.token;
         hello.seatId = m_options.seatId;
         hello.processId = GetCurrentProcessId();
+        const auto architecture = hydra::gatec::detectProcessArchitecture(
+            GetCurrentProcess());
+        if (!architecture) {
+            setProtocolError("process architecture detection failed: " +
+                                 architecture.error,
+                             architecture.systemError);
+            return false;
+        }
         hello.architectureBits =
-            static_cast<std::uint16_t>(sizeof(void*) * 8);
+            static_cast<std::uint16_t>(architecture.architecture);
         hello.targetWindow = reinterpret_cast<std::uint64_t>(m_hwnd.load());
         if (!m_channel.writeFrame(hydra::gatec::encodeHello(1, hello),
                                   kIoTimeoutMs, &error, &systemError)) {

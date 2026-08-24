@@ -383,7 +383,7 @@ Two controlled probes consume separate Raw Input streams through the ordinary AP
 
 ## P3-ARCH-01 — x86/x64 adapter and controlled-target matrix
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 

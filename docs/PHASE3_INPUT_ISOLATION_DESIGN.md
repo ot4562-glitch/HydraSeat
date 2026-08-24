@@ -437,6 +437,10 @@ Implemented foundation:
 - key down state, `GetAsyncKeyState`-style one-shot edges, `GetKeyState` and `GetKeyboardState`-style high bits;
 - mouse button/wheel state, virtual cursor/clip, virtual foreground and virtual capture state;
 - two separate target processes with synthetic Windows CI evidence that their A/B key, mouse, cursor and virtual-focus state do not cross;
+- explicit target-process detection through `IsWow64Process2` with a bounded
+  legacy fallback, plus PE-machine preflight before child launch;
+- a bounded schema-v1 artifact manifest and deterministic architecture-neutral
+  target/adapter/API-probe names under `gate-c/x86` and `gate-c/x64`;
 - bounded per-target writer queues for interactive Raw Input routing;
 - orderly shutdown and force-termination cleanup for controlled child processes.
 
@@ -495,6 +499,7 @@ Only after Gate E may Phase 3 be marked complete.
 | JSONL hot-plug/route diagnostics | Yes | Yes | Gate A/B acceptance pending | No |
 | Gate C wire protocol and parser | Yes | Yes | No | No |
 | Gate C adapter C ABI | Yes | Yes | No | Controlled process only |
+| Gate C x86/x64 manifest, PE, and ABI matrix | Yes | CI pending | No | Controlled process only |
 | Two-process synthetic state separation | Partial | Yes | No | Controlled process only |
 | Bounded per-target writer queues | Partial | Yes | Gate C physical acceptance pending | Controlled process only |
 | Raw Input API virtualization | No | Pending | Pending | Controlled probe only |
@@ -504,7 +509,7 @@ Only after Gate E may Phase 3 be marked complete.
 
 ## Implemented non-invasive baseline
 
-The non-invasive Phase 3 foundation now contains three completed implementation slices.
+The non-invasive Phase 3 foundation now contains four implementation slices.
 
 ### Capability-planning slice
 
@@ -535,7 +540,28 @@ Gate A/B **implementation** is complete, but physical acceptance remains pending
 5. Windows CI starts two distinct processes and proves their synthetic states remain independent.
 6. Cryptographic Windows session tokens, explicit timeouts, protocol validation and child cleanup are implemented.
 
-The next source-code slice is controlled API interposition for HydraSeat-owned probes. Gate C remains incomplete until probes obtain the Seat-local values through the APIs an ordinary game would call. Commercial games, physical device cloaking and anti-cheat targets remain out of scope. See [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
+### Gate C architecture-matrix slice
+
+1. Runtime architecture detection uses `IsWow64Process2`; only API absence may
+   activate the `IsWow64Process` plus `GetNativeSystemInfo` fallback.
+2. The host parses target and adapter PE headers before launch, then checks the
+   actual child process architecture and the fixed-width Hello value.
+3. The schema-v1 manifest is bounded and rejects unknown/future/duplicate,
+   missing, non-canonical, oversized, absolute, and traversal descriptors.
+4. CMake places runtime artifacts under deterministic `gate-c/x86` or
+   `gate-c/x64` directories while preserving architecture-neutral filenames.
+5. The adapter C ABI explicitly declares `__cdecl` on Windows and publishes
+   v1 size constants asserted from both C11 and C++ builds.
+6. Windows CI declares native x86/x64 full test jobs and a separate x64 host
+   job that selects and launches an actual x86 controlled target/adapter pair.
+
+This slice remains `CODE_COMPLETE`, not `VALIDATED`, until the declared Windows
+matrix supplies x86 and cross-architecture process evidence. The next
+source-code slice after that validation is controlled API interposition for
+HydraSeat-owned probes. Gate C remains incomplete until probes obtain the
+Seat-local values through the APIs an ordinary game would call. Commercial
+games, physical device cloaking and anti-cheat targets remain out of scope. See
+[PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
 
 ## Related documents
 

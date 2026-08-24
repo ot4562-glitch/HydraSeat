@@ -3,6 +3,16 @@
 #include <stdint.h>
 #include <stdio.h>
 
+_Static_assert(sizeof(HydraGateCAdapterInputEventV1) ==
+                   HYDRA_GATE_C_ADAPTER_INPUT_EVENT_V1_BYTES,
+               "Gate C input ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterControlStateV1) ==
+                   HYDRA_GATE_C_ADAPTER_CONTROL_STATE_V1_BYTES,
+               "Gate C control ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterSnapshotV1) ==
+                   HYDRA_GATE_C_ADAPTER_SNAPSHOT_V1_BYTES,
+               "Gate C snapshot ABI size changed");
+
 int main(void) {
     if (hydra_gate_c_adapter_api_version() !=
         HYDRA_GATE_C_ADAPTER_API_VERSION) {

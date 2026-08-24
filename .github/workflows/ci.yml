@@ -9,6 +9,16 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - architecture: x64
+          cmake_platform: x64
+          build_dir: build-x64
+        - architecture: x86
+          cmake_platform: Win32
+          build_dir: build-x86
 
     steps:
     - name: Checkout repository
@@ -29,10 +39,61 @@ jobs:
       run: python tools/show_implementation_packet.py --current --prompt
 
     - name: Configure CMake
-      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+      run: >-
+        cmake -B ${{ matrix.build_dir }} -S .
+        -A ${{ matrix.cmake_platform }}
+        -DCMAKE_BUILD_TYPE=Release
 
     - name: Build Project
-      run: cmake --build build --config Release --parallel
+      run: cmake --build ${{ matrix.build_dir }} --config Release --parallel
 
     - name: Run Engine Unit Tests
-      run: ctest --test-dir build --build-config Release --output-on-failure
+      run: >-
+        ctest --test-dir ${{ matrix.build_dir }}
+        --build-config Release --output-on-failure
+
+  gate-c-cross-architecture:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up MSVC & CMake
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Configure x64 and x86 Gate C builds
+      shell: pwsh
+      run: |
+        cmake -B build-cross-x64 -S . -A x64 -DCMAKE_BUILD_TYPE=Release
+        cmake -B build-cross-x86 -S . -A Win32 -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build controlled architecture artifacts
+      shell: pwsh
+      run: |
+        cmake --build build-cross-x64 --config Release --parallel --target hydra_gate_c_host hydra_gate_c_target hydra_gate_c_api_probe hydra_gate_c_adapter
+        cmake --build build-cross-x86 --config Release --parallel --target hydra_gate_c_target hydra_gate_c_api_probe hydra_gate_c_adapter
+
+    - name: Stage deterministic x86 and x64 artifact manifest layout
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force matrix-artifacts\gate-c\x64 | Out-Null
+        New-Item -ItemType Directory -Force matrix-artifacts\gate-c\x86 | Out-Null
+        Copy-Item build-cross-x64\gate-c\x64\hydra_gate_c_target.exe matrix-artifacts\gate-c\x64\
+        Copy-Item build-cross-x64\gate-c\x64\hydra_gate_c_api_probe.exe matrix-artifacts\gate-c\x64\
+        Copy-Item build-cross-x64\gate-c\x64\hydra_gate_c_adapter.dll matrix-artifacts\gate-c\x64\
+        Copy-Item build-cross-x86\gate-c\x86\hydra_gate_c_target.exe matrix-artifacts\gate-c\x86\
+        Copy-Item build-cross-x86\gate-c\x86\hydra_gate_c_api_probe.exe matrix-artifacts\gate-c\x86\
+        Copy-Item build-cross-x86\gate-c\x86\hydra_gate_c_adapter.dll matrix-artifacts\gate-c\x86\
+
+    - name: Run x64 host to native x64 and cross-architecture x86 targets
+      shell: pwsh
+      run: |
+        & .\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe --architecture-self-test --artifact-root .\matrix-artifacts\gate-c --target-architecture x64
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & .\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe --architecture-self-test --artifact-root .\matrix-artifacts\gate-c --target-architecture x86
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & .\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe --protocol-error-self-test --artifact-root .\matrix-artifacts\gate-c --target-architecture x86
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & .\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe --baseline-self-test --artifact-root .\matrix-artifacts\gate-c --target-architecture x86
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

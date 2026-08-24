@@ -8,6 +8,41 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+if(MSVC)
+    string(TOLOWER "${MSVC_CXX_ARCHITECTURE_ID}" hydra_compiler_arch)
+else()
+    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" hydra_compiler_arch)
+endif()
+if(hydra_compiler_arch MATCHES "^(x86|i[3-6]86)$")
+    set(HYDRA_GATE_C_ARCH_NAME x86)
+elseif(hydra_compiler_arch MATCHES "^(x64|x86_64|amd64)$")
+    set(HYDRA_GATE_C_ARCH_NAME x64)
+else()
+    message(FATAL_ERROR
+        "Gate C supports only explicit x86 and x64 compiler targets; got '${hydra_compiler_arch}'")
+endif()
+
+set(HYDRA_GATE_C_OUTPUT_ROOT "${CMAKE_BINARY_DIR}/gate-c" CACHE PATH
+    "Deterministic root for architecture-specific Gate C artifacts")
+
+function(hydra_set_gate_c_output target_name)
+    set(runtime_dir "${HYDRA_GATE_C_OUTPUT_ROOT}/${HYDRA_GATE_C_ARCH_NAME}")
+    set(archive_dir "${HYDRA_GATE_C_OUTPUT_ROOT}/lib/${HYDRA_GATE_C_ARCH_NAME}")
+    set_target_properties(${target_name} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${runtime_dir}"
+        LIBRARY_OUTPUT_DIRECTORY "${runtime_dir}"
+        ARCHIVE_OUTPUT_DIRECTORY "${archive_dir}"
+    )
+    foreach(config Debug Release RelWithDebInfo MinSizeRel)
+        string(TOUPPER "${config}" config_upper)
+        set_target_properties(${target_name} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${runtime_dir}"
+            LIBRARY_OUTPUT_DIRECTORY_${config_upper} "${runtime_dir}"
+            ARCHIVE_OUTPUT_DIRECTORY_${config_upper} "${archive_dir}"
+        )
+    endforeach()
+endfunction()
+
 # Include directories
 include_directories(include .)
 
@@ -88,10 +123,12 @@ endif()
 
 # Phase 3 controlled-process protocol and virtual input-state core.
 add_library(hydra_gate_c_core STATIC
+    src/gate_c_architecture.cpp
     src/gate_c_protocol.cpp
     src/gate_c_probe_snapshot.cpp
     src/gate_c_transport.cpp
     src/virtual_input_state.cpp
+    include/hydra/gate_c_architecture.hpp
     include/hydra/gate_c_protocol.hpp
     include/hydra/gate_c_probe_snapshot.hpp
     include/hydra/gate_c_transport.hpp
@@ -117,6 +154,7 @@ target_compile_definitions(hydra_gate_c_adapter PRIVATE
     HYDRA_GATE_C_ADAPTER_BUILD=1
 )
 target_link_libraries(hydra_gate_c_adapter PRIVATE hydra_gate_c_core)
+hydra_set_gate_c_output(hydra_gate_c_adapter)
 if(MSVC)
     target_compile_options(hydra_gate_c_adapter PRIVATE /W4 /permissive-)
 endif()
@@ -192,6 +230,7 @@ add_executable(hydra_gate_c_target
     src/gate_c_target.cpp
 )
 target_link_libraries(hydra_gate_c_target PRIVATE hydra_gate_c_core hydra_gate_c_adapter)
+hydra_set_gate_c_output(hydra_gate_c_target)
 if(WIN32)
     target_link_libraries(hydra_gate_c_target PRIVATE User32.lib)
 endif()
@@ -207,6 +246,7 @@ add_executable(hydra_gate_c_api_probe
 target_link_libraries(hydra_gate_c_api_probe PRIVATE
     hydra_gate_c_core hydra_gate_c_adapter
 )
+hydra_set_gate_c_output(hydra_gate_c_api_probe)
 if(WIN32)
     target_link_libraries(hydra_gate_c_api_probe PRIVATE User32.lib)
 endif()
@@ -228,6 +268,7 @@ add_executable(hydra_gate_c_host
     include/hydra/workspace_manager.hpp
 )
 target_link_libraries(hydra_gate_c_host PRIVATE hydra_gate_c_core hydra_hardware)
+hydra_set_gate_c_output(hydra_gate_c_host)
 if(WIN32)
     target_link_libraries(hydra_gate_c_host PRIVATE ${WIN32_LIBS})
 endif()
@@ -298,6 +339,18 @@ if(MSVC)
 endif()
 add_test(NAME GateCProtocolTests COMMAND gate_c_protocol_tests)
 
+# P3-ARCH-01 process-architecture detection, PE validation, and the bounded
+# architecture-specific artifact manifest/selector.
+add_executable(gate_c_architecture_tests
+    tests/test_gate_c_architecture.cpp
+)
+target_link_libraries(gate_c_architecture_tests PRIVATE hydra_gate_c_core)
+hydra_set_gate_c_output(gate_c_architecture_tests)
+if(MSVC)
+    target_compile_options(gate_c_architecture_tests PRIVATE /W4 /permissive-)
+endif()
+add_test(NAME GateCArchitectureTests COMMAND gate_c_architecture_tests)
+
 # P3-API-01 fixed-width, versioned OS/adapter comparison snapshot tests.
 add_executable(gate_c_probe_snapshot_tests
     tests/test_gate_c_probe_snapshot.cpp
@@ -314,6 +367,7 @@ add_executable(gate_c_adapter_tests
     tests/test_gate_c_adapter.cpp
 )
 target_link_libraries(gate_c_adapter_tests PRIVATE hydra_gate_c_adapter)
+hydra_set_gate_c_output(gate_c_adapter_tests)
 if(MSVC)
     target_compile_options(gate_c_adapter_tests PRIVATE /W4 /permissive-)
 endif()
@@ -323,6 +377,7 @@ add_executable(gate_c_adapter_c_smoke
     tests/test_gate_c_adapter_c.c
 )
 target_link_libraries(gate_c_adapter_c_smoke PRIVATE hydra_gate_c_adapter)
+hydra_set_gate_c_output(gate_c_adapter_c_smoke)
 if(MSVC)
     target_compile_options(gate_c_adapter_c_smoke PRIVATE /W4)
 endif()
@@ -331,6 +386,14 @@ add_test(NAME GateCAdapterCSmoke COMMAND gate_c_adapter_c_smoke)
 add_test(NAME GateCTargetSelfTest COMMAND hydra_gate_c_target --self-test)
 
 if(WIN32)
+    add_test(
+        NAME GateCArchitectureRuntimeSelfTest
+        COMMAND gate_c_architecture_tests --runtime-self-test
+                ${HYDRA_GATE_C_ARCH_NAME}
+                $<TARGET_FILE:hydra_gate_c_target>
+                $<TARGET_FILE:hydra_gate_c_adapter>
+    )
+
     add_test(
         NAME GateCApiProbeSelfTest
         COMMAND hydra_gate_c_api_probe --baseline-self-test

@@ -4,8 +4,8 @@
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
 - Current default packet: **P3-ARCH-01 — x86 Gate C build and cross-architecture launcher selection**
-- Current validated implementation baseline: `3c5a480` (P3-API-01 source plus Win32 build fix)
-- Current validated Windows CI evidence: fork PR #8 run `32721435490`, 15/15 tests passed
+- Current validated implementation baseline: `cc88e7934461a9ad0cbae516312a254be173558c` (P3-API-01)
+- Current validated Windows CI evidence: run `32722277035`, 15/15 tests passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -35,12 +35,12 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 
 | Packet | State | Depends on | Immediate evidence required |
 | --- | --- | --- | --- |
-| P3-API-01 | VALIDATED | P3-STATE-01 | Controlled Win32 API probe baseline — Windows/MSVC PR #8 run `32721435490`; 15/15 tests including both API probe self-tests passed |
+| P3-API-01 | VALIDATED | P3-STATE-01 | Controlled Win32 API probe baseline — Windows/MSVC run `32722277035`; 15/15 tests including both API probe self-tests passed |
 | P3-API-02 Startup-loaded polling shim for controlled probe | BLOCKED | P3-API-01 | `GetAsyncKeyState`, `GetKeyState`, `GetKeyboardState` return Seat-local values in the probe |
 | P3-API-03 Cursor/focus/capture shim for controlled probe | BLOCKED | P3-API-02 | Probe sees Seat-local cursor/clip/focus/capture while global state remains unchanged |
 | P3-RAW-01 Raw Input registration/data probe | BLOCKED | P3-API-01 | Controlled probe records real registration/data behavior before interposition |
 | P3-RAW-02 Raw Input virtualization shim | BLOCKED | P3-RAW-01, P3-API-02 | Two probes receive only their Seat synthetic Raw Input stream |
-| P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | READY | P3-IPC-01, P3-STATE-01 | Windows x86 CI and x64 host launching x86 controlled target |
+| P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | CODE_COMPLETE | P3-IPC-01, P3-STATE-01 | Source/portable tests complete; Windows x86 CI and x64 host launching x86 controlled target still require runner evidence |
 | P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
 | P3-HW-01 Gate A/B/C physical acceptance runner | READY | P3-QUEUE-01 | User-run two-keyboard/two-pointing-device traces and report |
 | P3-CTRL-01 XInput controlled adapter state | READY | P3-STATE-01 | Two controlled targets see different mapped XInput slots/states |
@@ -92,11 +92,11 @@ Next packet:
 ### 2026-08-24 — P3-API-01
 
 State: VALIDATED
-Branch/commit: `feature/p3-api-01-win32-probe`; implementation/fix baseline `3c5a480`
-Windows CI: fork PR #8 run `32721435490` passed on Windows Server 2025 / MSVC x64; 15/15 CTest targets passed
+Branch/commit: validated baseline `cc88e7934461a9ad0cbae516312a254be173558c`
+Windows CI: run `32722277035` passed on Windows Server 2025 / MSVC x64; 15/15 CTest targets passed
 Automated tests:
 - strict GCC 15 snapshot build/test passed with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion`
-- Windows CMake/MSVC Release configure/build passed in PR #8 run `32721435490`
+- Windows CMake/MSVC Release configure/build passed in run `32722277035`
 - Windows CTest passed 15/15 targets, including `GateCProbeSnapshotTests`
 - `GateCApiProbeSelfTest` and `GateCApiProbeProcessSelfTest` both passed on the Windows runner
 Manual evidence: none required by this packet; Gate A/B/C physical gates remain pending and unchanged
@@ -104,15 +104,30 @@ Known limitations: no API interposition exists; the probe records ordinary share
 Rollback result: Windows baseline self-test exercised missing-window, handshake-timeout, abnormal-exit, host-disconnect, repeated startup/shutdown, and no-orphan paths successfully
 Next packet: P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection; then unblock P3-API-02 for declared architectures
 
+### 2026-08-24 — P3-ARCH-01
+
+State: CODE_COMPLETE
+Branch/commit: `build/p3-arch-01`; local commit subject `build: implement P3-ARCH-01 x86 Gate C matrix`
+Windows CI: pending; the workflow now declares independent x64/x86 full CTest jobs and an x64-host-to-x86-target process job
+Automated tests:
+- GCC 15 built and passed 7/7 Gate C portable tests, including manifest/PE architecture, HPS1, protocol, C11/C++ ABI, target, and host regression tests
+- modern `IsWow64Process2` mapping, bounded legacy fallback, unsupported/failed detection, schema/version/entry/path bounds, duplicate/missing/unknown/path-traversal, malformed PE, and wrong-architecture artifacts are covered
+- Windows CTest now includes native process/PE architecture detection in both configured architectures; CI stages the deterministic manifest layout and runs the x64 host against x64/x86 targets plus the x86 probe's repeated/failure/cleanup matrix
+Manual evidence: none claimed; physical Gate C input, API interposition, commercial games, protected processes, and physical suppression remain pending/out of scope
+Known limitations: Windows/MSVC x86 and real x64-to-x86 process evidence is pending CI, so x86 controlled-adapter availability must not yet be advertised as validated
+Rollback result: selector/preflight failures occur before child launch; launched test children retain the existing shutdown, timeout, forced termination, repeat-cycle, and no-orphan cleanup paths
+Next packet: validate P3-ARCH-01 on Windows CI; only then may P3-API-02 become READY for the declared architectures
+
 ## Next Codex task
 
 Use:
 
 ```text
-Implement P3-ARCH-01 exactly as specified in
+Validate P3-ARCH-01 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Add the declared x86 Gate C build/test matrix and deterministic x64-host selection
-of x86/x64 controlled targets/adapters. Do not begin polling/API interposition or
-claim 32-bit support until the Windows cross-architecture process tests pass.
+Run the declared x86/x64 Gate C build/test matrix and deterministic x64-host
+selection of x86/x64 controlled targets/adapters. Do not begin polling/API
+interposition or claim 32-bit support until the Windows cross-architecture
+process tests pass.
 ```
