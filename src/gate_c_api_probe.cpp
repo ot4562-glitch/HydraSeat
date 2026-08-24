@@ -263,7 +263,8 @@ public:
 
     bool loadAndInstall(const std::wstring& path,
                         HydraGateCAdapterHandle adapter,
-                        std::uint32_t seatId, HWND targetWindow) {
+                        std::uint32_t seatId, HWND targetWindow,
+                        bool enableCursorFocus = false) {
         if (m_module != nullptr || path.empty() || adapter == nullptr ||
             targetWindow == nullptr) {
             return false;
@@ -291,7 +292,13 @@ public:
         config.api_version = HYDRA_GATE_C_SHIM_API_VERSION;
         config.seat_id = seatId;
         config.process_id = GetCurrentProcessId();
+        config.flags = enableCursorFocus
+            ? HYDRA_GATE_C_SHIM_ENABLE_CURSOR_FOCUS
+            : 0u;
         config.target_window = runtimeWindowValue(targetWindow);
+        m_expectedApiMask = enableCursorFocus
+            ? HYDRA_GATE_C_SHIM_ALL_API_MASK
+            : HYDRA_GATE_C_SHIM_POLLING_API_MASK;
         const auto result = m_install(adapter, &config);
         m_installed = result == HYDRA_GATE_C_SHIM_OK ||
                       result == HYDRA_GATE_C_SHIM_ALREADY_INSTALLED;
@@ -307,8 +314,8 @@ public:
         const auto value = status();
         return value && value->lifecycle == HYDRA_GATE_C_SHIM_ACTIVE &&
                value->adapter_available == 1u &&
-               value->patched_api_mask ==
-                   HYDRA_GATE_C_SHIM_ALL_API_MASK;
+               value->expected_api_mask == m_expectedApiMask &&
+               value->patched_api_mask == m_expectedApiMask;
     }
 
     std::optional<HydraGateCShimStatusV1> status() const {
@@ -335,8 +342,7 @@ public:
         m_unloadSafe = value &&
             value->lifecycle == HYDRA_GATE_C_SHIM_INACTIVE &&
             value->patched_api_mask == 0u &&
-            value->restored_api_mask ==
-                HYDRA_GATE_C_SHIM_ALL_API_MASK &&
+            value->restored_api_mask == m_expectedApiMask &&
             value->rollback_complete == 1u;
         return m_unloadSafe;
     }
@@ -363,6 +369,7 @@ private:
     StatusFunction m_status{nullptr};
     bool m_installed{false};
     bool m_unloadSafe{true};
+    std::uint32_t m_expectedApiMask{HYDRA_GATE_C_SHIM_ALL_API_MASK};
 };
 
 ProbeComparison captureComparison(HydraGateCAdapterHandle adapter,
@@ -677,7 +684,7 @@ int runLocalCursorFocusShimSelfTest(HINSTANCE instance,
     const HWND nativeCaptureBefore = nativeGetCapture();
 
     ShimOwner shim;
-    if (!shim.loadAndInstall(shimPath, adapter.get(), 1, target) ||
+    if (!shim.loadAndInstall(shimPath, adapter.get(), 1, target, true) ||
         !shim.active()) {
         DestroyWindow(alternate);
         DestroyWindow(target);
@@ -815,7 +822,8 @@ public:
         }
         if (m_options.pollingShim && !m_options.testMissingWindow &&
             !m_shim.loadAndInstall(m_options.shimPath, m_adapter.get(),
-                                   m_options.seatId, m_hwnd.load())) {
+                                   m_options.seatId, m_hwnd.load(),
+                                   m_options.cursorFocusShim)) {
             destroyWindow();
             return 18;
         }

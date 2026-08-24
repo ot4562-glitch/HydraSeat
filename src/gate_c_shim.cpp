@@ -51,6 +51,8 @@ struct ShimRuntime {
     HydraGateCAdapterResult lastAdapterResult{HYDRA_GATE_C_ADAPTER_OK};
     bool adapterAvailable{false};
     bool rollbackComplete{true};
+    bool cursorFocusEnabled{false};
+    std::uint32_t expectedMask{HYDRA_GATE_C_SHIM_ALL_API_MASK};
     std::uint32_t activeCalls{0};
     HydraGateCAdapterHandle adapter{nullptr};
     std::uint32_t seatId{0};
@@ -526,7 +528,8 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
         return HYDRA_GATE_C_SHIM_STRUCT_VERSION_MISMATCH;
     }
     if (config->seat_id == 0 || config->process_id == 0 ||
-        config->flags != 0 || config->reserved0 != 0 ||
+        (config->flags & ~HYDRA_GATE_C_SHIM_CONFIG_FLAGS_MASK) != 0 ||
+        config->reserved0 != 0 ||
         config->target_window == 0) {
         return HYDRA_GATE_C_SHIM_INVALID_ARGUMENT;
     }
@@ -562,6 +565,11 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
     state.restoredMask = 0;
     state.rollbackComplete = true;
     state.lastAdapterResult = HYDRA_GATE_C_ADAPTER_OK;
+    state.cursorFocusEnabled =
+        (config->flags & HYDRA_GATE_C_SHIM_ENABLE_CURSOR_FOCUS) != 0;
+    state.expectedMask = state.cursorFocusEnabled
+        ? HYDRA_GATE_C_SHIM_ALL_API_MASK
+        : HYDRA_GATE_C_SHIM_POLLING_API_MASK;
     state.originals.fill(0);
     state.cursorFocusOriginals.fill(0);
     state.priorWindowState = {};
@@ -630,6 +638,19 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
         state.lifecycle = patched.rollbackComplete
                               ? HYDRA_GATE_C_SHIM_INACTIVE
                               : HYDRA_GATE_C_SHIM_FAIL_CLOSED;
+        return state.lastResult;
+    }
+
+    if (!state.cursorFocusEnabled) {
+        state.adapter = adapter;
+        state.seatId = config->seat_id;
+        state.processId = config->process_id;
+        state.adapterAvailable = true;
+        state.lifecycle = HYDRA_GATE_C_SHIM_ACTIVE;
+        state.discoveredMask = HYDRA_GATE_C_SHIM_POLLING_API_MASK;
+        state.patchedMask = HYDRA_GATE_C_SHIM_POLLING_API_MASK;
+        ++state.generation;
+        state.lastResult = HYDRA_GATE_C_SHIM_OK;
         return state.lastResult;
     }
 
@@ -871,7 +892,7 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_get_status(
     status->generation = state.generation;
     status->system_error = state.systemError;
     status->module_kind = HYDRA_GATE_C_SHIM_MODULE_CURRENT_EXECUTABLE;
-    status->expected_api_mask = HYDRA_GATE_C_SHIM_ALL_API_MASK;
+    status->expected_api_mask = state.expectedMask;
     status->discovered_api_mask = state.discoveredMask;
     status->patched_api_mask = state.patchedMask;
     status->restored_api_mask = state.restoredMask;
