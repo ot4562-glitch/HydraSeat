@@ -1,0 +1,504 @@
+# Phase 3 Input Isolation Design
+
+## Status
+
+Phase 3 is a **feasibility and compatibility phase**. HydraSeat can currently identify physical input devices and associate them with Seats. It cannot yet guarantee that the normal Windows input path is hidden from non-owning games, nor can it make every game observe an independent foreground window, keyboard state and cursor.
+
+This design deliberately distinguishes:
+
+- **observation** — HydraSeat knows which device produced an event;
+- **routing** — HydraSeat selects the owning Seat and target process/window;
+- **state virtualization** — a target process observes Seat-local keyboard/mouse/controller/focus state;
+- **physical suppression** — non-owning applications cannot read the original device;
+- **verified isolation** — measured zero cross-seat bleed for a defined game/profile pair.
+
+Only the last state satisfies the Phase 3 exit gate.
+
+## Goals
+
+1. Route each physical keyboard, mouse and controller to its owning Seat.
+2. Support two different games with different input API requirements.
+3. Select interventions per game instead of enabling a monolithic global hook set.
+4. Fail closed: if required capabilities are absent, report `Unsupported` instead of silently leaking input.
+5. Keep every risky operation reversible and observable.
+6. Deny process injection for anti-cheat/protected games by default.
+7. Make recovery possible even when assigned keyboards/mice are hidden or clipped.
+8. Preserve a clean architecture so a ProtoInput adapter, a clean-room hook runtime, HidHide, or a future session backend can coexist.
+
+## Non-goals for the first Phase 3 implementation
+
+- Supporting every Windows game.
+- Bypassing anti-cheat, DRM, process protection or access controls.
+- Installing a custom kernel keyboard/mouse driver.
+- Claiming a normal `PostMessage` call is equivalent to Raw Input or polled state.
+- Hiding devices without an independent recovery input path.
+- Automatically injecting unknown processes.
+
+## Why a capability planner is required
+
+Games read input through different paths. Example profiles:
+
+| Game behavior | Required compatibility surfaces |
+| --- | --- |
+| Simple window-message test app | Selected `WM_KEY*` / `WM_MOUSE*` delivery and target-window routing |
+| Raw Input game | Raw Input registration interposition, synthetic `WM_INPUT`, `GetRawInputData` virtualization |
+| Polling-heavy legacy game | Raw Input or messages plus `GetAsyncKeyState`, `GetKeyState`, `GetKeyboardState`, cursor state |
+| Mouse-capture game | Cursor position, clip, capture and visibility virtualization |
+| Background-sensitive game | Focus-query virtualization and/or controlled focus-message synthesis |
+| XInput game | Per-process XInput slot remapping |
+| DirectInput game | Per-process enumeration/order/visibility |
+| Single-instance game | Named mutex/event/pipe namespace compatibility |
+| Protected/anti-cheat game | Usually no injection; supported only if a documented non-invasive backend covers all required behavior |
+
+A backend that covers one row is not necessarily suitable for another. Therefore the planner consumes a typed `GameCompatibilityProfile` and an inventory of available `BackendDescriptor` objects, then produces an explicit `IsolationPlan`.
+
+## Capability model
+
+The initial capability vocabulary should include:
+
+### Host and observation
+
+- `RawInputObservation`
+- `StablePhysicalDeviceIdentity`
+- `SeatOwnershipResolution`
+- `TargetWindowMessageRouting`
+- `InputDiagnostics`
+
+### Per-process keyboard/mouse state
+
+- `RawInputRegistrationInterposition`
+- `RawInputDataVirtualization`
+- `WindowMessageFiltering`
+- `KeyboardAsyncStateVirtualization`
+- `KeyboardStateArrayVirtualization`
+- `MouseButtonStateVirtualization`
+- `CursorPositionVirtualization`
+- `CursorClipVirtualization`
+- `CursorVisibilityVirtualization`
+- `CaptureVirtualization`
+
+### Focus and windows
+
+- `ForegroundQueryVirtualization`
+- `FocusMutationVirtualization`
+- `FocusMessageSynthesis`
+- `WindowPlacementControl`
+- `WindowStyleControl`
+
+### Controllers
+
+- `XInputSlotRemapping`
+- `DirectInputVisibility`
+- `DirectInputOrdering`
+- `RawHidControllerRouting`
+
+### Device and process isolation
+
+- `PhysicalDeviceCloaking`
+- `PhysicalInputSuppression`
+- `VirtualInputInjection`
+- `NamedObjectIsolation`
+- `ProcessLifecycleTracking`
+- `ChildProcessTracking`
+
+Capabilities describe observable guarantees, not implementation names. A ProtoInput adapter and a future HydraSeat hook runtime may provide the same capability through different code.
+
+## Backend descriptors
+
+Every backend publishes metadata before planning:
+
+```cpp
+struct BackendDescriptor {
+    std::string id;
+    std::wstring displayName;
+    IsolationCapability capabilities;
+    BackendAvailability availability;
+    BackendRisk risk;
+    bool requiresProcessInjection;
+    bool requiresAdministrator;
+    bool usesKernelDriver;
+    bool modifiesPersistentSystemState;
+    bool antiCheatSensitive;
+    bool reversible;
+    int priority;
+    std::wstring unavailableReason;
+};
+```
+
+`availability` is runtime data. A backend must not advertise capabilities merely because support code exists in the repository.
+
+### Planned built-in descriptors
+
+#### `hydra.raw-input-host`
+
+Provides stable observation, Seat ownership resolution and diagnostics. It is available when the HydraSeat host is running. It does not provide physical suppression or process-local state.
+
+#### `hydra.legacy-message-router`
+
+Uses selected target-window messages for a controlled test harness and simple applications. It is low risk but low compatibility and must not count as Raw Input virtualization.
+
+#### `external.protoinput`
+
+Represents a separately supplied, version-pinned ProtoInput loader/runtime. It may provide Raw Input, keyboard polling, cursor, focus, message and controller capabilities. It requires injection, architecture matching and explicit consent. It is unavailable until binaries and expected hashes are configured.
+
+#### `external.hidhide-session`
+
+Represents an installed HidHide control device and session-blacklist support. It provides physical-device cloaking only after an explicit guarded activation step. Initial implementation should probe availability without modifying state.
+
+#### `hydra.directinput-adapter`
+
+Future clean-room per-process DirectInput order/visibility adapter. Initially unavailable.
+
+#### `hydra.unsupported`
+
+Provides no enforcement and returns an actionable diagnostic. It is the safe fallback.
+
+## Game compatibility profile
+
+A game profile should state requirements and policy separately:
+
+```cpp
+struct GameCompatibilityProfile {
+    std::string id;
+    std::wstring name;
+    IsolationCapability requiredCapabilities;
+    IsolationCapability optionalCapabilities;
+
+    InjectionPolicy injectionPolicy;
+    DriverPolicy driverPolicy;
+    AntiCheatPolicy antiCheatPolicy;
+    RecoveryPolicy recoveryPolicy;
+
+    bool antiCheatDetected;
+    bool allowGlobalInputSuppression;
+    bool requireZeroBleed;
+    std::vector<std::string> preferredBackends;
+};
+```
+
+Recommended policy enums:
+
+```cpp
+enum class InjectionPolicy {
+    Forbidden,
+    UserApproved,
+    Required
+};
+
+enum class DriverPolicy {
+    Forbidden,
+    InstalledOnly,
+    UserApprovedInstallation
+};
+
+enum class AntiCheatPolicy {
+    DenyInvasiveBackends,
+    ObservationOnly,
+    ExplicitExperimentalOverride
+};
+
+enum class RecoveryPolicy {
+    Required,
+    Recommended,
+    NotApplicable
+};
+```
+
+The initial profile library should contain only transparent templates:
+
+- `observation-harness`
+- `legacy-message-test`
+- `raw-input-game`
+- `polled-keyboard-mouse-game`
+- `focus-cursor-game`
+- `xinput-controller-game`
+- `directinput-controller-game`
+- `protected-game-observation-only`
+
+These are technical templates, not claims that a specific commercial game is supported.
+
+## Planning algorithm
+
+1. Start with required capability bits.
+2. Remove backends that are unavailable.
+3. Apply policy filters:
+   - injection forbidden;
+   - kernel/driver forbidden;
+   - anti-cheat-sensitive backend denied;
+   - persistent mutation denied;
+   - recovery-required backend without a recovery guard denied.
+4. Rank remaining backends using:
+   - explicit profile preference;
+   - number of uncovered required capabilities supplied;
+   - risk and reversibility;
+   - backend priority.
+5. Select a deterministic set until no backend adds required coverage.
+6. Optionally select low-risk backends for optional capabilities.
+7. Report:
+   - selected backends and their exact assigned capabilities;
+   - missing required capabilities;
+   - rejected backends and reasons;
+   - required user consent/admin/reboot/recovery steps;
+   - whether the plan is `Supported`, `SupportedWithWarnings`, `ObservationOnly`, or `Unsupported`.
+
+A plan is `Supported` only if every required capability is covered and every selected backend passes policy checks.
+
+## Deployment transaction
+
+Planning and activation are separate. Activation should use a reversible transaction:
+
+```text
+Prepare
+├─ verify target process and architecture
+├─ verify Seat assignments and stable device IDs
+├─ verify backend hashes/versions
+├─ verify recovery guard
+└─ capture current state
+
+Stage
+├─ create process group / Job Object
+├─ start observation and diagnostics
+├─ prepare process compatibility adapter
+├─ prepare virtual state channels
+└─ prepare optional HidHide session entries (not active yet)
+
+Commit
+├─ attach/inject per-process backend
+├─ verify handshake and capabilities
+├─ enable selected device routes
+├─ activate physical cloaking last
+└─ run zero-bleed self-test
+
+Rollback on any failure
+├─ clear session cloaking
+├─ detach/stop adapters
+├─ remove cursor clips
+├─ release capture/focus loops
+├─ restore Explorer/taskbar if modified
+├─ terminate orphan helper processes
+└─ write a diagnostic bundle
+```
+
+Physical hiding or global suppression must be the final activation step, never the first.
+
+## Recovery guard
+
+A plan requiring `PhysicalDeviceCloaking` or `PhysicalInputSuppression` is invalid unless all of these are satisfied:
+
+1. A recovery input path not included in the hidden set, such as a spare keyboard/controller or a time-based automatic rollback.
+2. A watchdog process outside the target process group.
+3. Automatic rollback when the HydraSeat host, adapter or target process exits unexpectedly.
+4. An emergency hotkey recognized by the watchdog or a visible timeout confirmation.
+5. A persisted crash marker that triggers safe-mode startup on the next HydraSeat launch.
+6. A command-line reset utility that does not depend on the main GUI.
+
+For HidHide, session-scoped entries are preferred because the driver removes entries owned by a dead process. HydraSeat must still explicitly clear them on orderly shutdown and verify the expected driver behavior before production use.
+
+## Diagnostics model
+
+Every plan and runtime session should emit structured diagnostics:
+
+```cpp
+enum class IsolationDiagnosticCode {
+    BackendUnavailable,
+    CapabilityMissing,
+    InjectionForbidden,
+    AntiCheatConflict,
+    ArchitectureMismatch,
+    DriverUnavailable,
+    RecoveryGuardMissing,
+    HandshakeFailed,
+    RouteRejected,
+    PhysicalCloakFailed,
+    CrossSeatBleedDetected,
+    RollbackIncomplete
+};
+```
+
+A diagnostic record should include timestamp, Seat, process ID, profile, backend, capability, severity, Win32 error where relevant, and human-readable remediation.
+
+No log should contain credentials, tokens, private user documents or unrelated process memory.
+
+## Runtime channel design
+
+A per-process adapter needs a narrow versioned protocol instead of arbitrary shared memory:
+
+- host creates a uniquely named, access-controlled channel;
+- adapter authenticates using a random session identifier inherited at launch, not a global predictable name;
+- protocol version and architecture are exchanged before activation;
+- host sends Seat device identities, target window and capability configuration;
+- adapter reports installed hooks and failures individually;
+- input events contain sequence number, device identity, event class and state transition;
+- heartbeat expiry triggers rollback;
+- the adapter receives only data for its Seat.
+
+The protocol should support 32-bit and 64-bit adapters without assuming pointer sizes in serialized messages.
+
+## Raw Input strategy
+
+For a game that registers Raw Input, a compatible process adapter generally needs to:
+
+1. intercept `RegisterRawInputDevices` and `GetRegisteredRawInputDevices`;
+2. preserve the game's requested usage pages/usages and flags;
+3. register the host/adapter sink without allowing the game to overwrite it;
+4. deliver a synthetic `WM_INPUT` token only for the owning Seat's events;
+5. intercept `GetRawInputData` and possibly `GetRawInputBuffer` so the token resolves to Seat-local data;
+6. preserve correct structure sizes, keyboard make/break flags, mouse relative/absolute semantics, wheel and button flags;
+7. support child windows or multiple registered windows when the game requires them;
+8. avoid pointer-shaped synthetic handles that collide with real handles.
+
+The initial implementation should target a HydraSeat-owned test process before any commercial game.
+
+## Polled keyboard/mouse state
+
+The host should maintain per-Seat state machines from Raw Input events:
+
+- key-down bitmap;
+- transition/edge bitmap;
+- mouse button bitmap;
+- relative delta accumulator;
+- wheel accumulator;
+- cursor position and clip rectangle;
+- focus/capture view.
+
+The adapter then answers `GetAsyncKeyState`, `GetKeyState`, `GetKeyboardState` and cursor APIs from the Seat-local state. Edge semantics must be tested because games may consume the low-order `GetAsyncKeyState` bit.
+
+## Cursor and focus
+
+The real Windows cursor remains global. A process adapter should expose a virtual cursor in the target's Seat-local coordinates and optionally draw a software cursor. It must not call global `SetCursorPos` or `ClipCursor` on behalf of multiple Seats.
+
+Focus support has two levels:
+
+1. **Message synthesis** for games that only react to activation messages.
+2. **API query virtualization** for games that poll foreground/focus/capture APIs.
+
+The planner records these as separate capabilities because one does not imply the other.
+
+## Controllers
+
+### XInput
+
+A process adapter maps the game's requested logical slot to a selected physical slot or a future virtual controller. It must also map capabilities and vibration consistently.
+
+### DirectInput
+
+A separate adapter controls enumeration and visibility. Ordering by friendly name is insufficient; use stable instance identity where possible. DirectInput wrapper deployment is per process/profile and must not modify system DLLs.
+
+### Raw HID and SDL
+
+These may bypass XInput/DirectInput adapters. Profiles must report them explicitly as unsupported until a tested backend exists.
+
+## Named objects and multiple instances
+
+Some games use named mutexes, events, shared memory or pipes to prevent multiple instances. Namespace workarounds are separate from input isolation and must be profile-controlled. HydraSeat must not automatically rename arbitrary handles because that can alter security or application behavior.
+
+## Anti-cheat and protected-process policy
+
+Default policy:
+
+- Do not inject, hook, patch, hide modules from, or alter protected/anti-cheat processes.
+- Do not provide bypass instructions.
+- Run observation-only diagnostics if permitted.
+- Mark the profile unsupported when zero-bleed requirements cannot be met non-invasively.
+- Experimental override, if ever added, must remain a developer-only build and never imply anti-cheat compatibility.
+
+## Feasibility program and exit gates
+
+### Gate A — observation harness
+
+Target: two HydraSeat-owned test windows.
+
+Pass criteria:
+
+- stable device identity survives repeated enumeration;
+- every event records exactly one physical source;
+- no crash on hot-plug/removal;
+- diagnostic trace reconstructs key/button state.
+
+### Gate B — explicit target routing
+
+Target: two HydraSeat-owned message test windows.
+
+Pass criteria:
+
+- keyboard/mouse A reaches only test window A through the HydraSeat route;
+- keyboard/mouse B reaches only test window B through the HydraSeat route;
+- ordinary Windows input may still leak, and the report must state that this is not isolation.
+
+### Gate C — per-process state virtualization
+
+Target: two open-source HydraSeat test processes that use Raw Input and polling APIs.
+
+Pass criteria:
+
+- each process sees only its Seat's synthetic Raw Input;
+- `GetAsyncKeyState`, `GetKeyboardState`, cursor and focus queries match its Seat state;
+- both processes behave as active simultaneously;
+- no global cursor clipping;
+- adapter crash triggers rollback.
+
+### Gate D — optional physical-device cloaking
+
+Target: controlled test devices and test processes.
+
+Pass criteria:
+
+- the HydraSeat host retains required device access;
+- non-owning test process cannot enumerate/read cloaked device;
+- session entries are cleared on normal exit and host crash;
+- emergency recovery works without the cloaked devices;
+- composite HID behavior is documented.
+
+Keyboard/mouse cloaking is not enabled for users until this gate passes on supported Windows versions.
+
+### Gate E — two-game zero-bleed proof
+
+Target: two different non-anti-cheat games with explicit profiles.
+
+Pass criteria over a defined test duration:
+
+- 0 cross-seat key/button transitions;
+- 0 cross-seat mouse movement/wheel events;
+- each game retains its Seat-local cursor/focus behavior;
+- independent controller and audio routing where required;
+- target restart and device reconnect recover correctly;
+- performance overhead and latency stay within declared limits;
+- rollback restores normal single-user Windows behavior.
+
+Only after Gate E may Phase 3 be marked complete.
+
+## Test matrix
+
+| Test class | Pure unit | Windows integration | Physical hardware | Target process injection |
+| --- | ---: | ---: | ---: | ---: |
+| Capability bit operations | Yes | No | No | No |
+| Planner deterministic selection | Yes | No | No | No |
+| Policy rejection/diagnostics | Yes | No | No | No |
+| Profile parsing/validation | Yes | No | No | No |
+| Backend availability probe | Partial | Yes | No | No |
+| Raw Input event state machine | Yes with fixtures | Yes | Optional | No |
+| Adapter protocol/handshake | Yes | Yes | No | Test process only |
+| Raw Input virtualization | No | Yes | Yes | Test process |
+| Key/cursor/focus virtualization | No | Yes | Yes | Test process |
+| HidHide session lifecycle | No | Yes | Yes | No |
+| Two-game zero-bleed | No | Yes | Yes | Profile-dependent |
+
+## Implemented non-invasive baseline
+
+The first source-code slice is now implemented:
+
+1. The capability vocabulary is represented by a typed 64-bit capability set.
+2. `GameCompatibilityProfile`, `BackendDescriptor`, `BackendEnvironment`, `IsolationPlanner`, `IsolationPlan` and structured diagnostics are implemented.
+3. Built-in descriptors cover the current host, legacy message router, optional ProtoInput adapter metadata, optional HidHide session-cloak metadata and the future DirectInput adapter.
+4. Deterministic planner tests prove that unsupported capabilities remain visible and safety policies fail closed.
+5. `hydra_plan` prints selected, rejected, covered and missing capabilities without activating any backend.
+6. HidHide advertises **device cloaking only**, not verified physical input suppression. Therefore zero-bleed profiles remain unsupported until Gate D proves a real suppression path.
+
+The next implementation slice is read-only runtime probing and Gate A/B test harnesses. It must not perform device hiding, process injection or system mutation by default.
+
+## Related documents
+
+- [RELATED_SYSTEMS_RESEARCH.md](RELATED_SYSTEMS_RESEARCH.md)
+- [CLEAN_ROOM_POLICY.md](CLEAN_ROOM_POLICY.md)
+- [PHASE0_RESEARCH.md](PHASE0_RESEARCH.md)
+- [ROADMAP.md](ROADMAP.md)

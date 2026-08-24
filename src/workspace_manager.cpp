@@ -300,7 +300,8 @@ std::string quote(const std::wstring& w) {
     std::ostringstream out;
     out << '"';
     static constexpr char hex[] = "0123456789abcdef";
-    for (unsigned char c : text) {
+    for (const char raw : text) {
+        const auto c = static_cast<unsigned char>(raw);
         switch (c) {
         case '"': out << "\\\""; break;
         case '\\': out << "\\\\"; break;

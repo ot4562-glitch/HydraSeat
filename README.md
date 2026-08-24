@@ -1,8 +1,8 @@
 # HydraSeat 🎮
 
-An open-source Windows local gaming multiseat framework.
+An experimental Windows local gaming multiseat framework. The repository license is not yet formally declared; see the clean-room policy before reusing code.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: not yet declared](https://img.shields.io/badge/license-not%20yet%20declared-lightgrey.svg)](docs/CLEAN_ROOM_POLICY.md)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus)](https://isocpp.org/)
 [![Qt 6](https://img.shields.io/badge/Qt-6.8-41CD52?logo=qt)](https://www.qt.io/)
 
@@ -258,13 +258,43 @@ Current/planned technology areas include:
 
 The roadmap is intentionally incremental.
 
-- **Phase 0 — Research & Foundation:** complete in the current development branch.
-- **Phase 1 — Hardware Detection:** implementation completed and validated with Windows/MSVC CI in the current development branch.
-- **Phase 2 — Seat Composition / Assignment UI:** next major area. The existing `Workspace` model should evolve toward a multi-display **Seat** abstraction.
-- **Phase 3 — Raw Input Router / Isolation:** the core feasibility phase for true cross-seat input isolation.
-- **Later phases:** display routing, virtual displays, 2-player MVP verification, game profiles, and extension/plugin support.
+- **Phase 0 — Research & Foundation:** complete, including related-system and clean-room research.
+- **Phase 1 — Hardware Detection:** complete and validated with Windows/MSVC CI.
+- **Phase 2 — Seat Composition / Assignment UI:** complete in the current Win32 prototype, including multi-display Seats, primary-display selection, exclusive device ownership, and validated JSON profiles.
+- **Phase 3 — Input Compatibility / Isolation:** current. The capability planner, backend descriptors, profile templates, diagnostics CLI, and safety policies are implemented. Actual process injection, device hiding, and verified zero-bleed enforcement are **not** implemented yet.
+- **Later phases:** display routing, virtual displays, two-game MVP verification, game profiles, Seat shell, and extension adapters.
 
 The most important technical milestone is not simply launching two windows. It is proving that two people can concurrently use different games/apps on different Seat display groups **without either user's keyboard/mouse input or foreground behavior interfering with the other Seat.**
+
+---
+
+## 🧪 Phase 3 Planning Tool
+
+`hydra_plan` analyzes a compatibility-profile template against an assumed backend environment. It is **diagnostic only**: it does not inject a process, install a driver, hide a device, or activate input suppression.
+
+```text
+hydra_plan --list
+hydra_plan observation-harness
+hydra_plan raw-input-game
+hydra_plan polled-keyboard-mouse-game --protoinput --hidhide --allow-injection --admin --recovery-ready
+```
+
+The output identifies:
+
+- selected backend descriptors and the exact capabilities assigned to each;
+- unavailable or policy-rejected backends;
+- covered and missing requirements;
+- injection, driver, administrator, recovery, and anti-cheat constraints;
+- an honest result: `Supported`, `SupportedWithWarnings`, `ObservationOnly`, or `Unsupported`.
+
+Even when ProtoInput and HidHide are marked available, the built-in planner still reports zero-bleed profiles as unsupported until a backend has **actually demonstrated verified physical input suppression**. HidHide is modeled only as physical-device cloaking at this stage.
+
+Research and implementation specifications:
+
+- [Related systems and source/license matrix](docs/RELATED_SYSTEMS_RESEARCH.md)
+- [Phase 3 input-isolation architecture](docs/PHASE3_INPUT_ISOLATION_DESIGN.md)
+- [Clean-room and third-party source policy](docs/CLEAN_ROOM_POLICY.md)
+
 
 ---
 
@@ -284,4 +314,8 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed Phase 0 to Phase 7 deliverab
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for internal component designs.
 
-See [docs/PHASE0_RESEARCH.md](docs/PHASE0_RESEARCH.md) for the technology-evaluation notes behind the early architecture decisions.
+See [docs/PHASE0_RESEARCH.md](docs/PHASE0_RESEARCH.md) for the early technology evaluation.
+
+See [docs/RELATED_SYSTEMS_RESEARCH.md](docs/RELATED_SYSTEMS_RESEARCH.md) and [docs/PHASE3_INPUT_ISOLATION_DESIGN.md](docs/PHASE3_INPUT_ISOLATION_DESIGN.md) for the current compatibility research and Phase 3 design.
+
+See [docs/CLEAN_ROOM_POLICY.md](docs/CLEAN_ROOM_POLICY.md) before using external source or binaries.

@@ -113,6 +113,18 @@ if(MSVC)
     target_compile_options(hydra_detect PRIVATE /W4 /permissive-)
 endif()
 
+# Phase 3 capability planner diagnostics (analysis only; activates no backend).
+add_executable(hydra_plan
+    src/isolation_plan_cli.cpp
+    src/input_isolation.cpp
+    src/workspace_manager.cpp
+    include/hydra/input_isolation.hpp
+    include/hydra/workspace_manager.hpp
+)
+if(MSVC)
+    target_compile_options(hydra_plan PRIVATE /W4 /permissive-)
+endif()
+
 # Test Suite Executable Target
 enable_testing()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
@@ -134,3 +146,17 @@ if(MSVC)
     target_compile_options(hardware_identity_tests PRIVATE /W4 /permissive-)
 endif()
 add_test(NAME HardwareIdentityTests COMMAND hardware_identity_tests)
+
+# Pure Phase 3 capability-planner tests. No process injection or driver access.
+add_executable(isolation_planner_tests
+    tests/test_isolation_planner.cpp
+    src/input_isolation.cpp
+    src/workspace_manager.cpp
+    include/hydra/input_isolation.hpp
+    include/hydra/workspace_manager.hpp
+)
+if(MSVC)
+    target_compile_options(isolation_planner_tests PRIVATE /W4 /permissive-)
+endif()
+add_test(NAME IsolationPlannerTests COMMAND isolation_planner_tests)
+add_test(NAME IsolationPlanObservation COMMAND hydra_plan observation-harness)
