@@ -15,11 +15,11 @@ P3-API-01 adds a read-only controlled Win32 API probe and a fixed-width
 comparison snapshot. Its Windows/MSVC baseline is validated by CI run
 `32722277035`, where all 15 tests, including both API probe self-tests, passed.
 
-P3-ARCH-01 is code-complete but not yet Windows-validated. It adds explicit
+P3-ARCH-01 is Windows-validated by CI run `32726477354`. It adds explicit
 Win32 process-architecture detection, PE-machine preflight, a bounded schema-v1
 artifact manifest/selector, deterministic `gate-c/x86` and `gate-c/x64`
-layouts, and declared x86/x64 CI jobs. The x86 availability claim remains
-disabled until the new Windows matrix and real x64-host-to-x86-target job pass.
+layouts, and x86/x64 CI coverage. Both native matrix legs and the real
+x64-host-to-x86/x64 controlled target/probe job passed.
 
 This is not yet a general game hook or a completed Gate C implementation. The controlled targets call HydraSeat's adapter API directly. Commercial games still call the ordinary Windows APIs unless a later, explicitly approved compatibility adapter interposes those calls.
 
@@ -461,12 +461,12 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] Explicit process/PE architecture detection and bounded manifest selector source
 - [x] Deterministic architecture-neutral names under `gate-c/x86` and `gate-c/x64`
 - [x] Declared x86/x64 CTest and x64-host-to-x86-target CI jobs
+- [x] Windows/MSVC execution of the x86/x64 architecture matrix and x64-host-to-x86-target/probe self-tests (`32726477354`)
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Controlled Raw Input consumer that calls `RegisterRawInputDevices` / `GetRawInputData`
-- [ ] Windows/MSVC execution of the new x86/x64 architecture matrix and x64-host-to-x86-target self-test
 - [ ] Controlled probe using actual Win32 polling/cursor/focus APIs through opt-in compatibility shims (P3-API-02/P3-API-03)
 - [ ] Clean-room API interposition for HydraSeat-owned test binaries
 - [ ] Adapter crash/watchdog recovery acceptance
@@ -475,10 +475,9 @@ A later implementation may coalesce relative mouse movement while preserving key
 
 ## Next implementation step
 
-First run and pass the P3-ARCH-01 Windows/MSVC x86/x64 matrix and the real
-x64-host-to-x86-target self-test documented above. Only after that evidence is
-recorded may P3-API-02 begin controlled polling API interposition, still limited
-to HydraSeat-owned probe executables:
+P3-ARCH-01 passed the Windows/MSVC x86/x64 and real x64-host-to-x86-target
+matrix in run `32726477354`. P3-API-02 may now begin controlled polling API
+interposition, still limited to HydraSeat-owned probe executables:
 
 1. Add an opt-in compatibility shim loaded at process startup, not injected into an arbitrary running process.
 2. Interpose `GetAsyncKeyState`, `GetKeyState`, and `GetKeyboardState` only for the controlled probe.
