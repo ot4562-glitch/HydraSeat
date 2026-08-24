@@ -3,9 +3,9 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-API-02 — Startup-loaded polling shim for controlled probes**
-- Current validated implementation baseline: `7c4c114a179cdfb3f5cb9495cf26b0a988f71aff` (merged P3-ARCH-01 baseline)
-- Current validated Windows CI evidence: run `32727711605`; x64/x86 full CTest, x64 host to x64/x86 targets, stale protocol, API-probe failure/cleanup, and roadmap/prompt validation passed
+- Current default packet: **P3-API-03 — Cursor, clip, focus, and capture shim**
+- Current validated implementation baseline: `f3bb863cc9f606aa6e83804a344ec906afcb9e21` (P3-API-02 implementation)
+- Current validated Windows CI evidence: run `32780563364`; x64/x86 full CTest and dedicated x64-host-to-x64/x86 polling-shim cross-architecture jobs passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -36,8 +36,8 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | Packet | State | Depends on | Immediate evidence required |
 | --- | --- | --- | --- |
 | P3-API-01 | VALIDATED | P3-STATE-01 | Controlled Win32 API probe baseline — Windows/MSVC run `32722277035`; 15/15 tests including both API probe self-tests passed |
-| P3-API-02 Startup-loaded polling shim for controlled probe | CODE_COMPLETE | P3-API-01, P3-ARCH-01 | Portable transaction/ABI tests pass; Windows x64/x86 ordinary-API probe execution is pending CI |
-| P3-API-03 Cursor/focus/capture shim for controlled probe | BLOCKED | P3-API-02 | Probe sees Seat-local cursor/clip/focus/capture while global state remains unchanged |
+| P3-API-02 Startup-loaded polling shim for controlled probe | VALIDATED | P3-API-01, P3-ARCH-01 | Windows run `32780563364`: native x64/x86 polling-shim CTest plus x64-host-to-x64/x86 ordinary-API two-probe isolation passed |
+| P3-API-03 Cursor/focus/capture shim for controlled probe | READY | P3-API-02 | Probe sees Seat-local cursor/clip/focus/capture while global state remains unchanged and polling-shim regressions stay green |
 | P3-RAW-01 Raw Input registration/data probe | BLOCKED | P3-API-01 | Controlled probe records real registration/data behavior before interposition |
 | P3-RAW-02 Raw Input virtualization shim | BLOCKED | P3-RAW-01, P3-API-02 | Two probes receive only their Seat synthetic Raw Input stream |
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
@@ -68,7 +68,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | Gate A physical device observation | PENDING | Two keyboards, two pointing devices, composite HID, repeated hot-plug trace |
 | Gate B physical Seat routing | PENDING | Saved profile, per-Seat route counters/target notifications, shared/unassigned failure |
 | Gate C physical controlled-process routing | PENDING | Two physical input sets driving two controlled target adapter states |
-| Gate C polling API interposition | CODE COMPLETE / CI PENDING | HydraSeat-owned x64/x86 probes calling the three ordinary polling APIs through the opt-in shim |
+| Gate C polling API interposition | VALIDATED (CONTROLLED CI) | HydraSeat-owned x64/x86 probes call the three ordinary polling APIs through the opt-in shim; physical/game acceptance is still separate |
 | Gate C watchdog/crash recovery | NOT IMPLEMENTED | Forced host/target/adapter failure and clean restoration |
 | Gate D device cloaking | NOT IMPLEMENTED | Guarded session-cloak experiment with spare input and automatic rollback |
 | Gate E two-game zero bleed | NOT IMPLEMENTED | Two distinct profile entries and objective cross-Seat metrics |
@@ -122,29 +122,29 @@ Next packet: P3-API-02 startup-loaded polling API shim, limited to HydraSeat-own
 
 ### 2026-08-25 — P3-API-02
 
-State: CODE_COMPLETE
-Branch/commit: `feat/p3-api-02-polling-shim`; commit recorded after final checks
-Windows CI: not run for this packet in the local environment; x64/x86 MSVC and cross-architecture polling-probe evidence remains required before `VALIDATED`
+State: VALIDATED
+Branch/commit: `feat/p3-api-02-polling-shim`; validated implementation commit `f3bb863cc9f606aa6e83804a344ec906afcb9e21`
+Windows CI: run `32780563364` passed native x64 and Win32/x86 full CTest jobs plus the dedicated x64-host-to-x64/x86 polling-shim cross-architecture job
 Automated tests:
 - strict GCC 15 build passed with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion`
 - strict-GCC portable CTest passed 15/15 overall and 9/9 Gate C tests, including polling transaction/rollback and pure-C shim ABI tests
 - install/uninstall/reinstall, missing/duplicate/already-patched slots, partial-install rollback, protection failure, retryable uninstall failure, exact pointer restoration, adapter-unavailable fail-closed behavior, one-shot async edges, toggle-bit policy, and 256-byte keyboard state are covered
-- CMake/CI declares native x64/x86 shim/probe tests and x64-host-to-x64/x86 polling process tests; the selector preflights probe, adapter, and shim PE machines
+- Windows CI executed the native x64/x86 shim/probe tests and x64-host-to-x64/x86 polling process tests; the selector preflighted probe, adapter, and shim PE machines and both architecture legs passed
 Manual evidence: none required by the packet; Gate A/B/C physical acceptance remains pending and unchanged
-Known limitations: Windows/MSVC execution is pending; v1 does not virtualize toggle low bits, cursor/focus/capture, Raw Input, physical suppression, third-party/commercial targets, or protected processes
+Known limitations: v1 does not virtualize toggle low bits, cursor/focus/capture, Raw Input, physical suppression, third-party/commercial targets, or protected processes; physical Gate A/B/C acceptance remains separate
 Rollback result: the component suite proved all-or-rollback install, byte-exact reverse restoration, idempotent uninstall/reinstall, and retry after an uninstall write failure; controlled probe teardown refuses DLL unload unless restoration succeeds
-Next packet: P3-API-03 remains BLOCKED until P3-API-02 receives Windows x64/x86 integration evidence and becomes `VALIDATED`
+Next packet: P3-API-03 is READY for a controlled cursor/clip/focus/capture shim while P3-API-02 regressions remain required
 
 ## Next Codex task
 
 Use:
 
 ```text
-Implement P3-API-02 exactly as specified in
+Implement P3-API-03 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Validate P3-API-02 on Windows/MSVC x64 and Win32/x86, including the dedicated
-x64-host-to-x64/x86 polling-probe matrix. Do not start P3-API-03 until this
-packet is `VALIDATED`. Cursor/focus, Raw Input virtualization, device
-suppression, third-party injection, and game support remain out of scope.
+Keep the validated P3-API-02 polling shim intact while adding only controlled
+cursor/clip/focus/capture virtualization for HydraSeat-owned x64/x86 probes.
+Do not implement Raw Input virtualization, device suppression, third-party
+injection, commercial game support, or protected-process work in this packet.
 ```

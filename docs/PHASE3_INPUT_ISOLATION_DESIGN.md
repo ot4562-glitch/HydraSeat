@@ -579,12 +579,12 @@ x64/x86 and x64-host-to-x64/x86 controlled target/probe evidence.
 5. The probe owns the sole adapter context; the shim borrows it and maintains
    no duplicate input state. Adapter loss is fail-closed for the supported
    polling domain.
-6. Portable strict-GCC transaction and ABI tests pass. Native Windows x64/x86
-   and x64-host-to-x64/x86 polling-probe execution is still pending, so
-   P3-API-02 remains `CODE_COMPLETE`, not `VALIDATED`.
+6. Portable strict-GCC transaction and ABI tests pass. Windows CI run
+   `32780563364` also passes native x64/x86 and x64-host-to-x64/x86
+   polling-probe execution, so P3-API-02 is `VALIDATED`.
 
-Gate C remains incomplete until the polling matrix passes and later controlled
-probes cover Raw Input plus cursor/focus surfaces. Commercial games, physical
+Gate C remains incomplete until later controlled probes cover Raw Input plus
+cursor/focus surfaces while preserving the validated polling-shim behavior. Commercial games, physical
 device cloaking and anti-cheat targets remain out of scope. See
 [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
 

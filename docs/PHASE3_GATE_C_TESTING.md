@@ -21,11 +21,11 @@ artifact manifest/selector, deterministic `gate-c/x86` and `gate-c/x64`
 layouts, and x86/x64 CI coverage. Both native matrix legs and the real
 x64-host-to-x86/x64 controlled target/probe job passed.
 
-P3-API-02 is now `CODE_COMPLETE`. It adds a separate startup-loaded polling
-shim for HydraSeat-owned probes, transactional process-internal IAT patching,
-fixed-width C diagnostics, exact unpatch, and x86/x64 artifact selection. Its
-portable transaction/ABI suite passes; Windows/MSVC x64/x86 and real
-cross-architecture polling-probe execution are still pending.
+P3-API-02 is now `VALIDATED` by Windows CI run `32780563364`. It adds a
+separate startup-loaded polling shim for HydraSeat-owned probes, transactional
+process-internal IAT patching, fixed-width C diagnostics, exact unpatch, and
+x86/x64 artifact selection. Native x64/x86 CTest and the real x64-host-to-x64/x86
+ordinary-polling two-probe matrix all passed.
 
 This is not a general game hook or a completed Gate C implementation. The
 controlled targets still call HydraSeat's adapter API directly; only the
@@ -538,13 +538,12 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] Deterministic architecture-neutral names under `gate-c/x86` and `gate-c/x64`
 - [x] Declared x86/x64 CTest and x64-host-to-x86-target CI jobs
 - [x] Windows/MSVC execution of the x86/x64 architecture matrix and x64-host-to-x86-target/probe self-tests (`32727711605`)
-- [x] P3-API-02 polling shim source, fixed C ABI, transactional IAT engine, architecture manifest, and portable tests
+- [x] P3-API-02 polling shim source, fixed C ABI, transactional IAT engine, architecture manifest, native x64/x86 tests, and cross-architecture ordinary-polling proof (`32780563364`)
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Controlled Raw Input consumer that calls `RegisterRawInputDevices` / `GetRawInputData`
-- [ ] Windows/MSVC x64/x86 and x64-host-to-x64/x86 execution of the P3-API-02 ordinary polling API tests
 - [ ] Cursor/focus/capture API shim for the controlled probe (P3-API-03)
 - [ ] Adapter crash/watchdog recovery acceptance
 - [ ] Commercial non-anti-cheat game profile experiment
@@ -552,9 +551,9 @@ A later implementation may coalesce relative mouse movement while preserving key
 
 ## Next implementation step
 
-P3-API-02 is code-complete but must pass the declared Windows/MSVC native x64,
-native x86, and x64-host-to-x64/x86 polling-probe matrix before it becomes
-`VALIDATED`. P3-API-03 remains blocked until that evidence exists. Do not begin
-cursor/focus/capture interposition merely from portable component results.
+P3-API-02 passed the declared Windows/MSVC native x64, native x86, and
+x64-host-to-x64/x86 polling-probe matrix in run `32780563364` and is now
+`VALIDATED`. P3-API-03 may begin, but it must preserve the polling-shim
+regressions and remain limited to HydraSeat-owned controlled probes.
 
 Gate C is not complete until controlled probes observe Seat-local values through the API surface a real game would call.

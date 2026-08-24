@@ -137,7 +137,7 @@ Windows CI can launch two probes and show that each has independent adapter stat
 
 ## P3-API-02 — Startup-loaded polling API shim for controlled probes
 
-**State:** CODE_COMPLETE
+**State:** VALIDATED
 
 **Goal**
 
@@ -204,7 +204,7 @@ Two controlled probes call the ordinary polling APIs and receive their own Seat 
 
 ## P3-API-03 — Cursor, clip, focus, and capture shim
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 
