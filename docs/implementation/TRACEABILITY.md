@@ -19,7 +19,12 @@ This document maps the user's intended product behavior to the design decisions,
 | Apps stay on assigned display group | D-002, D-014, D-015, D-016 | P4-DIS-02/03, P4-WIN-02 | Fullscreen/borderless/DPI/hot-plug placement and restore evidence |
 | Environment has launcher/taskbar/wallpaper feel | D-001, D-004, D-023 | P7-SHELL/LAUNCH/TASK/DESK packets | Two independent Seat shells across multi-monitor layouts |
 | Core works without VM/RDP/streaming | D-003, D-030 | P3–P5 core path | Supported direct local-display compatibility entries |
-| UI can close while runtime continues | D-004, D-019 | P4-RUN-01, P4-IPC-01, P7-REC-01 | UI kill/restart while host/session state remains correct |
+| UI can close while runtime continues | D-004, D-019, D-032 | P4-RUN-01, P4-IPC-01, P4-CTRL-01, P7-REC-01 | UI kill/restart while host/session state remains correct |
+| Whole-machine controls stay on the Management Seat | D-031 | P4-CTRL-01, P7-SHELL-01 | Console opens on Seat 1 primary by default, falls back visibly, and other Seats cannot stop/reconfigure by default |
+| User can return the split PC to ordinary Windows with one clear operation | D-033 | P4-CTRL-02, P8-RESET-01 | Stop/Return transaction verifies rollback; all monitors/input return to normal without reboot |
+| User can reconfigure monitors/input with a few guided steps | D-034 | P4-CTRL-02, Phase 6 profile UI | Active session safely stops, editor opens on Management Seat, validation/save/start uses a new plan |
+| User can choose manual, hidden background, or automatic validated startup | D-032 | P8-BOOT-01 | Reboot/logon matrix proves Manual, BackgroundIdle, and AutoActivateValidatedSession behavior |
+| UI/UX and end-user README are available in English, Korean, and Simplified Chinese | D-035 | P7-I18N-01, P7-A11Y-01, P10-UX-01 | `en-US`/`ko-KR`/`zh-CN` catalog parity, three-language critical-flow acceptance, and README language/version/status parity |
 | Startup is silent and ordinary use has no repeated UAC | D-004, D-020 | P8-PRIV-01, P8-BOOT-01 | Standard-user logon/reboot acceptance |
 | Dangerous operations recover automatically | D-009, D-020 | P8-WATCH-01, P8-RESET-01, P8-JOURNAL-01 | Host/helper kill, timeout, reset, safe mode, no orphan state |
 | Device hiding occurs only after replacement path works | D-008, D-009 | P3-REC-01, P3-D-01/02 | Guarded physical cloak test with spare input/expiry/watchdog |
@@ -49,6 +54,8 @@ Seat 1
 - headset A
 - target/game A
 - Seat 1 shell/cursor/process group
+- Management Seat = Seat 1
+- HydraSeat control console opens on LG primary when requested
 
 Seat 2
 - BenQ display (primary)
@@ -69,9 +76,11 @@ Required observable behavior:
 5. Each target sees the focus/cursor behavior declared by its profile.
 6. Audio routes to the declared endpoint or the session refuses to start.
 7. Disconnect/reconnect and one target restart behave according to profile.
-8. UI may close/reopen without losing runtime authority.
-9. Stop/reset restores ordinary Windows behavior.
-10. A report records versions, topology, backends, latency, drops, bleed, and rollback.
+8. The HydraSeat control console opens on the Management Seat primary display, may close/reopen without losing runtime authority, and other Seats do not receive whole-machine Stop/Reconfigure controls by default.
+9. `Stop / Return to Windows` restores ordinary one-PC Windows input/display/audio behavior without reboot.
+10. `Reconfigure` safely returns to ordinary Windows, edits assignments on the Management Seat, validates/saves a new plan, and may start it again.
+11. Manual, BackgroundIdle, and AutoActivateValidatedSession startup modes behave exactly as selected and unsafe auto-activation falls back to idle.
+12. A report records versions, topology, backends, latency, drops, bleed, and rollback.
 
 This scenario is reached by P3-E-03, P4 physical display/window acceptance, P5-MVP-02, P5-HOT-01, P7 shell packets, and Phase 8 recovery/productization. No earlier synthetic test satisfies the complete requirement.
 

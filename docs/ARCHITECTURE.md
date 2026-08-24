@@ -31,7 +31,9 @@ The current development labs are intentionally separate executables. The planned
 
 ```text
 HydraSeat.exe
-  Configuration UI, tray UI, profile editor, start/stop/reset commands
+  On-demand Management Seat control console
+  Configuration UI, profile editor, Start, Stop/Return to Windows, Reconfigure, diagnostics
+  Default placement: Management Seat (Seat 1) primary display
         │ versioned local control/state protocol
         ▼
 hydra_host.exe
@@ -51,7 +53,11 @@ hydra_reset.exe
   Independent emergency reset and verification path
 ```
 
-The UI and shell are disposable clients. They are not runtime authority. Optional adapters, drivers, providers, and extensions are capability-planned, version/hash/trust checked, and can be absent without breaking physical-display core operation.
+The UI and shell are disposable clients. They are not runtime authority. Closing `HydraSeat.exe` does not stop an active session; reopening it resolves the configured `ManagementSeatId` and places the console on that Seat's primary display, with a visible fallback to the current Windows primary if necessary. Other Seat shells are read-mostly for whole-machine controls by default.
+
+The runtime supports three explicit modes: `Manual`, `BackgroundIdle`, and `AutoActivateValidatedSession`. Manual starts on demand; BackgroundIdle keeps host/watchdog hidden at logon until the user presses Start; AutoActivateValidatedSession may restore only one explicitly selected, previously validated plan after crash-journal, safe-mode, topology, capability, privilege, watchdog, and rollback preflight succeeds. Failed automatic preflight leaves the host idle rather than partially splitting the PC.
+
+`Stop / Return to Windows` is a verified host transaction that rolls back session-specific input/device/window/display/audio/controller/shell state and returns all monitors and ordinary keyboard/mouse behavior to one normal Windows desktop. `Reconfigure` performs that same verified return first, then opens the configuration UI on the Management Seat display, lets the user identify/test/reassign hardware, validates and saves a new plan, and optionally starts it. Optional adapters, drivers, providers, and extensions are capability-planned, version/hash/trust checked, and can be absent without breaking physical-display core operation.
 
 The packet-level construction order, ownership rules, rollback gates, and executable contracts are defined in [the master implementation roadmap](implementation/README.md) and [non-negotiable decisions](implementation/DECISIONS.md).
 

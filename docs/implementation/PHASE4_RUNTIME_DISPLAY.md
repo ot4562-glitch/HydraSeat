@@ -12,26 +12,30 @@ Phase 4 is complete when:
 
 1. the UI can close while `hydra_host.exe` keeps validated Seat runtime state;
 2. UI/CLI/watchdog obtain the same authoritative state snapshot;
-3. every launched process/child/window is attributed to one Seat or explicitly unowned;
-4. Seat 1 may own multiple displays and Seat 2 a different display set;
-5. window placement and restore survive DPI/topology changes;
-6. display removal/return and target restart have deterministic recovery;
-7. no unrelated window is moved;
-8. physical-display support works without any virtual-display dependency;
-9. optional virtual-display backends are capability-gated and reversible;
-10. crash/restart tests leave ordinary Windows display topology usable.
+3. one configured Management Seat owns the visible control console, which opens on that Seat's primary display with a safe visible fallback;
+4. the control console can Start, Stop/Return to Windows, and enter Reconfigure without owning runtime authority;
+5. every launched process/child/window is attributed to one Seat or explicitly unowned;
+6. Seat 1 may own multiple displays and Seat 2 a different display set;
+7. window placement and restore survive DPI/topology changes;
+8. display removal/return and target restart have deterministic recovery;
+9. no unrelated window is moved;
+10. physical-display support works without any virtual-display dependency;
+11. optional virtual-display backends are capability-gated and reversible;
+12. crash/restart tests leave ordinary Windows display topology usable.
 
 ## Dependency graph
 
 ```text
 P3-CLOSE-01 -> P4-RUN-01 -> P4-IPC-01
                     |
+                    +-> P4-CTRL-01 -> P4-CTRL-02
+                    |
                     +-> P4-PROC-01 -> P4-WIN-01 -> P4-WIN-02
                     |
                     +-> P4-DIS-01 -> P4-DIS-02 -> P4-DIS-03
 
 P4-WIN-01 + P4-DIS-02 -> P4-POL-01
-P4-POL-01 + P4-DIS-03 -> P4-REC-01
+P4-POL-01 + P4-DIS-03 + P4-CTRL-02 -> P4-REC-01
 P4-DIS-01 -> P4-VID-01 -> P4-VID-02 -> optional P4-IDD-01
 
 required packets -> P4-CLOSE-01
@@ -65,7 +69,8 @@ Extract runtime authority from the configuration GUI into a per-user background 
 **Core types**
 
 ```cpp
-enum class RuntimePhase;
+enum class HostLifecyclePhase;
+enum class SeatSessionPhase;
 struct RuntimeSessionId;
 struct SeatRuntimeState;
 struct HostRuntimeSnapshot;
@@ -75,9 +80,9 @@ class RuntimeHost;
 
 **Implementation skeleton**
 
-1. Define the state machine from `Stopped` through `Active`, `RollingBack`, and `RecoveryRequired`.
+1. Separate host-process lifecycle from Seat-session lifecycle. The host may be `Running` while the Seat session is `Idle`. Define `SeatSessionPhase` as `Idle -> Planning -> Prepared -> Starting -> Active -> Degraded -> Stopping -> RollingBack -> Idle`, with failures entering `RecoveryRequired` until verified recovery; do not use host process exit as the normal meaning of Stop.
 2. load a validated Seat profile without starting any backend;
-3. expose `Plan`, `Prepare`, `Start`, `Stop`, `Reset`, and read-only snapshot operations;
+3. expose `Plan`, `Prepare`, `Start`, `StopAndReturnToWindows`, `Reset`, `ExitHostWhenIdle`, and read-only snapshot operations; keep closing a UI client separate from every session transition;
 4. inject interfaces for hardware/input/process/window/display/audio backends;
 5. ensure transitions are serialized and correlated;
 6. own all worker threads and Phase 3 production routing components;
@@ -87,6 +92,9 @@ class RuntimeHost;
 **Invariants**
 
 - GUI presence is irrelevant to runtime continuity;
+- closing or crashing the control UI never transitions the Seat session;
+- `StopAndReturnToWindows` reaches session `Idle` only after rollback postconditions pass and does not require the host process to exit;
+- `ExitHostWhenIdle` is rejected or converted to a Stop-first transaction while a Seat session is active;
 - only the host mutates runtime state;
 - one active mutation transaction at a time;
 - a failed transition records rollback state;
@@ -97,7 +105,9 @@ class RuntimeHost;
 - every valid/invalid transition;
 - concurrent command rejection/serialization;
 - partial backend startup rollback;
-- repeated start/stop/reset;
+- repeated start/StopAndReturn/reset while the host remains Running;
+- close/reopen UI during Active leaves the Seat-session phase unchanged;
+- ExitHostWhenIdle succeeds only from Idle and an Active request follows the declared Stop-first/reject policy;
 - snapshot consistency under readers;
 - host process self-test and clean exit.
 
@@ -140,7 +150,9 @@ Provide a versioned local protocol so UI, tray, CLI, and watchdog control/observ
 - `GetSnapshot` / `Snapshot`;
 - `PlanSession` / `PlanResult`;
 - `StartSession` / progress/result;
-- `StopSession`;
+- `StopAndReturnToWindows`;
+- `BeginReconfigure`;
+- `ExitHostWhenIdle`;
 - `EmergencyReset`;
 - `SubscribeEvents` / runtime events;
 - `Ping` / lease;
@@ -759,6 +771,220 @@ A written decision is based on measurements, not the roadmap assumption that a c
 
 ---
 
+## P4-CTRL-01 — Management Seat control console placement and permissions
+
+**State:** BLOCKED
+
+**Goal**
+
+Make `HydraSeat.exe` an on-demand management console that always opens on the configured Management Seat, default Seat 1, while `hydra_host.exe` continues to own the runtime in the background.
+
+**Depends on**
+
+- P4-IPC-01
+- P4-DIS-02
+- D-031, D-032
+
+**Create/modify**
+
+- `include/hydra/management_seat.hpp`
+- `src/management_seat.cpp`
+- `include/hydra/control_surface_model.hpp`
+- `src/control_surface_model.cpp`
+- `HydraSeat.exe` host-client/window placement integration;
+- Seat/session profile field for `managementSeatId`;
+- tests with fake host/display clients.
+
+**Core types**
+
+```cpp
+struct ManagementSeatConfig;
+struct ControlSurfacePlacement;
+enum class ControlSurfaceFallback;
+struct GlobalControlPermission;
+class ControlSurfaceModel;
+```
+
+**Required visible controls**
+
+- current runtime mode and session state;
+- current Seat 1/Seat 2 display, keyboard, mouse, controller, and audio assignments;
+- `Start`;
+- `Stop / Return to Windows`;
+- `Reconfigure`;
+- identify/flash/test selected display and input device;
+- startup mode selection: Manual, Background Idle, Auto-Activate Validated Session;
+- diagnostics/export;
+- recovery/reset entry point.
+
+**Implementation skeleton**
+
+1. Add `managementSeatId` to the typed Seat/session configuration with a deterministic default of Seat 1.
+2. Resolve the Management Seat's active primary display through `SeatDisplayGroup` and stable display identity.
+3. On launch/reopen, position the control window wholly inside that primary display's work area and restore only a still-valid Seat-local rectangle.
+4. If the configured display is unavailable, place the window visibly on the current Windows primary display, mark the session degraded, and explain why fallback occurred.
+5. Bind every button/view to the authoritative host snapshot and versioned host commands; never mutate runtime components from UI code.
+6. Keep other Seat shells read-mostly for whole-machine operations unless an explicit permission policy grants otherwise.
+7. Make closing the control window close only the client; the active host/watchdog/session continue according to runtime mode.
+8. Allow reopening from the Management Seat shell shortcut, tray/recovery entry point, Start Menu shortcut, or `hydra_hostctl ui`-style command without creating a second host.
+9. Keep one visible control-console instance per Windows user session and bring the existing instance to the Management Seat display on duplicate launch.
+
+**Invariants**
+
+- runtime authority never moves into the control UI;
+- global Start/Stop/Reconfigure commands are accepted only from an authorized control client/session;
+- the control window cannot become permanently off-screen after monitor removal, DPI change, or profile change;
+- another Seat cannot accidentally terminate or reconfigure the whole machine through its default shell;
+- closing/crashing/restarting `HydraSeat.exe` does not change active Seat isolation;
+- all displayed assignments and state come from the host snapshot or validated inactive configuration, not stale UI memory;
+- normal operation requires no console window or repeated administrator prompt.
+
+**Automated tests**
+
+- default Management Seat is Seat 1;
+- explicit Management Seat 2 override;
+- Seat 1 with two displays chooses its configured primary;
+- primary display removal falls back visibly and reports degraded state;
+- saved off-screen rectangle is clamped/rejected;
+- duplicate UI launch activates existing instance;
+- UI kill/restart/resnapshot while host remains Active;
+- unauthorized other-Seat/global command rejection;
+- host disconnect shows unknown/degraded state rather than optimistic Active/Stopped text.
+
+**Manual acceptance**
+
+- run Seat 1 on two monitors and Seat 2 on one monitor;
+- verify the console always appears on Seat 1 primary while the split session is active;
+- close and reopen the console several times without disturbing either game;
+- unplug the Management Seat primary and verify visible fallback/recovery placement.
+
+**Done when**
+
+A user can leave HydraSeat running invisibly in the background, reopen one authoritative control console on Seat 1's primary display, and inspect/control the session without affecting runtime merely by opening or closing the window.
+
+**Suggested commit**
+
+`feat: implement P4-CTRL-01 Management Seat control console`
+
+---
+
+## P4-CTRL-02 — Return-to-Windows and safe reconfiguration workflow
+
+**State:** BLOCKED
+
+**Goal**
+
+Make ending the split-PC experience and changing the hardware composition normal, obvious, verified UI operations instead of requiring process termination, reboot, or manual cleanup.
+
+**Depends on**
+
+- P4-CTRL-01
+- P4-RUN-01
+- P4-POL-01
+- D-033, D-034
+
+**Create/modify**
+
+- `include/hydra/session_control_transition.hpp`
+- `src/session_control_transition.cpp`
+- host protocol commands/results for `StopAndReturnToWindows`, `BeginReconfigure`, and `ExitHostWhenIdle` where not already represented;
+- control-surface button/state model;
+- inactive configuration/editing gate;
+- tests with fake rollback actions and UI client.
+
+**User-visible flows**
+
+### Stop / Return to Windows
+
+```text
+Active split session
+  -> user presses Stop / Return to Windows
+  -> host enters Stopping/RollingBack
+  -> target launch/input acceptance stops
+  -> session-specific input/device/window/display/audio/controller/shell actions roll back
+  -> host verifies ordinary Windows postconditions
+  -> state becomes Idle/Stopped
+  -> all monitors and ordinary keyboard/mouse behavior are usable as one normal PC
+```
+
+### Reconfigure
+
+```text
+Active split session
+  -> user presses Reconfigure
+  -> save/snapshot current profile and requested edit intent
+  -> verified Stop / Return to Windows
+  -> open configuration mode on Management Seat display
+  -> identify/flash/test monitors and input devices
+  -> edit Seat assignments and primary displays
+  -> Validate / Preflight
+  -> Save
+  -> Start Now OR remain in normal Windows mode
+```
+
+### Exit HydraSeat completely
+
+```text
+Active session
+  -> Stop / Return to Windows first
+  -> verify rollback
+  -> stop idle host/watchdog if startup mode permits
+  -> close control/tray clients
+```
+
+**Implementation skeleton**
+
+1. Model Stop, Reconfigure, and Exit as host state-machine transitions, not button-specific UI procedures.
+2. Have every active backend contribute captured state and an idempotent rollback/verify action.
+3. Disable configuration mutation while runtime is Active except for explicitly capability-tested hot-reconfiguration operations.
+4. `Reconfigure` records edit intent, requests the same verified stop transaction, and opens the editor only after the host reaches a safe inactive state.
+5. Preserve the previous valid profile until the edited profile validates and writes transactionally.
+6. On cancel, remain in normal Windows mode with the previous saved profile untouched.
+7. On Save + Start, compile a new immutable plan and run normal preflight rather than patching the old active plan.
+8. If any rollback postcondition fails, enter `RecoveryRequired`, keep Start/Reconfigure blocked where unsafe, and surface `hydra_reset`/watchdog recovery.
+9. Distinguish `Stop Session`, `Exit Controller UI`, and `Exit Background Host` so users do not accidentally stop a split session by closing a window.
+
+**Invariants**
+
+- `Stopped` means rollback verification passed, not merely that games/windows exited;
+- no new profile is activated until the old session is fully inactive;
+- failed reconfiguration never overwrites the last valid profile;
+- another Seat receives no global stop/reconfigure authority by default;
+- Stop/Reconfigure are idempotent under duplicate clicks/IPC retries;
+- the recovery/reset path remains available if the console disappears mid-transition;
+- ordinary Windows remains the safe fallback state.
+
+**Automated tests**
+
+- Active -> Stop -> Idle with all fake rollback postconditions verified;
+- duplicate Stop while Stopping/RollingBack;
+- Active -> Reconfigure -> Idle -> editor-ready;
+- reconfigure cancel preserves prior profile;
+- invalid edited profile cannot Start;
+- Save + Start compiles a new plan hash;
+- rollback failure -> `RecoveryRequired` and no false Stopped state;
+- UI crashes during stop, reconnects, and resnapshots transition/result;
+- Exit Controller leaves Active session running;
+- Exit Host while Active is rejected or converted to Stop-first flow;
+- Management Seat display disappears during reconfigure and UI falls back visibly.
+
+**Manual acceptance**
+
+- from a physical two-Seat session, press `Stop / Return to Windows` and verify all monitors/input work as one normal PC without reboot;
+- start again, press `Reconfigure`, change one monitor and one keyboard assignment, validate/save/start, and verify the new composition;
+- close only the UI during Active and prove the split session continues;
+- choose Exit HydraSeat completely and prove rollback finishes before host/watchdog exit.
+
+**Done when**
+
+A normal user can split the PC, close/reopen the controller, return the machine to ordinary Windows with one clear action, change the monitor/input composition with a few guided steps, and start the new session without manual cleanup or reboot.
+
+**Suggested commit**
+
+`feat: implement P4-CTRL-02 return and reconfigure workflow`
+
+---
+
 ## P4-REC-01 — Runtime/window/display crash and restart matrix
 
 **State:** BLOCKED
@@ -812,6 +1038,8 @@ The runtime survives the matrix on physical two-Seat displays.
 **Closure checklist**
 
 - GUI no longer owns runtime authority;
+- Management Seat control console placement, permissions, close/reopen behavior, and safe display fallback are proven;
+- Stop / Return to Windows and Reconfigure workflows complete verified rollback before editing or exit;
 - host IPC/state model stable and versioned;
 - process/window ownership proven;
 - multi-monitor Seat groups and DPI transforms proven;

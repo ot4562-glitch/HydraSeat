@@ -1,5 +1,7 @@
 # HydraSeat 🎮
 
+**English** | [한국어](README.ko.md) | [简体中文](README.zh-CN.md)
+
 An experimental Windows local gaming multiseat framework. The repository license is not yet formally declared; see the clean-room policy before reusing code.
 
 [![License: not yet declared](https://img.shields.io/badge/license-not%20yet%20declared-lightgrey.svg)](docs/CLEAN_ROOM_POLICY.md)
@@ -47,6 +49,56 @@ HydraSeat
 The intended user experience is not "three monitors attached to one PC". It is **"a dual-monitor PC and a single-monitor PC sharing the same hardware underneath."**
 
 Windows normally exposes global concepts such as foreground focus, cursor state, keyboard state, and a merged desktop. HydraSeat's long-term job is to virtualize or mediate the parts that matter to local gaming so each Seat behaves as independently as practical.
+
+### Management Seat and background operation
+
+HydraSeat is planned as a background runtime plus an on-demand control console, not as one permanently visible configuration window.
+
+By default, **Seat 1 is the Management Seat**. When the split-PC session is active, opening `HydraSeat.exe` places the management console on Seat 1's primary display (LG in the example above). Closing that window does **not** stop the split session; `hydra_host.exe` and `hydra_watchdog.exe` continue in the background. Reopening the controller returns it to the Management Seat display. Other Seat shells are read-mostly for whole-machine controls unless the profile explicitly grants more authority.
+
+The normal control surface is intentionally small and obvious:
+
+```text
+HydraSeat — Management Seat
+├─ Current state: Normal Windows / Starting / Split Active / Degraded / Recovery Required
+├─ Seat 1: LG + Samsung | Keyboard A | Mouse A | Controller A | Headset
+├─ Seat 2: BenQ         | Keyboard B | Mouse B | Controller B | Speakers
+│
+├─ [ Start split session ]
+├─ [ Stop / Return to Windows ]
+├─ [ Reconfigure monitors and input ]
+├─ [ Identify / test devices ]
+├─ [ Startup mode ]  Manual | Background Idle | Auto-Activate Validated Session
+├─ [ Diagnostics ]
+└─ [ Recovery / Reset ]
+```
+
+`Stop / Return to Windows` is not just a UI close button. It is a verified host rollback transaction: Seat-specific input/device/window/display/audio/controller/shell state is removed or restored, all monitors and ordinary keyboard/mouse behavior return to one normal Windows desktop, and only then does the runtime report `Stopped`/`Idle`.
+
+`Reconfigure` uses the safe path by default:
+
+```text
+Active split session
+  -> Stop / Return to Windows and verify rollback
+  -> open configuration on the Management Seat display
+  -> identify/test/reassign monitors, keyboards, mice, controllers, and audio
+  -> validate + save a new plan
+  -> Start Now, or remain in normal Windows mode
+```
+
+Three startup modes are planned:
+
+- **Manual** — HydraSeat does nothing until the user opens it and presses Start.
+- **Background Idle** — host/watchdog start silently at logon, but the PC remains normal until the Management Seat opens the controller and presses Start.
+- **Auto-Activate Validated Session** — after logon, HydraSeat may automatically restore one explicitly selected, previously validated Seat layout only if crash-journal, safe-mode, hardware/topology, capability, privilege, watchdog, and rollback preflight all pass. Otherwise it stays safely idle instead of partially splitting the PC.
+
+This gives both intended usage styles: an always-available appliance-like split-PC setup after boot, or a program the user launches only when multiseat gaming is needed.
+
+### Language support
+
+The canonical UI language is English (`en-US`). The planned initial release UI/UX locales are English, Korean (`ko-KR`), and Simplified Chinese (`zh-CN`). User-visible strings will use stable localization IDs with English fallback, while source-code comments, protocols, schema keys, CLI switches, diagnostic codes, and other machine/developer identifiers remain English. See [Localization Policy](docs/LOCALIZATION.md).
+
+The README is available in [English](README.md), [Korean](README.ko.md), and [Simplified Chinese](README.zh-CN.md). README translation availability does not mean the runtime UI localization packet is already implemented; that work is tracked as `P7-I18N-01`.
 
 ---
 

@@ -387,7 +387,8 @@ Make the supported product usable from install through recovery without relying 
 **Depends on**
 
 - frozen scope;
-- installer/profile manager/shell/reset/diagnostics.
+- installer/profile manager/shell/reset/diagnostics;
+- P7-I18N-01 and P7-A11Y-01.
 
 **User journey**
 
@@ -411,7 +412,8 @@ Make the supported product usable from install through recovery without relying 
 - compatibility matrix navigation;
 - emergency reset/recovery card;
 - installer/update/uninstall guide;
-- accessibility/localization review;
+- accessibility/localization review for `en-US`, `ko-KR`, and `zh-CN`;
+- maintained `README.md`, `README.ko.md`, and `README.zh-CN.md` with language-switch links and release-status parity;
 - screenshots/videos only when they match current UI.
 
 **Invariants**
@@ -421,11 +423,12 @@ Make the supported product usable from install through recovery without relying 
 - no false “isolated/active” success before host verification;
 - help works offline for core/recovery;
 - emergency reset instructions visible without active session;
-- docs generated/versioned with release.
+- docs generated/versioned with release;
+- English, Korean, and Simplified Chinese documentation agree on product goal, current support status, recovery behavior, commands, license state, and release version; machine-readable identifiers remain unchanged across translations.
 
 **Manual tests**
 
-- new user on clean supported machine;
+- new user on clean supported machine in `en-US`, `ko-KR`, and `zh-CN`;
 - keyboard-only/high-DPI/high-contrast flows;
 - failure/recovery task completion;
 - uninstall/data export;

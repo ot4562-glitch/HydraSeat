@@ -93,6 +93,7 @@ Define separate, composable schemas instead of one growing `workspace_config.jso
 ### Session profile
 
 - references one Seat profile per Seat and one target/compatibility combination;
+- stores one `managementSeatId` for whole-machine controls, defaulting deterministically to Seat 1 when valid;
 - start order/dependencies;
 - degraded-mode policy;
 - rollback policy;
@@ -750,6 +751,7 @@ Let users manage Seats, applications, compatibility profiles, and session preset
 - P6-PROFILE-01
 - P6-PREFLIGHT-01
 - P4-IPC-01
+- P4-CTRL-01/P4-CTRL-02
 
 **Screens/workflows**
 
@@ -757,6 +759,8 @@ Let users manage Seats, applications, compatibility profiles, and session preset
 - target profile create/clone/edit;
 - compatibility profile selection/edit;
 - Seat-to-target session composition;
+- Management Seat selector, default Seat 1, including its primary-display control-console placement preview;
+- guided inactive monitor/input/controller/audio identify-test-assign workflow reached from `Reconfigure`;
 - validation and stale-reference repair;
 - plan preview/risk confirmation;
 - import/export;
@@ -765,7 +769,7 @@ Let users manage Seats, applications, compatibility profiles, and session preset
 
 **Invariants**
 
-- UI never edits active immutable plan;
+- UI never edits active immutable plan; `Reconfigure` must first complete P4-CTRL-02 verified return-to-Windows and then edit inactive configuration;
 - unsaved changes/version conflict handled;
 - destructive delete checks references;
 - provider scan is cancelable/bounded;
