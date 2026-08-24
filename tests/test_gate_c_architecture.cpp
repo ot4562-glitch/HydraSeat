@@ -310,6 +310,40 @@ void runWindowsRuntimeSelfTest(int argc, char** argv) {
     check(expected.has_value(), "runtime expected architecture parses");
     const auto process = hydra::gatec::detectProcessArchitecture(
         GetCurrentProcess());
+    if (!process || process.architecture != *expected) {
+        std::cerr << "[DIAG] expected="
+                  << hydra::gatec::processArchitectureName(*expected)
+                  << " detected="
+                  << hydra::gatec::processArchitectureName(process.architecture)
+                  << " status="
+                  << hydra::gatec::architectureDetectionStatusName(process.status)
+                  << " systemError=" << process.systemError
+                  << " error='" << process.error << "'\n";
+        using IsWow64Process2Function = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
+        const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+        const auto modern = kernel32 == nullptr
+            ? nullptr
+            : reinterpret_cast<IsWow64Process2Function>(
+                  GetProcAddress(kernel32, "IsWow64Process2"));
+        if (modern != nullptr) {
+            USHORT processMachine = 0;
+            USHORT nativeMachine = 0;
+            const BOOL ok = modern(
+                GetCurrentProcess(), &processMachine, &nativeMachine);
+            std::cerr << "[DIAG] IsWow64Process2 ok=" << (ok != FALSE)
+                      << " processMachine=0x" << std::hex << processMachine
+                      << " nativeMachine=0x" << nativeMachine << std::dec
+                      << " lastError=" << (ok != FALSE ? 0 : GetLastError())
+                      << '\n';
+        }
+        const auto selfImage = hydra::gatec::detectPortableExecutableArchitecture(
+            std::filesystem::path(argv[0]));
+        std::cerr << "[DIAG] self PE architecture="
+                  << hydra::gatec::processArchitectureName(selfImage.architecture)
+                  << " status="
+                  << hydra::gatec::architectureDetectionStatusName(selfImage.status)
+                  << " error='" << selfImage.error << "'\n";
+    }
     check(process && process.architecture == *expected,
           "Win32 process detection matches the configured architecture");
     const auto target = hydra::gatec::detectPortableExecutableArchitecture(
