@@ -322,43 +322,61 @@ All elevated features use explicit broker operations and the host runs unelevate
 
 **Goal**
 
-Start the background runtime/watchdog predictably at user logon without console windows or repeated UAC prompts, while allowing easy disable/safe mode.
+Start the background runtime/watchdog predictably at user logon without console windows or repeated UAC prompts, while supporting three explicit user modes: manual launch, background-idle launch, and validated automatic Seat activation. The Management Seat control console remains available on demand in every non-safe-mode case.
 
 **Depends on**
 
 - P4-RUN-01/P4-IPC-01
+- P4-CTRL-01/P4-CTRL-02
 - P8-WATCH-01/P8-JOURNAL-01
 
 **Create/modify**
 
 - startup registration abstraction;
+- `include/hydra/startup_mode.hpp` and `src/startup_mode.cpp` with `Manual`, `BackgroundIdle`, and `AutoActivateValidatedSession`;
+- persisted startup settings for the selected validated session, `openControlConsoleAtLogon`, and safe fallback behavior;
 - tray lifecycle/startup settings UI;
 - startup diagnostics/CLI;
 - tests/manual checklist.
 
 **Policy options**
 
-- disabled;
-- start tray/UI only;
-- start host/watchdog idle, no automatic Seat activation;
-- optionally restore a declared session only after safe-mode/journal/preflight policy permits it.
+- `Manual`: no automatic host/session startup; launching `HydraSeat.exe` starts/connects the host/watchdog on demand and the user presses Start;
+- `openControlConsoleAtLogon`: optional presentation flag that opens the Management Seat console after logon but does not change the selected runtime mode;
+- `BackgroundIdle`: start host/watchdog at logon with no automatic Seat activation; keep the controller hidden unless requested and allow Start from the Management Seat;
+- `AutoActivateValidatedSession`: start host/watchdog at logon and activate exactly one explicitly selected, previously validated session only after safe-mode, crash-journal, topology, capability, privilege, watchdog, and rollback preflight all pass; otherwise stay safely idle and surface the reason.
 
 **Invariants**
 
-- startup is opt-in/visible/reversible;
+- startup mode is explicit, opt-in, visible in the Management Seat console, stored transactionally, and reversible;
 - no console window;
 - no permanent administrator requirement;
-- safe mode prevents automatic risky activation;
+- safe mode, incomplete crash journal, missing required hardware, changed plan hash, or failed capability/recovery preflight prevents automatic activation and leaves the host safely idle;
 - duplicate host instance rejected/reconnected;
+- closing `HydraSeat.exe` never stops an active session by itself;
+- requesting the control console while a split session is active places it on the Management Seat primary display or the documented visible fallback;
+- `Stop / Return to Windows` ends the Seat session but may leave host/watchdog idle when the selected startup mode requires background availability;
 - uninstall removes startup registration.
+
+**Automated tests**
+
+- startup-mode schema/serialization and invalid/future values;
+- Manual launch starts/connects one host on demand and never auto-activates a Seat;
+- BackgroundIdle starts one hidden host/watchdog pair and remains Idle until Start;
+- AutoActivateValidatedSession activates only the matching validated plan after all preflight gates pass;
+- changed topology/plan hash, safe mode, stale crash journal, missing watchdog, or unavailable required backend prevents auto-activation and leaves Idle with a diagnostic reason;
+- duplicate logon/startup invocations reconnect rather than creating duplicate hosts;
+- closing/reopening the controller while Active does not change runtime state;
+- Stop / Return to Windows leaves host/watchdog idle or exits them according to mode/user request;
+- Management Seat console placement/fallback is preserved across logon and monitor changes.
 
 **Manual acceptance**
 
-Logon/reboot, disabled mode, safe mode after crash, standard-user account, no UAC in ordinary idle startup.
+Logon/reboot acceptance for all three runtime modes: Manual performs no automatic Seat activation; BackgroundIdle starts host/watchdog hidden and allows the Management Seat console to Start later; AutoActivateValidatedSession restores only the selected validated session; changed/missing hardware or crash-safe mode leaves the host idle. Also verify standard-user operation, no console window, no UAC in ordinary use, closing/reopening the controller, and Stop / Return to Windows without reboot.
 
 **Done when**
 
-HydraSeat starts quietly and predictably with clear tray/status/reset access.
+A user can choose Manual, BackgroundIdle, or AutoActivateValidatedSession; boot/logon behavior matches that choice; the Management Seat can reopen the controller at any time; and Stop / Return to Windows restores ordinary use without requiring a reboot or permanently exiting the background host unless requested.
 
 **Suggested commit**
 

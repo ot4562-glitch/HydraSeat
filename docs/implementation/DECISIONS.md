@@ -252,3 +252,58 @@ Latency, CPU, memory, queue depth, frame timing, audio delay, and rollback durat
 ## D-030 — Upstream intent is preserved, product scope is extended
 
 HydraSeat remains a Windows local gaming multiseat framework based on physical-device detection, assignment, Raw Input compatibility, display routing, and game profiles. The Seat-first multi-monitor environment, background host/watchdog, shell, and capability ecosystem extend that intent rather than replacing it with an unrelated remote-desktop or virtual-machine product.
+
+## D-031 — One Management Seat owns the visible control plane
+
+HydraSeat separates the background runtime from the user's control surface. Exactly one configured `ManagementSeatId` owns the default visible control plane for the active session. The default is Seat 1 unless the user explicitly selects another Seat.
+
+The management control surface opens on the Management Seat's primary display and provides session status, device/display composition, Start, Stop/Return to Windows, Reconfigure, diagnostics, and recovery controls. Other Seat shells are read-mostly by default and cannot terminate or reconfigure the whole machine without an explicit permission policy.
+
+If the configured management display is unavailable, HydraSeat falls back visibly to the current Windows primary display or a documented recovery surface; it never opens an invisible/off-screen control window.
+
+## D-032 — Background runtime and visible controller are independent
+
+`hydra_host.exe` and `hydra_watchdog.exe` may run with no visible application window. `HydraSeat.exe` is an on-demand controller client that can be opened, closed, or restarted without stopping an active validated session.
+
+Supported product modes are explicit:
+
+- `Manual`: nothing activates until the user starts HydraSeat and presses Start;
+- `BackgroundIdle`: host/watchdog start at logon but no Seat session activates until requested;
+- `AutoActivateValidatedSession`: host/watchdog start at logon and may activate one explicitly selected, previously validated session only after crash-journal, safe-mode, topology, capability, and recovery preflight passes.
+
+No startup mode may silently auto-activate an unvalidated or changed topology/profile.
+
+## D-033 — Returning to ordinary Windows is a first-class operation
+
+The product must always expose a normal `Stop / Return to Windows` operation from the Management Seat control surface, tray/recovery surface, and emergency reset path.
+
+A successful return-to-Windows transaction means:
+
+1. stop new Seat launches/input routing;
+2. unwind session-scoped physical cloaking/suppression according to the captured rollback plan;
+3. remove process-local compatibility shims/adapters and Seat cursor/shell surfaces;
+4. restore audio, controller, window, display, and other captured mutable state;
+5. stop or detach owned target processes according to profile policy;
+6. verify that ordinary Windows input/display/audio behavior is restored;
+7. leave the host either idle in the background or exit it according to user mode.
+
+The UI may not report `Stopped` merely because target windows disappeared. Rollback postconditions must be verified by the host/watchdog.
+
+## D-034 — Reconfiguration is a controlled session transition
+
+The normal user workflow for changing monitors, keyboards, mice, controllers, audio endpoints, or target composition is `Reconfigure`, not editing live internal state ad hoc.
+
+Default safe behavior while a session is active:
+
+```text
+Reconfigure
+  -> snapshot current session/profile
+  -> Stop / Return to Windows with verified rollback
+  -> open configuration UI on the Management Seat display
+  -> identify/flash/test displays and input devices
+  -> validate assignments and compile preflight plan
+  -> Save
+  -> Start now, or remain in ordinary Windows mode
+```
+
+A future packet may permit specific hot-reconfiguration operations, but only when that operation has its own capability, atomic transition, rollback, and physical acceptance. Unsupported live reconfiguration fails closed and uses the safe stop-edit-start path.

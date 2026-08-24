@@ -530,11 +530,12 @@ The selected MVP matrix survives the declared transient failures or stops safely
 
 **Goal**
 
-Provide a truthful user workflow for planning, starting, monitoring, stopping, and resetting the MVP session.
+Extend the Management Seat control console into the truthful MVP workflow for planning, starting, monitoring, Stop / Return to Windows, Reconfigure, diagnostics, and recovery without moving runtime authority into the UI.
 
 **Depends on**
 
 - P4-IPC-01
+- P4-CTRL-01/P4-CTRL-02
 - P5-LAUNCH-01
 - P5-MET-01
 
@@ -546,12 +547,14 @@ Provide a truthful user workflow for planning, starting, monitoring, stopping, a
 - per-Seat process/window/display/input/controller/audio state;
 - latency/drop/bleed warning summary;
 - degraded/recovery-required state;
-- stop and emergency reset;
+- `Stop / Return to Windows`, `Reconfigure`, and emergency reset;
+- startup/background mode summary and whether the controller may close while the host remains active;
 - link/export diagnostic bundle.
 
 **Invariants**
 
 - UI reflects host snapshot, not optimistic local state;
+- the control surface opens on the configured Management Seat primary display and other Seat shells do not receive whole-machine Stop/Reconfigure authority by default;
 - start disabled on missing required capabilities;
 - risky operations require explicit confirmation;
 - stop/reset remains accessible during degraded state;
@@ -560,6 +563,8 @@ Provide a truthful user workflow for planning, starting, monitoring, stopping, a
 **Automated tests**
 
 - view-model/state tests with fake host client;
+- Management Seat placement/permission state and non-management command denial;
+- Stop/Return/Reconfigure progress, completion, rollback failure, and UI reconnect/resnapshot;
 - disconnect/reconnect/resnapshot;
 - progress/error/recovery states;
 - accessibility/DPI basics.

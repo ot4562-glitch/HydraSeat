@@ -11,15 +11,16 @@ The first supported shell is an overlay/application per Seat, not a replacement 
 Phase 7 is complete when:
 
 1. one shell instance is owned by one Seat and stays inside that Seat display group;
-2. each shell lists/activates only owned applications/windows;
-3. profile launcher actions call the production host, not direct process creation;
-4. wallpaper/zones/task surface span the Seat's multi-monitor group correctly;
-5. Seat software cursors stay within Seat bounds and do not require multiple global Windows cursors;
-6. notifications and optional clipboard policy do not leak by default;
-7. shell crash/restart does not stop or corrupt the active Seat runtime;
-8. DPI/accessibility/localization basics pass;
-9. UI/tray/shell all show the same host state;
-10. Explorer and ordinary single-user Windows behavior are restored on stop/reset.
+2. the Management Seat shell exposes an always-available HydraSeat control entry that opens the management console on its primary display, while non-management Seat shells remain read-mostly for whole-machine controls;
+3. each shell lists/activates only owned applications/windows;
+4. profile launcher actions call the production host, not direct process creation;
+5. wallpaper/zones/task surface span the Seat's multi-monitor group correctly;
+6. Seat software cursors stay within Seat bounds and do not require multiple global Windows cursors;
+7. notifications and optional clipboard policy do not leak by default;
+8. shell crash/restart does not stop or corrupt the active Seat runtime;
+9. DPI/accessibility/localization basics pass;
+10. UI/tray/shell all show the same host state;
+11. Explorer and ordinary single-user Windows behavior are restored on stop/reset.
 
 ## Dependency graph
 
@@ -67,6 +68,7 @@ Create one lightweight shell process per active Seat with a read-mostly host cli
 - owned process/window snapshot;
 - profile/app launcher entries;
 - input/cursor/status/recovery summary;
+- whether this Seat is the Management Seat and therefore may expose the whole-machine HydraSeat control entry;
 - no hardware/backend mutation privileges.
 
 **Implementation skeleton**
@@ -76,12 +78,14 @@ Create one lightweight shell process per active Seat with a read-mostly host cli
 3. shell subscribes to bounded runtime events and resnapshots on gaps;
 4. shell creates top-level surfaces only inside its Seat display group;
 5. shell sends typed launch/activate/stop requests to host;
-6. shell shutdown is independent of active target processes;
-7. host can restart/relaunch the shell.
+6. if the shell's Seat matches `managementSeatId`, expose a persistent HydraSeat control entry that reopens/activates the main management console on the Management Seat primary display; non-management shells omit or disable whole-machine Stop/Reconfigure controls;
+7. shell shutdown is independent of active target processes;
+8. host can restart/relaunch the shell.
 
 **Invariants**
 
 - shell cannot mutate another Seat;
+- only the configured Management Seat shell exposes whole-machine control by default, and even that control is a typed request to the host rather than direct mutation;
 - shell never launches target processes directly;
 - host state is authoritative;
 - no global shell replacement/registry change;
@@ -91,6 +95,7 @@ Create one lightweight shell process per active Seat with a read-mostly host cli
 **Automated tests**
 
 - two shell processes with disjoint Seat snapshots;
+- only the Management Seat shell exposes the whole-machine HydraSeat control entry and it opens/activates the console on the Management Seat primary display;
 - spoofed Seat/session/token;
 - event gap/resnapshot;
 - host disconnect/reconnect;

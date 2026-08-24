@@ -99,6 +99,8 @@ Phase 3 closes only after controlled probes observe Seat-local values through th
 
 - [ ] Move runtime authority from GUI into `hydra_host.exe`
 - [ ] Add versioned UI/CLI/watchdog host protocol
+- [ ] Add Management Seat control console on Seat 1 primary by default, with safe visible fallback
+- [ ] Add verified `Stop / Return to Windows` and `Reconfigure` workflows that restore ordinary one-PC use before editing/restarting
 - [ ] Track Seat-owned process trees with Job Objects where compatible
 - [ ] Track Seat-owned windows without touching unrelated windows
 - [ ] Build DisplayConfig/DXGI topology and stable output identities
@@ -154,6 +156,7 @@ Detailed implementation: [Phase 6 packet roadmap](implementation/PHASE6_LAUNCHER
 ## Phase 7 — Seat Shell and Local-PC Experience (Planned)
 
 - [ ] Launch one scoped shell process per Seat
+- [ ] Keep an always-available HydraSeat management-console entry on the configured Management Seat shell; non-management Seats remain read-mostly for whole-machine controls
 - [ ] Add Seat launcher and pinned profiles
 - [ ] Add Seat-owned task/window surface
 - [ ] Add per-Seat multi-monitor wallpaper and desktop zones
@@ -175,7 +178,7 @@ Detailed implementation: [Phase 7 packet roadmap](implementation/PHASE7_SEAT_SHE
 - [ ] Emergency reset CLI
 - [ ] Crash journal and safe-mode startup marker
 - [ ] Narrow elevated privilege broker
-- [ ] Silent user-approved logon startup/tray lifecycle
+- [ ] User-selectable runtime modes: Manual, hidden BackgroundIdle, and validated AutoActivate-on-logon; controller remains reopenable from the Management Seat
 - [ ] Optional component manifest/hash/signature/trust policy
 - [ ] Production code/driver signing pipeline
 - [ ] Reversible installer/repair/uninstaller

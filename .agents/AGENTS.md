@@ -67,6 +67,10 @@ Read the full decisions in `docs/implementation/DECISIONS.md`. At minimum:
 - default path is one Windows interactive session, not VM/RDP/streaming;
 - configuration UI, background host, watchdog, reset CLI, optional adapters, and Seat shell are separate responsibilities;
 - the background host is authoritative for active runtime state;
+- exactly one Management Seat owns the visible whole-machine control plane by default; Seat 1 is the default and the console opens on its primary display with a visible fallback;
+- closing/restarting the control UI never stops an active Seat session; normal controls are `Start`, `Stop / Return to Windows`, and `Reconfigure`;
+- `Stop / Return to Windows` means verified rollback to ordinary one-PC Windows behavior, not merely closing target windows;
+- startup behavior is an explicit user mode: Manual, BackgroundIdle, or AutoActivateValidatedSession, and unsafe automatic preflight falls back to idle;
 - all variable behavior is capability-planned and fails closed;
 - controlled HydraSeat-owned probes precede any third-party process experiment;
 - no anti-cheat, DRM, protected-process, security-product, credential, or integrity bypass;

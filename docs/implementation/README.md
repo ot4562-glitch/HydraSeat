@@ -40,7 +40,9 @@ The intended product topology is:
 
 ```text
 HydraSeat.exe
-  Configuration UI, tray UI, profile editor, launch/stop commands
+  On-demand Management Seat control console
+  Configuration UI, profile editor, Start, Stop/Return to Windows, Reconfigure, diagnostics
+  Default visible placement: Management Seat (Seat 1) primary display
 
 hydra_host.exe
   Per-user background runtime
@@ -72,6 +74,8 @@ optional display/audio/controller adapters
 
 The current Gate A/B/C labs remain development harnesses. Their proven components may be moved into the production host, but the lab executables must remain available as regression tools until equivalent production diagnostics exist.
 
+The control plane is intentionally separate from the runtime. Closing `HydraSeat.exe` does not stop a validated active session. The user may run HydraSeat manually, keep host/watchdog silently idle at logon, or auto-activate one explicitly selected validated session after all recovery/topology/capability preflight passes. `Stop / Return to Windows` always performs verified rollback to ordinary one-PC Windows behavior, and `Reconfigure` performs that return first before changing monitor/input assignments.
+
 ## 4. Phase model
 
 Phase numbers group product capability. They are mostly sequential, but reliability, security, diagnostics, and schema work are cross-cutting. A later-phase work packet may be pulled forward only when an earlier packet declares it as a prerequisite.
@@ -82,7 +86,7 @@ Phase numbers group product capability. They are mostly sequential, but reliabil
 | 1 | Hardware detection | Complete | Stable device identities and Windows CI |
 | 2 | Seat composition | Complete | Multi-display Seat model and transactional profiles |
 | 3 | Input compatibility and isolation | Current | Documented profiles can run without cross-Seat input merging and can roll back safely |
-| 4 | Runtime host, process/window/display routing | Planned | Seat-owned processes/windows remain inside assigned display groups across hot-plug/restart |
+| 4 | Runtime host, control console, process/window/display routing | Planned | Background host stays authoritative; Management Seat controls Start/Return/Reconfigure; Seat-owned windows remain inside assigned display groups |
 | 5 | Two-Seat gaming MVP | Planned | Two different supported games run with independent input/display/controller/audio and measured limits |
 | 6 | Launcher and profile manager | Planned | Repeatable provider-aware launch plans and editable compatibility profiles |
 | 7 | Seat shell and local-PC experience | Planned | Each Seat feels like a coherent local desktop/launcher environment |
