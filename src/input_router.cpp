@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <cstddef>
 #include <iomanip>
 #include <limits>
@@ -94,8 +95,8 @@ bool InputRouter::postInputToWindow(std::uint64_t hwndValue,
         const auto clampToShort = [](std::int32_t value) {
             return static_cast<SHORT>(std::clamp(
                 value,
-                static_cast<std::int32_t>(std::numeric_limits<SHORT>::min()),
-                static_cast<std::int32_t>(std::numeric_limits<SHORT>::max())));
+                static_cast<std::int32_t>(SHRT_MIN),
+                static_cast<std::int32_t>(SHRT_MAX)));
         };
         posted = PostMessageW(
                      hwnd, WM_MOUSEMOVE, 0,
@@ -164,7 +165,7 @@ RawInputDeviceDescriptor InputRouter::describeDevice(
     result.online = true;
 
     if (deviceHandle == nullptr) {
-        if (knownType == std::numeric_limits<std::uint32_t>::max()) {
+        if (knownType == kUnknownRawInputDeviceType) {
             result.rawDevType = RIM_TYPEMOUSE;
         }
         result.deviceId = categoryForDevice(result.rawDevType) +
@@ -190,7 +191,7 @@ RawInputDeviceDescriptor InputRouter::describeDevice(
             return result;
         }
     } else if (knownType == RIM_TYPEHID ||
-               knownType == std::numeric_limits<std::uint32_t>::max()) {
+               knownType == kUnknownRawInputDeviceType) {
         return result;
     }
 

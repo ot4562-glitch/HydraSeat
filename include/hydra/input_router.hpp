@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <functional>
-#include <limits>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -13,6 +12,9 @@
 #endif
 
 namespace hydra {
+
+inline constexpr std::uint32_t kUnknownRawInputDeviceType =
+    ~std::uint32_t{0};
 
 enum class RawKeyTransition {
     None,
@@ -147,7 +149,7 @@ private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam,
                                     LPARAM lParam);
     RawInputDeviceDescriptor describeDevice(HANDLE deviceHandle,
-                                            std::uint32_t knownType = std::numeric_limits<std::uint32_t>::max());
+                                            std::uint32_t knownType = kUnknownRawInputDeviceType);
     RawInputDeviceDescriptor cachedOrDescribeDevice(HANDLE deviceHandle,
                                                     std::uint32_t knownType);
     void cacheDevice(const RawInputDeviceDescriptor& device);
