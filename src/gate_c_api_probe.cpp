@@ -59,9 +59,10 @@ private:
     const InputEventMessage& message) noexcept {
     HydraGateCAdapterInputEventV1 result{};
     result.struct_size = sizeof(result);
-    result.kind = message.kind == hydra::gatec::InputKind::Keyboard
+    result.kind = static_cast<std::uint8_t>(
+        message.kind == hydra::gatec::InputKind::Keyboard
                       ? HYDRA_GATE_C_ADAPTER_INPUT_KEYBOARD
-                      : HYDRA_GATE_C_ADAPTER_INPUT_MOUSE;
+                      : HYDRA_GATE_C_ADAPTER_INPUT_MOUSE);
     result.key_transition = static_cast<std::uint8_t>(message.keyTransition);
     result.is_touchpad = message.isTouchpad ? 1u : 0u;
     result.timestamp_micros = message.timestampMicros;
@@ -140,7 +141,7 @@ bool parseUnsigned(std::wstring_view text, std::uint32_t& value) {
     for (const auto character : text) {
         if (character < L'0' || character > L'9') return false;
         parsed = parsed * 10 + static_cast<std::uint64_t>(character - L'0');
-        if (parsed > std::numeric_limits<std::uint32_t>::max()) return false;
+        if (parsed > (std::numeric_limits<std::uint32_t>::max)()) return false;
     }
     value = static_cast<std::uint32_t>(parsed);
     return true;
