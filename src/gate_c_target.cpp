@@ -639,10 +639,10 @@ private:
                << snapshot.mouseButtonsDown << std::dec
                << L"\nWheel accumulator: " << snapshot.wheelAccumulator
                << L"\nKey A down: "
-               << (hydra::gatec::snapshotKeyDown(snapshot, 0x41)
+               << (adapterSnapshotKeyDown(adapterSnapshot, 0x41)
                        ? L"true" : L"false")
                << L"\nKey B down: "
-               << (hydra::gatec::snapshotKeyDown(snapshot, 0x42)
+               << (adapterSnapshotKeyDown(adapterSnapshot, 0x42)
                        ? L"true" : L"false");
         if (!lastError.empty()) {
             status << L"\n\nProtocol error: " << asciiToWide(lastError)
