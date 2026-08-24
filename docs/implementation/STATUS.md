@@ -35,7 +35,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 
 | Packet | State | Depends on | Immediate evidence required |
 | --- | --- | --- | --- |
-| P3-API-01 Controlled Win32 API probe baseline | READY | P3-STATE-01 | Probe executable reports actual OS API state and direct adapter state side by side |
+| P3-API-01 | IN_PROGRESS | P3-STATE-01 | Controlled Win32 API probe baseline — source and portable tests complete; Windows/MSVC probe-process validation still required |
 | P3-API-02 Startup-loaded polling shim for controlled probe | BLOCKED | P3-API-01 | `GetAsyncKeyState`, `GetKeyState`, `GetKeyboardState` return Seat-local values in the probe |
 | P3-API-03 Cursor/focus/capture shim for controlled probe | BLOCKED | P3-API-02 | Probe sees Seat-local cursor/clip/focus/capture while global state remains unchanged |
 | P3-RAW-01 Raw Input registration/data probe | BLOCKED | P3-API-01 | Controlled probe records real registration/data behavior before interposition |
@@ -88,6 +88,21 @@ Known limitations:
 Rollback result:
 Next packet:
 ```
+
+### 2026-08-24 — P3-API-01
+
+State: IN_PROGRESS
+Branch/commit: `docs/control-seat-runtime-ux`; uncommitted pending required Windows validation
+Windows CI: not run; the current machine has no CMake, MSVC, or Windows SDK installation
+Automated tests:
+- strict GCC 15 snapshot build/test passed with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion`
+- WSL Release CMake focused build passed for the Gate C core, adapter, target, host, API probe, and tests
+- WSL CTest passed 12/12 portable tests, including `GateCProbeSnapshotTests`
+- Win32-only `GateCApiProbeSelfTest` and `GateCApiProbeProcessSelfTest` remain unexecuted
+Manual evidence: none required by this packet; Gate A/B/C physical gates remain pending and unchanged
+Known limitations: no API interposition exists; the probe records ordinary shared OS state beside direct adapter state
+Rollback result: portable lifecycle code compiled; Win32 disconnect/timeout/abnormal-exit/no-orphan paths await Windows execution
+Next packet: finish P3-API-01 Windows/MSVC validation; do not start P3-API-02 before that passes
 
 ## Next Codex task
 

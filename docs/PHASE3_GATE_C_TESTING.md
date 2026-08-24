@@ -11,6 +11,11 @@ Gate C now has an implemented **controlled-process foundation**:
 - two separate HydraSeat-owned target processes;
 - an automated Windows self-test that proves their state does not bleed across processes.
 
+P3-API-01 adds a read-only controlled Win32 API probe and a fixed-width
+comparison snapshot. The source and portable serialization/regression tests are
+implemented; the required Win32 process self-test remains pending on a machine
+with CMake, MSVC, and the Windows SDK.
+
 This is not yet a general game hook or a completed Gate C implementation. The controlled targets call HydraSeat's adapter API directly. Commercial games still call the ordinary Windows APIs unless a later, explicitly approved compatibility adapter interposes those calls.
 
 ## Safety boundary
@@ -54,6 +59,25 @@ The target is a HydraSeat-owned test process. It:
 - answers snapshot queries;
 - displays virtual state beside the actual OS foreground state;
 - exits when the host sends `Shutdown` or the pipe/session fails.
+
+### `hydra_gate_c_api_probe.exe`
+
+The API probe is a separate HydraSeat-owned process. It:
+
+- uses the existing Seat/pipe/token launch and handshake path;
+- owns a real Win32 window even in hidden process-test mode;
+- calls `GetAsyncKeyState`, `GetKeyState`, `GetKeyboardState`,
+  `GetCursorPos`, `GetClipCursor`, `GetForegroundWindow`, `GetFocus`, and
+  `GetCapture` on its window/UI thread;
+- reads the matching process-local state through the existing adapter C ABI;
+- returns both observations in one versioned `ProbeSnapshot` frame;
+- treats HWND values as transient runtime diagnostics, never persisted identity;
+- never calls a Win32 cursor/focus/capture setter and installs no hook or shim.
+
+Visible probe mode shows the last OS and adapter observations side by side. A
+foreground mismatch is expected before interposition: two adapters may both
+report virtual foreground while Windows still has only one real foreground
+window.
 
 ### `hydra_gate_c_adapter.dll`
 
@@ -107,6 +131,7 @@ QuerySnapshot
 StateSnapshot
 Shutdown
 Error
+ProbeSnapshot
 ```
 
 Important properties:
@@ -154,6 +179,24 @@ hydra_gate_c_adapter_get_snapshot
 ```
 
 This API is the boundary a future clean-room Windows compatibility layer can call after interposing a target API. It does not itself install that interposition.
+
+## Probe comparison snapshot
+
+The P3-API-01 comparison payload has its own `HPS1` magic, schema version,
+declared byte size, reserved fields, and fixed schema-v1 wire size. It is
+little-endian, bounded to 1024 bytes, and rejects truncated, oversized,
+malformed, or future-version data.
+
+`ProbeComparison` contains:
+
+- monotonic sequence/timestamp plus Seat, process, UI-thread, key, and transient
+  target-window context;
+- actual OS polling arrays/results, cursor/clip rectangles, and transient
+  foreground/focus/capture HWND observations;
+- direct adapter key/edge arrays, mouse/wheel, cursor/clip, virtual foreground,
+  and virtual capture state;
+- deterministic comparison flags that preserve differences rather than forcing
+  `OS == adapter`.
 
 ## Automated tests
 
@@ -253,6 +296,45 @@ The test passes only when both child exit codes are zero and cleanup completes.
 
 The host first applies sequence 2, then deliberately sends a second state-changing frame with the stale sequence 2. The target must return an `Error` frame, terminate its controlled session with the expected nonzero code, and leave no running child. Continuing after the protocol/state disagreement is a test failure.
 
+### API probe snapshot tests
+
+```powershell
+ctest --test-dir build --build-config Release -R GateCProbeSnapshotTests --output-on-failure
+```
+
+Covers exact round-trip serialization, schema/magic rejection, truncated and
+oversized payloads, malformed booleans, inconsistent comparison flags, and a
+missing target-window identity.
+
+### Local API probe self-test
+
+```powershell
+.\build\Release\hydra_gate_c_api_probe.exe --baseline-self-test
+```
+
+Creates a hidden HydraSeat-owned window, reads all baseline APIs on that UI
+thread, reads direct adapter state, and proves an intentional foreground-view
+difference without modifying global state.
+
+### Two-process API baseline and failure self-test
+
+```powershell
+.\build\Release\hydra_gate_c_host.exe `
+  --baseline-self-test `
+  --target .\build\Release\hydra_gate_c_api_probe.exe
+```
+
+The host launches two probes with different Seat adapter state and verifies:
+
+- A/B keyboard, async-edge, mouse, wheel, cursor, clip, foreground, and capture
+  adapter state never crosses processes;
+- each OS API observation was captured by the probe window's owning UI thread;
+- both adapters may report virtual foreground while neither hidden probe is the
+  real OS foreground window;
+- missing target HWND, handshake timeout, abnormal child exit, and host
+  disconnect fail closed;
+- clean shutdown and two repeated start/stop cycles leave no child process.
+
 ## Manual controlled-process run
 
 Prerequisites:
@@ -312,12 +394,15 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] Two-process synthetic no-cross-state test on Windows CI
 - [x] Child shutdown/forced cleanup
 - [x] Bounded interactive writer queues
+- [x] Versioned, bounded OS/adapter probe snapshot serialization
+- [x] Controlled API probe source and CMake/test integration
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Controlled Raw Input consumer that calls `RegisterRawInputDevices` / `GetRawInputData`
-- [ ] Controlled probe using actual Win32 polling/cursor/focus APIs through an opt-in compatibility shim
+- [ ] Windows/MSVC execution of the P3-API-01 local and two-process baseline self-tests
+- [ ] Controlled probe using actual Win32 polling/cursor/focus APIs through opt-in compatibility shims (P3-API-02/P3-API-03)
 - [ ] Clean-room API interposition for HydraSeat-owned test binaries
 - [ ] Adapter crash/watchdog recovery acceptance
 - [ ] Commercial non-anti-cheat game profile experiment
@@ -325,17 +410,13 @@ A later implementation may coalesce relative mouse movement while preserving key
 
 ## Next implementation step
 
-The next Gate C sub-stage is **controlled API interposition**, still limited to HydraSeat-owned probe executables:
+First run and pass the P3-API-01 Release Windows/MSVC build and both Win32 probe
+self-tests documented above. Only then may P3-API-02 begin controlled polling
+API interposition, still limited to HydraSeat-owned probe executables:
 
-1. Add a probe process that directly calls the ordinary Windows input/focus APIs.
-2. Add an opt-in compatibility shim loaded at process startup, not injected into an arbitrary running process.
-3. Interpose only the selected APIs for the controlled probe:
-   - `RegisterRawInputDevices`;
-   - `GetRawInputData` / `GetRawInputBuffer`;
-   - `GetAsyncKeyState` / `GetKeyState` / `GetKeyboardState`;
-   - `GetCursorPos` / `SetCursorPos` / `ClipCursor`;
-   - `GetForegroundWindow` / `GetFocus` / `GetCapture`.
-4. Make every hook call the adapter C ABI rather than owning duplicate state.
-5. Prove rollback and unhook behavior before testing any third-party executable.
+1. Add an opt-in compatibility shim loaded at process startup, not injected into an arbitrary running process.
+2. Interpose `GetAsyncKeyState`, `GetKeyState`, and `GetKeyboardState` only for the controlled probe.
+3. Make every interposed call use the adapter C ABI rather than owning duplicate state.
+4. Prove rollback and unhook behavior before proceeding to cursor/focus or Raw Input packets.
 
 Gate C is not complete until controlled probes observe Seat-local values through the API surface a real game would call.
