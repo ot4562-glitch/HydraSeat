@@ -83,6 +83,19 @@ if(MSVC)
     target_compile_options(hydra_hardware PRIVATE /W4 /permissive-)
 endif()
 
+# Phase 3 controlled-process protocol and virtual input-state core.
+add_library(hydra_gate_c_core STATIC
+    src/gate_c_protocol.cpp
+    src/gate_c_transport.cpp
+    src/virtual_input_state.cpp
+    include/hydra/gate_c_protocol.hpp
+    include/hydra/gate_c_transport.hpp
+    include/hydra/virtual_input_state.hpp
+)
+if(MSVC)
+    target_compile_options(hydra_gate_c_core PRIVATE /W4 /permissive-)
+endif()
+
 # Core Executable target (Windows GUI subsystem)
 add_executable(HydraSeat WIN32 src/main.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(HydraSeat PRIVATE hydra_hardware)
@@ -148,6 +161,40 @@ if(MSVC)
     target_compile_options(hydra_input_lab PRIVATE /W4 /permissive-)
 endif()
 
+# Phase 3 Gate C controlled target process. This is HydraSeat-owned test code,
+# not a game injector or general-purpose hook runtime.
+add_executable(hydra_gate_c_target
+    src/gate_c_target.cpp
+)
+target_link_libraries(hydra_gate_c_target PRIVATE hydra_gate_c_core)
+if(WIN32)
+    target_link_libraries(hydra_gate_c_target PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_gate_c_target PRIVATE /W4 /permissive-)
+endif()
+
+# Phase 3 Gate C host: launches only the controlled target executable and
+# routes Seat-owned Raw Input observations over the versioned named-pipe protocol.
+add_executable(hydra_gate_c_host
+    src/gate_c_host.cpp
+    src/input_router.cpp
+    src/input_observation.cpp
+    src/input_isolation.cpp
+    src/workspace_manager.cpp
+    include/hydra/input_router.hpp
+    include/hydra/input_observation.hpp
+    include/hydra/input_isolation.hpp
+    include/hydra/workspace_manager.hpp
+)
+target_link_libraries(hydra_gate_c_host PRIVATE hydra_gate_c_core hydra_hardware)
+if(WIN32)
+    target_link_libraries(hydra_gate_c_host PRIVATE ${WIN32_LIBS})
+endif()
+if(MSVC)
+    target_compile_options(hydra_gate_c_host PRIVATE /W4 /permissive-)
+endif()
+
 # Test Suite Executable Target
 enable_testing()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
@@ -200,3 +247,27 @@ if(MSVC)
 endif()
 add_test(NAME InputObservationTests COMMAND input_observation_tests)
 add_test(NAME InputLabSelfTest COMMAND hydra_input_lab --self-test)
+
+# Pure Gate C wire-protocol and process-local virtual-state tests.
+add_executable(gate_c_protocol_tests
+    tests/test_gate_c_protocol.cpp
+)
+target_link_libraries(gate_c_protocol_tests PRIVATE hydra_gate_c_core)
+if(MSVC)
+    target_compile_options(gate_c_protocol_tests PRIVATE /W4 /permissive-)
+endif()
+add_test(NAME GateCProtocolTests COMMAND gate_c_protocol_tests)
+add_test(NAME GateCTargetSelfTest COMMAND hydra_gate_c_target --self-test)
+
+if(WIN32)
+    # Launches two separate controlled target processes, performs the versioned
+    # handshake, sends different Seat states, queries snapshots, and verifies
+    # no cross-process state bleed. No device hiding or injection occurs.
+    add_test(
+        NAME GateCProcessSelfTest
+        COMMAND hydra_gate_c_host --self-test --target $<TARGET_FILE:hydra_gate_c_target>
+    )
+    set_tests_properties(GateCProcessSelfTest PROPERTIES TIMEOUT 45)
+else()
+    add_test(NAME GateCHostPortableSelfTest COMMAND hydra_gate_c_host --self-test)
+endif()
