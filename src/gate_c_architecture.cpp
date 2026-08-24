@@ -48,7 +48,8 @@ std::optional<ProcessArchitecture> architectureFromMachine(
 bool knownArtifactKind(GateCArtifactKind kind) noexcept {
     return kind == GateCArtifactKind::ControlledTarget ||
            kind == GateCArtifactKind::AdapterLibrary ||
-           kind == GateCArtifactKind::ApiProbe;
+           kind == GateCArtifactKind::ApiProbe ||
+           kind == GateCArtifactKind::PollingShim;
 }
 
 bool safeRelativeArtifactPath(std::string_view path) noexcept {
@@ -343,12 +344,16 @@ GateCArtifactManifest defaultGateCArtifactManifest() {
          "x86/hydra_gate_c_adapter.dll"},
         {ProcessArchitecture::X86, GateCArtifactKind::ApiProbe,
          "x86/hydra_gate_c_api_probe.exe"},
+        {ProcessArchitecture::X86, GateCArtifactKind::PollingShim,
+         "x86/hydra_gate_c_shim.dll"},
         {ProcessArchitecture::X64, GateCArtifactKind::ControlledTarget,
          "x64/hydra_gate_c_target.exe"},
         {ProcessArchitecture::X64, GateCArtifactKind::AdapterLibrary,
          "x64/hydra_gate_c_adapter.dll"},
         {ProcessArchitecture::X64, GateCArtifactKind::ApiProbe,
          "x64/hydra_gate_c_api_probe.exe"},
+        {ProcessArchitecture::X64, GateCArtifactKind::PollingShim,
+         "x64/hydra_gate_c_shim.dll"},
     };
     return manifest;
 }
@@ -374,20 +379,23 @@ GateCArtifactSelectionResult selectGateCArtifacts(
 
     const GateCArtifactEntry* executable = nullptr;
     const GateCArtifactEntry* adapter = nullptr;
+    const GateCArtifactEntry* shim = nullptr;
     bool architecturePresent = false;
     for (const auto& entry : manifest.entries) {
         if (entry.architecture != architecture) continue;
         architecturePresent = true;
         if (entry.kind == executableKind) executable = &entry;
         if (entry.kind == GateCArtifactKind::AdapterLibrary) adapter = &entry;
+        if (entry.kind == GateCArtifactKind::PollingShim) shim = &entry;
     }
     if (!architecturePresent) {
         return selectionFailure(ArtifactSelectionStatus::Unsupported,
                                 "requested architecture is not in the manifest");
     }
-    if (executable == nullptr || adapter == nullptr) {
+    if (executable == nullptr || adapter == nullptr ||
+        (executableKind == GateCArtifactKind::ApiProbe && shim == nullptr)) {
         return selectionFailure(ArtifactSelectionStatus::MissingArtifact,
-                                "manifest lacks the requested executable or adapter");
+                                "manifest lacks the requested executable, adapter, or shim");
     }
 
     GateCArtifactSelectionResult result;
@@ -395,7 +403,10 @@ GateCArtifactSelectionResult selectGateCArtifacts(
     result.selection = GateCArtifactSelection{
         architecture, executableKind,
         std::filesystem::path(executable->relativePath),
-        std::filesystem::path(adapter->relativePath)};
+        std::filesystem::path(adapter->relativePath),
+        executableKind != GateCArtifactKind::ApiProbe || shim == nullptr
+            ? std::filesystem::path{}
+            : std::filesystem::path(shim->relativePath)};
     return result;
 }
 
@@ -420,6 +431,9 @@ GateCArtifactSelectionResult resolveGateCArtifacts(
             (root / result.selection->executablePath).lexically_normal();
         auto adapter =
             (root / result.selection->adapterPath).lexically_normal();
+        auto shim = result.selection->shimPath.empty()
+                        ? std::filesystem::path{}
+                        : (root / result.selection->shimPath).lexically_normal();
         if (!std::filesystem::is_regular_file(executable, errorCode) ||
             errorCode) {
             return selectionFailure(ArtifactSelectionStatus::MissingArtifact,
@@ -431,11 +445,21 @@ GateCArtifactSelectionResult resolveGateCArtifacts(
             return selectionFailure(ArtifactSelectionStatus::MissingArtifact,
                                     "selected adapter artifact is missing");
         }
+        errorCode.clear();
+        if (!shim.empty() &&
+            (!std::filesystem::is_regular_file(shim, errorCode) ||
+             errorCode)) {
+            return selectionFailure(ArtifactSelectionStatus::MissingArtifact,
+                                    "selected shim artifact is missing");
+        }
 
         const auto executableArchitecture =
             detectPortableExecutableArchitecture(executable);
         const auto adapterArchitecture =
             detectPortableExecutableArchitecture(adapter);
+        const auto shimArchitecture = shim.empty()
+            ? success(architecture)
+            : detectPortableExecutableArchitecture(shim);
         const auto mapFailure = [](const ArchitectureDetectionResult& value) {
             return value.status == ArchitectureDetectionStatus::MalformedImage
                        ? ArtifactSelectionStatus::MalformedImage
@@ -451,15 +475,22 @@ GateCArtifactSelectionResult resolveGateCArtifacts(
                                     "selected adapter is not a supported PE: " +
                                         adapterArchitecture.error);
         }
+        if (!shimArchitecture) {
+            return selectionFailure(mapFailure(shimArchitecture),
+                                    "selected shim is not a supported PE: " +
+                                        shimArchitecture.error);
+        }
         if (executableArchitecture.architecture != architecture ||
-            adapterArchitecture.architecture != architecture) {
+            adapterArchitecture.architecture != architecture ||
+            shimArchitecture.architecture != architecture) {
             return selectionFailure(
                 ArtifactSelectionStatus::ArchitectureMismatch,
-                "selected executable or adapter architecture does not match the manifest");
+                "selected executable, adapter, or shim architecture does not match the manifest");
         }
 
         result.selection->executablePath = std::move(executable);
         result.selection->adapterPath = std::move(adapter);
+        result.selection->shimPath = std::move(shim);
         return result;
     } catch (...) {
         return selectionFailure(ArtifactSelectionStatus::IoError,

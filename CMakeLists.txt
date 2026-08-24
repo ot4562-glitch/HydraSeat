@@ -159,6 +159,37 @@ if(MSVC)
     target_compile_options(hydra_gate_c_adapter PRIVATE /W4 /permissive-)
 endif()
 
+# P3-API-02 process-local polling IAT transaction support and startup-loaded
+# shim. The DLL is selected per architecture and is never remotely injected.
+add_library(hydra_gate_c_shim_support STATIC
+    src/gate_c_shim_iat.cpp
+    include/hydra/win32_iat_patch.hpp
+)
+set_target_properties(hydra_gate_c_shim_support PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+if(MSVC)
+    target_compile_options(hydra_gate_c_shim_support PRIVATE /W4 /permissive-)
+endif()
+
+add_library(hydra_gate_c_shim SHARED
+    src/gate_c_shim.cpp
+    include/hydra/gate_c_shim_api.h
+)
+target_compile_definitions(hydra_gate_c_shim PRIVATE
+    HYDRA_GATE_C_SHIM_BUILD=1
+)
+target_link_libraries(hydra_gate_c_shim PRIVATE
+    hydra_gate_c_adapter hydra_gate_c_shim_support
+)
+set_target_properties(hydra_gate_c_shim PROPERTIES
+    OUTPUT_NAME hydra_gate_c_shim
+)
+hydra_set_gate_c_output(hydra_gate_c_shim)
+if(MSVC)
+    target_compile_options(hydra_gate_c_shim PRIVATE /W4 /permissive-)
+endif()
+
 # Core Executable target (Windows GUI subsystem)
 add_executable(HydraSeat WIN32 src/main.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(HydraSeat PRIVATE hydra_hardware)
@@ -383,6 +414,32 @@ if(MSVC)
 endif()
 add_test(NAME GateCAdapterCSmoke COMMAND gate_c_adapter_c_smoke)
 
+# P3-API-02 transaction, rollback, polling-semantics, and fixed C ABI tests.
+add_executable(gate_c_polling_shim_tests
+    tests/test_gate_c_polling_shim.cpp
+)
+target_link_libraries(gate_c_polling_shim_tests PRIVATE
+    hydra_gate_c_adapter hydra_gate_c_shim hydra_gate_c_shim_support
+)
+hydra_set_gate_c_output(gate_c_polling_shim_tests)
+if(WIN32)
+    target_link_libraries(gate_c_polling_shim_tests PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(gate_c_polling_shim_tests PRIVATE /W4 /permissive-)
+endif()
+add_test(NAME GateCPollingShimTests COMMAND gate_c_polling_shim_tests)
+
+add_executable(gate_c_shim_c_smoke
+    tests/test_gate_c_shim_c.c
+)
+target_link_libraries(gate_c_shim_c_smoke PRIVATE hydra_gate_c_shim)
+hydra_set_gate_c_output(gate_c_shim_c_smoke)
+if(MSVC)
+    target_compile_options(gate_c_shim_c_smoke PRIVATE /W4)
+endif()
+add_test(NAME GateCShimCSmoke COMMAND gate_c_shim_c_smoke)
+
 add_test(NAME GateCTargetSelfTest COMMAND hydra_gate_c_target --self-test)
 
 if(WIN32)
@@ -392,6 +449,7 @@ if(WIN32)
                 ${HYDRA_GATE_C_ARCH_NAME}
                 $<TARGET_FILE:hydra_gate_c_target>
                 $<TARGET_FILE:hydra_gate_c_adapter>
+                $<TARGET_FILE:hydra_gate_c_shim>
     )
 
     add_test(
@@ -399,6 +457,13 @@ if(WIN32)
         COMMAND hydra_gate_c_api_probe --baseline-self-test
     )
     set_tests_properties(GateCApiProbeSelfTest PROPERTIES TIMEOUT 15)
+
+    add_test(
+        NAME GateCPollingShimProbeSelfTest
+        COMMAND hydra_gate_c_api_probe --polling-shim-self-test
+                --shim $<TARGET_FILE:hydra_gate_c_shim>
+    )
+    set_tests_properties(GateCPollingShimProbeSelfTest PROPERTIES TIMEOUT 20)
 endif()
 
 if(WIN32)
@@ -422,6 +487,14 @@ if(WIN32)
         COMMAND hydra_gate_c_host --baseline-self-test --target $<TARGET_FILE:hydra_gate_c_api_probe>
     )
     set_tests_properties(GateCApiProbeProcessSelfTest PROPERTIES TIMEOUT 60)
+
+    add_test(
+        NAME GateCPollingShimProcessSelfTest
+        COMMAND hydra_gate_c_host --polling-shim-self-test
+                --target $<TARGET_FILE:hydra_gate_c_api_probe>
+                --shim $<TARGET_FILE:hydra_gate_c_shim>
+    )
+    set_tests_properties(GateCPollingShimProcessSelfTest PROPERTIES TIMEOUT 75)
 else()
     add_test(NAME GateCHostPortableSelfTest COMMAND hydra_gate_c_host --self-test)
 endif()

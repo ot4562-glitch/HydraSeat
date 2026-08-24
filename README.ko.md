@@ -353,7 +353,7 @@ Gate C는 HydraSeat 소유 controlled target만 실행하고 versioned host/targ
 현재 기본 packet:
 
 ```text
-P3-API-01 — Controlled Win32 API probe baseline
+P3-API-02 — Startup-loaded polling API shim for controlled probes
 ```
 
 작업 시작 전:

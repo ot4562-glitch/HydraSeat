@@ -1,5 +1,6 @@
 #include "hydra/gate_c_adapter.h"
 #include "hydra/gate_c_architecture.hpp"
+#include "hydra/gate_c_shim_api.h"
 #include "hydra/gate_c_probe_snapshot.hpp"
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/gate_c_transport.hpp"
@@ -10,6 +11,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -106,6 +108,9 @@ struct ProbeOptions {
     bool tokenSet{false};
     bool headless{false};
     bool baselineSelfTest{false};
+    bool pollingShim{false};
+    bool pollingShimSelfTest{false};
+    std::wstring shimPath;
     bool testMissingWindow{false};
     bool testNoHandshake{false};
     bool testAbnormalExit{false};
@@ -118,8 +123,10 @@ void printUsage(std::ostream& output) {
         << "Usage:\n"
         << "  hydra_gate_c_api_probe --pipe <name> --seat <id> --token <32-hex> [--headless]\n"
         << "  hydra_gate_c_api_probe --baseline-self-test\n\n"
+        << "  hydra_gate_c_api_probe --polling-shim-self-test --shim <hydra_gate_c_shim.dll>\n\n"
         << "The probe reads ordinary Win32 APIs and the direct Gate C adapter side\n"
-        << "by side. It does not patch, hook, inject, or mutate global input state.\n";
+        << "by side. The polling mode loads only the explicitly supplied HydraSeat\n"
+        << "shim at startup and restores its process-local IAT before unload.\n";
 }
 
 #ifdef _WIN32
@@ -181,6 +188,13 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
             options.headless = true;
         } else if (argument == L"--baseline-self-test") {
             options.baselineSelfTest = true;
+        } else if (argument == L"--polling-shim") {
+            options.pollingShim = true;
+        } else if (argument == L"--polling-shim-self-test") {
+            options.pollingShim = true;
+            options.pollingShimSelfTest = true;
+        } else if (argument == L"--shim" && index + 1 < argc) {
+            options.shimPath = argv[++index];
         } else if (argument == L"--test-missing-window") {
             options.testMissingWindow = true;
         } else if (argument == L"--test-no-handshake") {
@@ -196,7 +210,8 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
 
     const bool connectedMode = !options.pipeName.empty() ||
         options.seatId != 0 || options.tokenSet;
-    if (!options.showHelp && !options.baselineSelfTest && !connectedMode) {
+    if (!options.showHelp && !options.baselineSelfTest &&
+        !options.pollingShimSelfTest && !connectedMode) {
         valid = false;
     }
     if (connectedMode &&
@@ -205,8 +220,136 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
         valid = false;
     }
     if (options.testMissingWindow && options.testNoHandshake) valid = false;
+    if (options.pollingShim && options.shimPath.empty()) valid = false;
+    if (options.pollingShimSelfTest && connectedMode) valid = false;
     return options;
 }
+
+class ShimOwner {
+public:
+    using ApiVersionFunction = std::uint32_t(HYDRA_GATE_C_SHIM_CALL*)(void);
+    using InstallFunction = HydraGateCShimResult(HYDRA_GATE_C_SHIM_CALL*)(
+        HydraGateCAdapterHandle, const HydraGateCShimConfigV1*);
+    using MarkUnavailableFunction =
+        HydraGateCShimResult(HYDRA_GATE_C_SHIM_CALL*)(void);
+    using UninstallFunction =
+        HydraGateCShimResult(HYDRA_GATE_C_SHIM_CALL*)(void);
+    using StatusFunction = HydraGateCShimResult(HYDRA_GATE_C_SHIM_CALL*)(
+        HydraGateCShimStatusV1*);
+
+    ~ShimOwner() {
+        if (m_module != nullptr) {
+            if (m_installed && !uninstall()) return;
+            if (!m_unloadSafe) return;
+            FreeLibrary(m_module);
+        }
+    }
+
+    ShimOwner(const ShimOwner&) = delete;
+    ShimOwner& operator=(const ShimOwner&) = delete;
+    ShimOwner() = default;
+
+    bool loadAndInstall(const std::wstring& path,
+                        HydraGateCAdapterHandle adapter,
+                        std::uint32_t seatId) {
+        if (m_module != nullptr || path.empty() || adapter == nullptr) {
+            return false;
+        }
+        m_module = LoadLibraryW(path.c_str());
+        if (m_module == nullptr) return false;
+        m_apiVersion = resolve<ApiVersionFunction>(
+            "hydra_gate_c_shim_api_version");
+        m_install = resolve<InstallFunction>("hydra_gate_c_shim_install");
+        m_markUnavailable = resolve<MarkUnavailableFunction>(
+            "hydra_gate_c_shim_mark_adapter_unavailable");
+        m_uninstall = resolve<UninstallFunction>(
+            "hydra_gate_c_shim_uninstall");
+        m_status = resolve<StatusFunction>("hydra_gate_c_shim_get_status");
+        if (m_apiVersion == nullptr || m_install == nullptr ||
+            m_markUnavailable == nullptr || m_uninstall == nullptr ||
+            m_status == nullptr ||
+            m_apiVersion() != HYDRA_GATE_C_SHIM_API_VERSION) {
+            FreeLibrary(m_module);
+            m_module = nullptr;
+            return false;
+        }
+        HydraGateCShimConfigV1 config{};
+        config.struct_size = sizeof(config);
+        config.api_version = HYDRA_GATE_C_SHIM_API_VERSION;
+        config.seat_id = seatId;
+        config.process_id = GetCurrentProcessId();
+        const auto result = m_install(adapter, &config);
+        m_installed = result == HYDRA_GATE_C_SHIM_OK ||
+                      result == HYDRA_GATE_C_SHIM_ALREADY_INSTALLED;
+        if (!m_installed) {
+            const auto value = status();
+            m_unloadSafe = value && value->patched_api_mask == 0u &&
+                           value->rollback_complete == 1u;
+        }
+        return m_installed;
+    }
+
+    bool active() const {
+        const auto value = status();
+        return value && value->lifecycle == HYDRA_GATE_C_SHIM_ACTIVE &&
+               value->adapter_available == 1u &&
+               value->patched_api_mask ==
+                   HYDRA_GATE_C_SHIM_POLLING_API_MASK;
+    }
+
+    std::optional<HydraGateCShimStatusV1> status() const {
+        if (m_status == nullptr) return std::nullopt;
+        HydraGateCShimStatusV1 value{};
+        value.struct_size = sizeof(value);
+        if (m_status(&value) != HYDRA_GATE_C_SHIM_OK) return std::nullopt;
+        return value;
+    }
+
+    void markUnavailable() noexcept {
+        if (m_installed && m_markUnavailable != nullptr) {
+            (void)m_markUnavailable();
+        }
+    }
+
+    bool uninstall() noexcept {
+        if (!m_installed) return true;
+        if (m_uninstall == nullptr || m_uninstall() != HYDRA_GATE_C_SHIM_OK) {
+            return false;
+        }
+        m_installed = false;
+        const auto value = status();
+        m_unloadSafe = value &&
+            value->lifecycle == HYDRA_GATE_C_SHIM_INACTIVE &&
+            value->patched_api_mask == 0u &&
+            value->restored_api_mask ==
+                HYDRA_GATE_C_SHIM_POLLING_API_MASK &&
+            value->rollback_complete == 1u;
+        return m_unloadSafe;
+    }
+
+private:
+    template <typename Function>
+    Function resolve(const char* name) const noexcept {
+        auto address = GetProcAddress(m_module, name);
+#if defined(_M_IX86)
+        if (address == nullptr) {
+            std::string decorated = "_";
+            decorated += name;
+            address = GetProcAddress(m_module, decorated.c_str());
+        }
+#endif
+        return reinterpret_cast<Function>(address);
+    }
+
+    HMODULE m_module{nullptr};
+    ApiVersionFunction m_apiVersion{nullptr};
+    InstallFunction m_install{nullptr};
+    MarkUnavailableFunction m_markUnavailable{nullptr};
+    UninstallFunction m_uninstall{nullptr};
+    StatusFunction m_status{nullptr};
+    bool m_installed{false};
+    bool m_unloadSafe{true};
+};
 
 ProbeComparison captureComparison(HydraGateCAdapterHandle adapter,
                                   std::uint64_t sequence,
@@ -384,6 +527,80 @@ int runLocalBaselineSelfTest(HINSTANCE instance) {
     return EXIT_SUCCESS;
 }
 
+int runLocalPollingShimSelfTest(HINSTANCE instance,
+                                const std::wstring& shimPath) {
+    AdapterOwner adapter;
+    if (!adapter || hydra_gate_c_adapter_api_version() !=
+                        HYDRA_GATE_C_ADAPTER_API_VERSION ||
+        !registerProbeWindowClass(instance)) {
+        return 13;
+    }
+    const auto processArchitecture = hydra::gatec::detectProcessArchitecture(
+        GetCurrentProcess());
+    const auto shimArchitecture =
+        hydra::gatec::detectPortableExecutableArchitecture(
+            std::filesystem::path(shimPath));
+    if (!processArchitecture || !shimArchitecture ||
+        processArchitecture.architecture != shimArchitecture.architecture) {
+        return 14;
+    }
+    const HWND window = CreateWindowExW(
+        0, kWindowClass, L"HydraSeat Polling Shim Self-Test",
+        WS_OVERLAPPEDWINDOW, 0, 0, 320, 200,
+        nullptr, nullptr, instance, nullptr);
+    if (window == nullptr) return 15;
+
+    const auto beforeInstall = captureComparison(
+        adapter.get(), 1, 1, 0x41, window);
+
+    InputEventMessage key;
+    key.kind = hydra::gatec::InputKind::Keyboard;
+    key.keyTransition = hydra::gatec::KeyTransition::Down;
+    key.vkey = 0x41;
+    auto adapterKey = toAdapterEvent(key);
+    if (hydra_gate_c_adapter_apply_input(adapter.get(), 1, &adapterKey) !=
+        HYDRA_GATE_C_ADAPTER_OK) {
+        DestroyWindow(window);
+        return 16;
+    }
+
+    ShimOwner shim;
+    if (!shim.loadAndInstall(shimPath, adapter.get(), 1) || !shim.active()) {
+        DestroyWindow(window);
+        return 17;
+    }
+    const auto comparison = captureComparison(
+        adapter.get(), 2, 1, 0x41, window);
+    const bool virtualized =
+        (static_cast<std::uint16_t>(comparison.os.asyncKeyState) & 0xffffu) ==
+            0x8001u &&
+        (static_cast<std::uint16_t>(comparison.os.keyState) & 0xffffu) ==
+            0x8000u &&
+        comparison.os.keyboardStateSucceeded &&
+        comparison.os.keyboardState[0x41] == 0x80u &&
+        comparison.os.keyboardState[0x42] == 0u &&
+        comparison.asyncDownMatches && comparison.keyStateDownMatches &&
+        comparison.keyboardStateDownMatches;
+    const bool restored = shim.uninstall();
+    const auto afterUninstall = captureComparison(
+        adapter.get(), 3, 1, 0x41, window);
+    const bool lifecycleSnapshots =
+        beforeInstall.monotonicTimestampMicros != 0 &&
+        comparison.monotonicTimestampMicros >=
+            beforeInstall.monotonicTimestampMicros &&
+        afterUninstall.monotonicTimestampMicros >=
+            comparison.monotonicTimestampMicros &&
+        beforeInstall.os.keyboardStateSucceeded &&
+        afterUninstall.os.keyboardStateSucceeded;
+    DestroyWindow(window);
+    if (!virtualized || !restored || !lifecycleSnapshots) return 18;
+    std::cout
+        << "HydraSeat Gate C polling shim self-test passed: startup-loaded "
+           "ordinary polling calls used adapter state and uninstall restored "
+           "the original IAT pointers.\n";
+    return EXIT_SUCCESS;
+}
+
 class ControlledProbe {
 public:
     explicit ControlledProbe(ProbeOptions options)
@@ -395,20 +612,25 @@ public:
                               HYDRA_GATE_C_ADAPTER_API_VERSION) {
             return 19;
         }
+        if (m_options.pollingShim &&
+            !m_shim.loadAndInstall(m_options.shimPath, m_adapter.get(),
+                                   m_options.seatId)) {
+            return 18;
+        }
         if (m_options.testNoHandshake) {
             Sleep(2000);
-            return 78;
+            return finish(78);
         }
         if (!m_options.testMissingWindow && !createWindow(showCommand)) {
-            return 20;
+            return finish(20);
         }
         if (!connectAndHandshake()) {
             destroyWindow();
-            return 21;
+            return finish(21);
         }
         if (m_options.testAbnormalExit) {
             destroyWindow();
-            return 77;
+            return finish(77);
         }
 
         m_reader = std::jthread(
@@ -429,10 +651,15 @@ public:
         m_reader.request_stop();
         m_reader.join();
         m_channel.close();
-        return m_exitCode.load();
+        return finish(m_exitCode.load());
     }
 
 private:
+    int finish(int exitCode) noexcept {
+        if (m_options.pollingShim && !m_shim.uninstall()) return 27;
+        return exitCode;
+    }
+
     struct CaptureRequest {
         std::mutex mutex;
         std::condition_variable condition;
@@ -549,11 +776,12 @@ private:
             response.frame->sequence != 1 || !ack.accepted) {
             return false;
         }
+        const auto requiredCapabilities = m_options.pollingShim
+            ? hydra::gatec::kControlledPollingProbeCapabilities
+            : hydra::gatec::kControlledApiProbeCapabilities;
         if ((ack.grantedCapabilities &
-             hydra::gatec::testCapabilityBits(
-                 hydra::gatec::kControlledApiProbeCapabilities)) !=
-            hydra::gatec::testCapabilityBits(
-                hydra::gatec::kControlledApiProbeCapabilities)) {
+             hydra::gatec::testCapabilityBits(requiredCapabilities)) !=
+            hydra::gatec::testCapabilityBits(requiredCapabilities)) {
             return false;
         }
         m_connected.store(true);
@@ -565,10 +793,14 @@ private:
             const auto result = m_channel.readFrame(kReadPollMs);
             if (result.status == TransportStatus::Timeout) continue;
             if (!result || !result.frame) {
-                if (!m_shutdownReceived.load()) m_exitCode.store(24);
+                if (!m_shutdownReceived.load()) {
+                    m_shim.markUnavailable();
+                    m_exitCode.store(24);
+                }
                 break;
             }
             if (!processFrame(*result.frame)) {
+                m_shim.markUnavailable();
                 m_exitCode.store(23);
                 break;
             }
@@ -684,6 +916,12 @@ private:
         const auto comparison = captureComparison(
             m_adapter.get(), request->sequence, m_options.seatId,
             request->probeVkey, window);
+        if (m_options.pollingShim && !m_shim.active()) {
+            std::scoped_lock lock(request->mutex);
+            request->cancelled = true;
+            request->condition.notify_all();
+            return;
+        }
         {
             std::scoped_lock lock(request->mutex);
             if (!request->cancelled) request->comparison = comparison;
@@ -774,6 +1012,7 @@ private:
     std::atomic<HWND> m_hwnd{nullptr};
     PipeChannel m_channel;
     AdapterOwner m_adapter;
+    ShimOwner m_shim;
     std::jthread m_reader;
     std::atomic<bool> m_connected{false};
     std::atomic<bool> m_stopping{false};
@@ -800,6 +1039,10 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (options.baselineSelfTest && options.pipeName.empty()) {
         return runLocalBaselineSelfTest(GetModuleHandleW(nullptr));
+    }
+    if (options.pollingShimSelfTest) {
+        return runLocalPollingShimSelfTest(
+            GetModuleHandleW(nullptr), options.shimPath);
     }
     ControlledProbe probe(options);
     return probe.run(GetModuleHandleW(nullptr), SW_SHOWNORMAL);

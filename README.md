@@ -421,7 +421,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-API-01 — Controlled Win32 API probe baseline
+P3-API-02 — Startup-loaded polling API shim for controlled probes
 ```
 
 Start every coding task by reading:
