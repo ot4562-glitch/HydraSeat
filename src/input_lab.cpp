@@ -401,7 +401,8 @@ private:
         const int spacing = 24;
         const int screenWidth = GetSystemMetrics(SM_CXSCREEN);
         const int totalWidth = width * 2 + spacing;
-        const int left = std::max(20, (screenWidth - totalWidth) / 2);
+        const int centeredLeft = (screenWidth - totalWidth) / 2;
+        const int left = centeredLeft > 20 ? centeredLeft : 20;
 
         for (std::size_t index = 0; index < m_visibleSeatIds.size(); ++index) {
             const SeatId seatId = m_visibleSeatIds[index];
@@ -506,7 +507,9 @@ private:
             return output.str();
         }
         constexpr std::size_t kMaxVisibleDevices = 6;
-        const std::size_t visible = std::min(devices.size(), kMaxVisibleDevices);
+        const std::size_t visible = devices.size() < kMaxVisibleDevices
+                                        ? devices.size()
+                                        : kMaxVisibleDevices;
         for (std::size_t index = 0; index < visible; ++index) {
             const auto& device = devices[index];
             output << L"  - " << device.deviceId
