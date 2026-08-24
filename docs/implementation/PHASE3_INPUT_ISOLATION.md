@@ -59,7 +59,7 @@ all required packets -> P3-CLOSE-01
 
 ## P3-API-01 — Controlled Win32 API probe baseline
 
-**State:** IN_PROGRESS
+**State:** VALIDATED
 
 **Goal**
 
