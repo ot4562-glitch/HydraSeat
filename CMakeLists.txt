@@ -45,6 +45,7 @@ set(HYDRA_HARDWARE_SOURCES
 set(HYDRA_SOURCES
     src/input_router.cpp
     src/input_isolation.cpp
+    src/input_observation.cpp
     src/display_manager.cpp
     src/workspace_manager.cpp
     src/game_launcher.cpp
@@ -62,6 +63,7 @@ set(HYDRA_HARDWARE_HEADERS
 set(HYDRA_HEADERS
     include/hydra/input_router.hpp
     include/hydra/input_isolation.hpp
+    include/hydra/input_observation.hpp
     include/hydra/display_manager.hpp
     include/hydra/workspace_manager.hpp
     include/hydra/game_launcher.hpp
@@ -125,6 +127,27 @@ if(MSVC)
     target_compile_options(hydra_plan PRIVATE /W4 /permissive-)
 endif()
 
+# Phase 3 Gate A/B observation and explicit-routing harness.
+# The interactive windows are Windows-only, while --self-test is portable.
+add_executable(hydra_input_lab
+    src/input_lab.cpp
+    src/input_router.cpp
+    src/input_observation.cpp
+    src/input_isolation.cpp
+    src/workspace_manager.cpp
+    include/hydra/input_router.hpp
+    include/hydra/input_observation.hpp
+    include/hydra/input_isolation.hpp
+    include/hydra/workspace_manager.hpp
+)
+target_link_libraries(hydra_input_lab PRIVATE hydra_hardware)
+if(WIN32)
+    target_link_libraries(hydra_input_lab PRIVATE ${WIN32_LIBS})
+endif()
+if(MSVC)
+    target_compile_options(hydra_input_lab PRIVATE /W4 /permissive-)
+endif()
+
 # Test Suite Executable Target
 enable_testing()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
@@ -160,3 +183,20 @@ if(MSVC)
 endif()
 add_test(NAME IsolationPlannerTests COMMAND isolation_planner_tests)
 add_test(NAME IsolationPlanObservation COMMAND hydra_plan observation-harness)
+
+# Pure Gate A/B observation and explicit Seat-routing tests.
+add_executable(input_observation_tests
+    tests/test_input_observation.cpp
+    src/input_observation.cpp
+    src/input_isolation.cpp
+    src/workspace_manager.cpp
+    include/hydra/input_observation.hpp
+    include/hydra/input_isolation.hpp
+    include/hydra/input_router.hpp
+    include/hydra/workspace_manager.hpp
+)
+if(MSVC)
+    target_compile_options(input_observation_tests PRIVATE /W4 /permissive-)
+endif()
+add_test(NAME InputObservationTests COMMAND input_observation_tests)
+add_test(NAME InputLabSelfTest COMMAND hydra_input_lab --self-test)

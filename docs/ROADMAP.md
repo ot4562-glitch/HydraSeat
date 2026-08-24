@@ -49,8 +49,10 @@ Design:
 - [x] Add `hydra_plan` diagnostics CLI and profile templates
 
 Feasibility gates:
-- [ ] Gate A — two-window observation harness with hot-plug diagnostics
-- [ ] Gate B — explicit per-device routing to two HydraSeat-owned target windows
+- [x] Gate A implementation — two-window Raw Input observation harness, per-device state ledger, composite-HID-aware hot-plug diagnostics, and JSONL trace
+- [ ] Gate A physical acceptance — validate two keyboards/two pointing devices and repeated hot-plug on the target Windows PC
+- [x] Gate B implementation — fail-closed exclusive-device routing to two HydraSeat-owned target windows
+- [ ] Gate B physical acceptance — validate Seat counters and trace routing with the user's saved hardware profile
 - [ ] Gate C — per-process Raw Input, key-state, cursor and focus virtualization in HydraSeat test processes
 - [ ] Gate D — optional HidHide session-cloak experiment with watchdog and crash rollback
 - [ ] Gate E — two different non-anti-cheat games with measured zero cross-seat input bleed
@@ -60,6 +62,8 @@ Exit condition:
 - [ ] Demonstrate clean rollback to ordinary single-user Windows behavior
 
 Detailed design: [PHASE3_INPUT_ISOLATION_DESIGN.md](PHASE3_INPUT_ISOLATION_DESIGN.md)
+
+Gate A/B testing: [PHASE3_GATE_A_B_TESTING.md](PHASE3_GATE_A_B_TESTING.md)
 
 ---
 

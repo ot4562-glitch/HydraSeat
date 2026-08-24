@@ -7,6 +7,7 @@
 #include <cwctype>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 
 #pragma comment(lib, "comctl32.lib")
 
@@ -336,7 +337,7 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
 
     m_hwnd = CreateWindowExW(
         0, L"HydraSeatMainWindowClass",
-        L"HydraSeat - ASTER Multiseat Partition Control Center",
+        L"HydraSeat - Seat Composition Control Center",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, 980, 750,
         NULL, NULL, hInstance, NULL
@@ -345,13 +346,24 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
     if (!m_hwnd) return false;
 
     setupUI();
-    m_inputRouter.initialize(reinterpret_cast<uint64_t>(m_hwnd));
-    refreshHardware();
-
-    // Hook global raw input events to trigger live YELLOW BORDER highlights on device tiles
+    // Hook diagnostics before device-change notifications begin. The main UI
+    // remains a configuration surface; it does not claim zero-bleed isolation.
     m_inputRouter.setGlobalCallback([this](const RawInputEvent& evt) {
         triggerDeviceFlash(evt.deviceHandle, evt.devicePath, evt.rawDevType, evt.isTouchpad);
     });
+    if (!m_inputRouter.initialize(reinterpret_cast<uint64_t>(m_hwnd))) {
+        return false;
+    }
+    m_inputRouter.setDeviceChangeCallback([this](const RawInputDeviceChange& change) {
+        if (g_diagLog.is_open()) {
+            g_diagLog << L"[DEVICE-CHANGE] "
+                      << (change.kind == RawInputDeviceChangeKind::Arrival ? L"arrival" : L"removal")
+                      << L" id=" << change.device.deviceId
+                      << L" path=" << change.device.devicePath << std::endl;
+        }
+        refreshHardware();
+    });
+    refreshHardware();
 
     SetTimer(m_hwnd, TIMER_FLASH_RESET, 50, NULL);
 
@@ -477,11 +489,11 @@ void Win32App::setupUI() {
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
         20, 80, 290, 540, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
-    m_p1Group = CreateWindowExW(0, L"BUTTON", L"Player 1 Workspace",
+    m_p1Group = CreateWindowExW(0, L"BUTTON", L"Player 1 Seat",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
         330, 80, 290, 540, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
-    m_p2Group = CreateWindowExW(0, L"BUTTON", L"Player 2 Workspace",
+    m_p2Group = CreateWindowExW(0, L"BUTTON", L"Player 2 Seat",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
         640, 80, 290, 540, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
@@ -493,12 +505,12 @@ void Win32App::setupUI() {
     SendMessageW(m_p2Group, WM_SETFONT, (WPARAM)hFontBold, TRUE);
 
     // Isolation Toggle Button
-    m_isolationBtn = CreateWindowExW(0, L"BUTTON", L"Lock & Isolate Workspace Inputs: OFF",
+    m_isolationBtn = CreateWindowExW(0, L"BUTTON", L"Phase 3 Diagnostic Routing Intent: OFF",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         20, 642, 440, 42, m_hwnd, (HMENU)ID_BTN_ISOLATION, GetModuleHandle(NULL), NULL);
 
     // Launch Button at bottom
-    m_launchBtn = CreateWindowExW(0, L"BUTTON", L"Launch Multiseat Game Session",
+    m_launchBtn = CreateWindowExW(0, L"BUTTON", L"Launch Phase 3 Input Lab",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         490, 642, 440, 42, m_hwnd, (HMENU)ID_BTN_LAUNCH, GetModuleHandle(NULL), NULL);
 
@@ -868,28 +880,91 @@ void Win32App::loadWorkspaceProfile() {
 }
 
 void Win32App::toggleIsolationMode() {
-    bool current = m_inputRouter.isIsolationMode();
+    const bool current = m_inputRouter.isIsolationMode();
     m_inputRouter.setIsolationMode(!current);
 
     if (!current) {
-        SetWindowTextW(m_isolationBtn, L"Lock & Isolate Workspace Inputs: ON");
-        MessageBoxW(m_hwnd, L"Multiseat Input Isolation Activated!\n\nKeystrokes & mouse inputs are locked exclusively to their assigned Player Workspaces.", L"HydraSeat Input Isolation Engine", MB_OK | MB_ICONINFORMATION);
+        SetWindowTextW(m_isolationBtn, L"Phase 3 Diagnostic Routing Intent: ON");
+        MessageBoxW(
+            m_hwnd,
+            L"Diagnostic routing intent is ON.\n\nThis flag does not hide physical devices, suppress normal Windows input, virtualize game key state, or guarantee zero input bleed. Use the Phase 3 Input Lab to validate Gate A/B behavior.",
+            L"HydraSeat Phase 3 Diagnostics", MB_OK | MB_ICONWARNING);
     } else {
-        SetWindowTextW(m_isolationBtn, L"Lock & Isolate Workspace Inputs: OFF");
+        SetWindowTextW(m_isolationBtn, L"Phase 3 Diagnostic Routing Intent: OFF");
     }
 }
 
 void Win32App::launchMultiseat() {
-    MessageBoxW(m_hwnd,
-        L"Multiseat Inputs & Displays Routed Successfully!\n\nLaunching target game instances...",
-        L"HydraSeat Multiseat Launcher",
-        MB_OK | MB_ICONINFORMATION);
+    wchar_t modulePath[MAX_PATH]{};
+    const DWORD moduleLength = GetModuleFileNameW(
+        nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
+    if (moduleLength == 0 || moduleLength >= std::size(modulePath)) {
+        MessageBoxW(m_hwnd, L"Could not locate the HydraSeat executable directory.",
+                    L"HydraSeat Phase 3 Input Lab", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    std::wstring labPath(modulePath, moduleLength);
+    const auto separator = labPath.find_last_of(L"\\/");
+    if (separator != std::wstring::npos) {
+        labPath.resize(separator + 1);
+    } else {
+        labPath.clear();
+    }
+    labPath += L"hydra_input_lab.exe";
+
+    const DWORD attributes = GetFileAttributesW(labPath.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES ||
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        MessageBoxW(
+            m_hwnd,
+            L"hydra_input_lab.exe was not found next to HydraSeat.exe. Build the Phase 3 Gate A/B target first.",
+            L"HydraSeat Phase 3 Input Lab", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    wchar_t profilePath[MAX_PATH]{};
+    const DWORD profileLength = GetFullPathNameW(
+        L"workspace_config.json", static_cast<DWORD>(std::size(profilePath)),
+        profilePath, nullptr);
+    const std::wstring profile =
+        profileLength > 0 && profileLength < std::size(profilePath)
+            ? std::wstring(profilePath, profileLength)
+            : L"workspace_config.json";
+
+    std::wstring commandLine = L"\"" + labPath +
+        L"\" --profile \"" + profile + L"\"";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(
+            labPath.c_str(), commandLine.data(), nullptr, nullptr, FALSE, 0,
+            nullptr, nullptr, &startup, &process)) {
+        const DWORD error = GetLastError();
+        const std::wstring message =
+            L"Could not start hydra_input_lab.exe. Win32 error: " +
+            std::to_wstring(error);
+        MessageBoxW(m_hwnd, message.c_str(), L"HydraSeat Phase 3 Input Lab",
+                    MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    MessageBoxW(
+        m_hwnd,
+        L"The Phase 3 Gate A/B Input Lab was launched.\n\nIt observes and diagnoses Seat routing only. Normal Windows input remains active, so this is not a zero-bleed game session.",
+        L"HydraSeat Phase 3 Input Lab", MB_OK | MB_ICONINFORMATION);
 }
 
 LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (uMsg == WM_INPUT && g_appInstance) {
         g_appInstance->m_inputRouter.handleRawInput(reinterpret_cast<HRAWINPUT>(lParam));
         return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+    } else if (uMsg == WM_INPUT_DEVICE_CHANGE && g_appInstance) {
+        g_appInstance->m_inputRouter.handleDeviceChange(
+            wParam, reinterpret_cast<HANDLE>(lParam));
+        return 0;
     } else if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && g_appInstance) {
         // Fallback for injected/synthetic keys (like Asus Gaming Keyboards) that bypass WM_INPUT
         uint64_t now = GetTickCount64();
@@ -934,9 +1009,6 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
 int Win32App::run() {
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
-        if (g_appInstance) {
-            g_appInstance->m_inputRouter.processMessages();
-        }
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }

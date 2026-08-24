@@ -261,7 +261,7 @@ The roadmap is intentionally incremental.
 - **Phase 0 — Research & Foundation:** complete, including related-system and clean-room research.
 - **Phase 1 — Hardware Detection:** complete and validated with Windows/MSVC CI.
 - **Phase 2 — Seat Composition / Assignment UI:** complete in the current Win32 prototype, including multi-display Seats, primary-display selection, exclusive device ownership, and validated JSON profiles.
-- **Phase 3 — Input Compatibility / Isolation:** current. The capability planner, backend descriptors, profile templates, diagnostics CLI, and safety policies are implemented. Actual process injection, device hiding, and verified zero-bleed enforcement are **not** implemented yet.
+- **Phase 3 — Input Compatibility / Isolation:** current. The capability planner and the Gate A/B `hydra_input_lab` observation/routing harness are implemented. Physical Gate A/B acceptance, process-local state virtualization, device cloaking, and verified zero-bleed enforcement are **not** complete yet.
 - **Later phases:** display routing, virtual displays, two-game MVP verification, game profiles, Seat shell, and extension adapters.
 
 The most important technical milestone is not simply launching two windows. It is proving that two people can concurrently use different games/apps on different Seat display groups **without either user's keyboard/mouse input or foreground behavior interfering with the other Seat.**
@@ -289,11 +289,34 @@ The output identifies:
 
 Even when ProtoInput and HidHide are marked available, the built-in planner still reports zero-bleed profiles as unsupported until a backend has **actually demonstrated verified physical input suppression**. HidHide is modeled only as physical-device cloaking at this stage.
 
+### Gate A/B Input Lab
+
+`hydra_input_lab` is the first executable Phase 3 feasibility harness. It opens two HydraSeat-owned Seat windows, observes Raw Input from stable physical device identities, tracks key/button and hot-plug state, and routes exclusive Seat-owned input to exactly one diagnostic target window.
+
+```powershell
+.\build\Release\hydra_input_lab.exe --no-profile
+.\build\Release\hydra_input_lab.exe --profile workspace_config.json
+.\build\Release\hydra_input_lab.exe --profile workspace_config.json --trace phase3-input-lab.jsonl
+.\build\Release\hydra_input_lab.exe --self-test
+```
+
+The lab is deliberately limited:
+
+- it does not inject a game process;
+- it does not install or control HidHide;
+- it does not suppress normal Windows input;
+- it does not virtualize polling, cursor, capture, or foreground state;
+- shared input devices are treated as ambiguous and fail closed;
+- every JSONL route record states that native OS input remains unsuppressed.
+
+Implementation is complete, but the physical acceptance checklist still needs to be run with the user's actual two-keyboard/two-mouse setup. See [Phase 3 Gate A/B testing](docs/PHASE3_GATE_A_B_TESTING.md).
+
 Research and implementation specifications:
 
 - [Related systems and source/license matrix](docs/RELATED_SYSTEMS_RESEARCH.md)
 - [Phase 3 input-isolation architecture](docs/PHASE3_INPUT_ISOLATION_DESIGN.md)
 - [Clean-room and third-party source policy](docs/CLEAN_ROOM_POLICY.md)
+- [Gate A/B physical input-lab procedure](docs/PHASE3_GATE_A_B_TESTING.md)
 
 
 ---
@@ -319,3 +342,5 @@ See [docs/PHASE0_RESEARCH.md](docs/PHASE0_RESEARCH.md) for the early technology 
 See [docs/RELATED_SYSTEMS_RESEARCH.md](docs/RELATED_SYSTEMS_RESEARCH.md) and [docs/PHASE3_INPUT_ISOLATION_DESIGN.md](docs/PHASE3_INPUT_ISOLATION_DESIGN.md) for the current compatibility research and Phase 3 design.
 
 See [docs/CLEAN_ROOM_POLICY.md](docs/CLEAN_ROOM_POLICY.md) before using external source or binaries.
+
+See [docs/PHASE3_GATE_A_B_TESTING.md](docs/PHASE3_GATE_A_B_TESTING.md) before claiming Gate A/B physical acceptance.

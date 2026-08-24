@@ -326,6 +326,7 @@ public:
     bool bindDevice(std::wstring deviceId, SeatId seatId);
     bool unbindDevice(std::wstring_view deviceId);
     void clearSeat(SeatId seatId);
+    void clear() noexcept { m_deviceOwners.clear(); }
 
     std::optional<SeatId> ownerOf(std::wstring_view deviceId) const;
     InputRouteDecision route(std::wstring_view deviceId,

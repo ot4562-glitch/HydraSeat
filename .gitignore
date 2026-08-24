@@ -52,5 +52,8 @@ ui_*.h
 *.tmp
 *.bak
 
+hydra_input_lab*.jsonl
+phase3-input-lab*.jsonl
+
 # Local AI-agent scratch files
 .ai-bridge/

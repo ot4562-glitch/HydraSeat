@@ -476,7 +476,9 @@ Only after Gate E may Phase 3 be marked complete.
 | Policy rejection/diagnostics | Yes | No | No | No |
 | Profile parsing/validation | Yes | No | No | No |
 | Backend availability probe | Partial | Yes | No | No |
-| Raw Input event state machine | Yes with fixtures | Yes | Optional | No |
+| Raw Input event state machine | Yes with fixtures | Yes | Gate A acceptance pending | No |
+| Explicit Seat target routing | Yes | Yes | Gate B acceptance pending | No |
+| JSONL hot-plug/route diagnostics | Yes | Yes | Gate A/B acceptance pending | No |
 | Adapter protocol/handshake | Yes | Yes | No | Test process only |
 | Raw Input virtualization | No | Yes | Yes | Test process |
 | Key/cursor/focus virtualization | No | Yes | Yes | Test process |
@@ -485,7 +487,9 @@ Only after Gate E may Phase 3 be marked complete.
 
 ## Implemented non-invasive baseline
 
-The first source-code slice is now implemented:
+The non-invasive Phase 3 foundation now contains two completed implementation slices.
+
+### Capability-planning slice
 
 1. The capability vocabulary is represented by a typed 64-bit capability set.
 2. `GameCompatibilityProfile`, `BackendDescriptor`, `BackendEnvironment`, `IsolationPlanner`, `IsolationPlan` and structured diagnostics are implemented.
@@ -494,11 +498,23 @@ The first source-code slice is now implemented:
 5. `hydra_plan` prints selected, rejected, covered and missing capabilities without activating any backend.
 6. HidHide advertises **device cloaking only**, not verified physical input suppression. Therefore zero-bleed profiles remain unsupported until Gate D proves a real suppression path.
 
-The next implementation slice is read-only runtime probing and Gate A/B test harnesses. It must not perform device hiding, process injection or system mutation by default.
+### Gate A/B implementation slice
+
+1. `InputRouter` now emits sequenced Raw Input observations with stable physical IDs, keyboard make/break state, mouse movement/button/wheel data, device-arrival/removal events, decode statistics and explicit errors.
+2. `InputObservationLedger` maintains per-physical-device key/button state and aggregates composite HID child handles so one child removal does not falsely mark the whole device offline.
+3. `InputObservationSession` rebuilds fail-closed keyboard/mouse bindings from the Seat profile and records unassigned, shared/ambiguous, inactive, missing-target and dispatch-failure outcomes.
+4. `InputTraceWriter` produces UTF-8 JSON Lines whose records explicitly state that native Windows input is not suppressed.
+5. `hydra_input_lab` opens two HydraSeat-owned Seat windows, shows live device/route/hot-plug diagnostics, supports observer-only and saved-profile modes, and never performs process injection or device cloaking.
+6. Pure regression tests and `hydra_input_lab --self-test` validate deterministic Gate A/B behavior without claiming physical acceptance.
+
+Gate A/B **implementation** is complete, but physical acceptance remains pending until the checklist is executed with the target PC's two keyboards and two pointing devices. See [PHASE3_GATE_A_B_TESTING.md](PHASE3_GATE_A_B_TESTING.md).
+
+The next source-code slice is Gate C: two controlled HydraSeat-owned target processes, a versioned host/adapter protocol, and independently testable Raw Input, keyboard-polling, cursor and focus virtualization. It must still avoid commercial games, device hiding and anti-cheat targets until rollback and test-process behavior are proven.
 
 ## Related documents
 
 - [RELATED_SYSTEMS_RESEARCH.md](RELATED_SYSTEMS_RESEARCH.md)
 - [CLEAN_ROOM_POLICY.md](CLEAN_ROOM_POLICY.md)
 - [PHASE0_RESEARCH.md](PHASE0_RESEARCH.md)
+- [PHASE3_GATE_A_B_TESTING.md](PHASE3_GATE_A_B_TESTING.md)
 - [ROADMAP.md](ROADMAP.md)
