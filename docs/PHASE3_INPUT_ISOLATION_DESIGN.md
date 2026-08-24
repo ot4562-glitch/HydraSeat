@@ -425,17 +425,31 @@ Pass criteria:
 - keyboard/mouse B reaches only test window B through the HydraSeat route;
 - ordinary Windows input may still leak, and the report must state that this is not isolation.
 
-### Gate C — per-process state virtualization
+### Gate C — controlled process state and API virtualization
 
-Target: two open-source HydraSeat test processes that use Raw Input and polling APIs.
+Target: two HydraSeat-owned target processes first, followed by HydraSeat-owned API probe binaries. No third-party process is used until the controlled probes and rollback path pass.
 
-Pass criteria:
+Implemented foundation:
 
-- each process sees only its Seat's synthetic Raw Input;
-- `GetAsyncKeyState`, `GetKeyboardState`, cursor and focus queries match its Seat state;
-- both processes behave as active simultaneously;
-- no global cursor clipping;
-- adapter crash triggers rollback.
+- a versioned little-endian host/target protocol with bounded frames and monotonic sequences;
+- local named-pipe transport with timeouts, remote-client rejection and a token/Seat/PID/architecture handshake;
+- a normally loaded process-local adapter DLL with a fixed-width versioned C ABI;
+- key down state, `GetAsyncKeyState`-style one-shot edges, `GetKeyState` and `GetKeyboardState`-style high bits;
+- mouse button/wheel state, virtual cursor/clip, virtual foreground and virtual capture state;
+- two separate target processes with synthetic Windows CI evidence that their A/B key, mouse, cursor and virtual-focus state do not cross;
+- bounded per-target writer queues for interactive Raw Input routing;
+- orderly shutdown and force-termination cleanup for controlled child processes.
+
+Remaining Gate C pass criteria:
+
+- run physical Seat-owned keyboards/mice through the controlled target processes;
+- make HydraSeat-owned probe processes observe Seat-local values through the actual Raw Input, polling, cursor and focus API surfaces;
+- prove that installing and removing the controlled compatibility shim restores ordinary API behavior;
+- prove adapter/host/target failure leaves no orphan child or persistent global state;
+- confirm no global cursor clipping and no physical suppression are performed during Gate C;
+- keep anti-cheat/protected and commercial targets out of scope until all controlled criteria pass.
+
+The direct adapter C ABI is a testable state boundary, not itself Windows API interposition.
 
 ### Gate D — optional physical-device cloaking
 
@@ -479,15 +493,18 @@ Only after Gate E may Phase 3 be marked complete.
 | Raw Input event state machine | Yes with fixtures | Yes | Gate A acceptance pending | No |
 | Explicit Seat target routing | Yes | Yes | Gate B acceptance pending | No |
 | JSONL hot-plug/route diagnostics | Yes | Yes | Gate A/B acceptance pending | No |
-| Adapter protocol/handshake | Yes | Yes | No | Test process only |
-| Raw Input virtualization | No | Yes | Yes | Test process |
-| Key/cursor/focus virtualization | No | Yes | Yes | Test process |
+| Gate C wire protocol and parser | Yes | Yes | No | No |
+| Gate C adapter C ABI | Yes | Yes | No | Controlled process only |
+| Two-process synthetic state separation | Partial | Yes | No | Controlled process only |
+| Bounded per-target writer queues | Partial | Yes | Gate C physical acceptance pending | Controlled process only |
+| Raw Input API virtualization | No | Pending | Pending | Controlled probe only |
+| Polling/cursor/focus API interposition | No | Pending | Pending | Controlled probe only |
 | HidHide session lifecycle | No | Yes | Yes | No |
 | Two-game zero-bleed | No | Yes | Yes | Profile-dependent |
 
 ## Implemented non-invasive baseline
 
-The non-invasive Phase 3 foundation now contains two completed implementation slices.
+The non-invasive Phase 3 foundation now contains three completed implementation slices.
 
 ### Capability-planning slice
 
@@ -509,7 +526,16 @@ The non-invasive Phase 3 foundation now contains two completed implementation sl
 
 Gate A/B **implementation** is complete, but physical acceptance remains pending until the checklist is executed with the target PC's two keyboards and two pointing devices. See [PHASE3_GATE_A_B_TESTING.md](PHASE3_GATE_A_B_TESTING.md).
 
-The next source-code slice is Gate C: two controlled HydraSeat-owned target processes, a versioned host/adapter protocol, and independently testable Raw Input, keyboard-polling, cursor and focus virtualization. It must still avoid commercial games, device hiding and anti-cheat targets until rollback and test-process behavior are proven.
+### Gate C controlled-process slice
+
+1. `hydra_gate_c_core` implements the protocol, transport and process-local state model.
+2. `hydra_gate_c_adapter` provides a normally loaded, versioned C ABI for key, keyboard, async-edge, mouse, cursor, clip, foreground and capture state.
+3. `hydra_gate_c_host` authenticates and manages one controlled target per Seat and uses bounded writer queues for physical Raw Input delivery.
+4. `hydra_gate_c_target` loads the adapter normally and exposes controlled snapshots without modifying Windows APIs.
+5. Windows CI starts two distinct processes and proves their synthetic states remain independent.
+6. Cryptographic Windows session tokens, explicit timeouts, protocol validation and child cleanup are implemented.
+
+The next source-code slice is controlled API interposition for HydraSeat-owned probes. Gate C remains incomplete until probes obtain the Seat-local values through the APIs an ordinary game would call. Commercial games, physical device cloaking and anti-cheat targets remain out of scope. See [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
 
 ## Related documents
 
@@ -517,4 +543,5 @@ The next source-code slice is Gate C: two controlled HydraSeat-owned target proc
 - [CLEAN_ROOM_POLICY.md](CLEAN_ROOM_POLICY.md)
 - [PHASE0_RESEARCH.md](PHASE0_RESEARCH.md)
 - [PHASE3_GATE_A_B_TESTING.md](PHASE3_GATE_A_B_TESTING.md)
+- [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md)
 - [ROADMAP.md](ROADMAP.md)

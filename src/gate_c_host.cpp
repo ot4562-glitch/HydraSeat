@@ -7,10 +7,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -70,7 +73,10 @@ void printUsage(std::ostream& output) {
 
 int portableSelfTest() {
     const auto token = hydra::gatec::generateSessionToken();
-    const auto tokenText = hydra::gatec::tokenToHex(token);
+    if (!token) {
+        return 9;
+    }
+    const auto tokenText = hydra::gatec::tokenToHex(*token);
     if (!hydra::gatec::tokenFromHex(tokenText)) {
         return 10;
     }
@@ -274,6 +280,119 @@ struct TargetSession {
     bool connected{false};
 };
 
+class TargetInputWriter {
+public:
+    explicit TargetInputWriter(TargetSession& session) : m_session(session) {}
+    ~TargetInputWriter() { stop(); }
+
+    TargetInputWriter(const TargetInputWriter&) = delete;
+    TargetInputWriter& operator=(const TargetInputWriter&) = delete;
+
+    bool start() {
+        if (!m_session.connected || !m_session.channel.valid() ||
+            m_thread.joinable()) {
+            return false;
+        }
+        m_thread = std::jthread(
+            [this](std::stop_token token) { writerLoop(token); });
+        return true;
+    }
+
+    bool enqueue(const InputEventMessage& input) {
+        if (m_failed.load() || m_stopping.load()) {
+            return false;
+        }
+        const auto sequence = m_session.nextSequence++;
+        auto frame = hydra::gatec::encodeInputEvent(sequence, input);
+        if (frame.empty()) {
+            return false;
+        }
+
+        {
+            std::scoped_lock lock(m_mutex);
+            if (m_queue.size() >= kMaximumQueuedFrames) {
+                ++m_droppedFrames;
+                return false;
+            }
+            m_queue.push_back(std::move(frame));
+        }
+        m_condition.notify_one();
+        return true;
+    }
+
+    void stop() noexcept {
+        if (!m_thread.joinable()) {
+            return;
+        }
+        m_stopping.store(true);
+        m_thread.request_stop();
+        m_condition.notify_all();
+        m_thread.join();
+    }
+
+    bool failed() const noexcept { return m_failed.load(); }
+    std::uint64_t droppedFrames() const noexcept {
+        return m_droppedFrames.load();
+    }
+
+    std::string lastError() const {
+        std::scoped_lock lock(m_errorMutex);
+        return m_lastError;
+    }
+
+private:
+    void writerLoop(std::stop_token token) {
+        while (true) {
+            std::vector<std::byte> frame;
+            {
+                std::unique_lock lock(m_mutex);
+                m_condition.wait(lock, [&] {
+                    return token.stop_requested() || m_stopping.load() ||
+                           !m_queue.empty();
+                });
+                if (m_queue.empty()) {
+                    if (token.stop_requested() || m_stopping.load()) {
+                        break;
+                    }
+                    continue;
+                }
+                frame = std::move(m_queue.front());
+                m_queue.pop_front();
+            }
+
+            std::string error;
+            std::uint32_t systemError = 0;
+            if (!m_session.channel.writeFrame(
+                    frame, kWriteTimeoutMs, &error, &systemError)) {
+                {
+                    std::scoped_lock lock(m_errorMutex);
+                    m_lastError = error + " (" +
+                                  std::to_string(systemError) + ")";
+                }
+                m_failed.store(true);
+                m_stopping.store(true);
+                std::scoped_lock lock(m_mutex);
+                m_queue.clear();
+                break;
+            }
+        }
+    }
+
+    static constexpr std::size_t kMaximumQueuedFrames = 2048;
+    static constexpr std::uint32_t kWriteTimeoutMs = 1000;
+
+    TargetSession& m_session;
+    mutable std::mutex m_errorMutex;
+    std::string m_lastError;
+    std::mutex m_mutex;
+    std::condition_variable m_condition;
+    std::deque<std::vector<std::byte>> m_queue;
+    std::jthread m_thread;
+    std::atomic<bool> m_stopping{false};
+    std::atomic<bool> m_failed{false};
+    std::atomic<std::uint64_t> m_droppedFrames{0};
+};
+
 InputEventMessage toProtocolEvent(const RawInputEvent& event) {
     InputEventMessage message;
     message.timestampMicros = event.monotonicTimestampMicros;
@@ -321,7 +440,13 @@ public:
 
 private:
     bool launchTarget(TargetSession& session, bool headless) {
-        session.token = hydra::gatec::generateSessionToken();
+        const auto token = hydra::gatec::generateSessionToken();
+        if (!token) {
+            std::cerr << "Cryptographic session-token generation failed for Seat "
+                      << session.seatId << '\n';
+            return false;
+        }
+        session.token = *token;
         session.pipeName = hydra::gatec::makeGateCPipeName(
             GetCurrentProcessId(), session.seatId, session.token);
 
@@ -483,7 +608,9 @@ private:
                          bool force) {
         bool clean = true;
         for (auto& session : sessions) {
-            if (!force) {
+            if (force) {
+                session.process.terminate(93);
+            } else {
                 sendShutdown(session);
             }
         }
@@ -492,7 +619,7 @@ private:
             if (!session.process.wait(kProcessExitTimeoutMs, &exitCode)) {
                 session.process.terminate(93);
                 clean = false;
-            } else if (exitCode != 0) {
+            } else if (!force && exitCode != 0) {
                 clean = false;
             }
             session.channel.close();
@@ -648,9 +775,18 @@ private:
             }
         }
 
-        std::unordered_map<SeatId, TargetSession*> sessionBySeat;
+        std::vector<std::unique_ptr<TargetInputWriter>> writers;
+        std::unordered_map<SeatId, TargetInputWriter*> writerBySeat;
+        writers.reserve(sessions.size());
         for (auto& session : sessions) {
-            sessionBySeat.emplace(session.seatId, &session);
+            auto writer = std::make_unique<TargetInputWriter>(session);
+            if (!writer->start()) {
+                for (auto& started : writers) started->stop();
+                cleanupSessions(sessions, true);
+                return 44;
+            }
+            writerBySeat.emplace(session.seatId, writer.get());
+            writers.push_back(std::move(writer));
         }
 
         SeatRoutingPolicy routingPolicy;
@@ -659,11 +795,11 @@ private:
             [&](const RawInputEvent& event,
                 const InputRouteDecision& decision) {
                 if (!decision.seatId) return false;
-                const auto found = sessionBySeat.find(*decision.seatId);
-                if (found == sessionBySeat.end() || found->second == nullptr) {
+                const auto found = writerBySeat.find(*decision.seatId);
+                if (found == writerBySeat.end() || found->second == nullptr) {
                     return false;
                 }
-                return sendInput(*found->second, toProtocolEvent(event));
+                return found->second->enqueue(toProtocolEvent(event));
             });
         const auto bindings = observation.rebuildBindings();
         std::cout << "Gate C host bound " << bindings.boundDevices
@@ -685,32 +821,56 @@ private:
         });
         if (!router.initialize()) {
             std::cerr << "Raw Input host initialization failed.\n";
+            for (auto& writer : writers) writer->stop();
             cleanupSessions(sessions, true);
-            return 44;
+            return 45;
         }
 
+        gStopRequested.store(false);
         SetConsoleCtrlHandler(consoleControlHandler, TRUE);
         std::cout
             << "Gate C controlled-process host is running.\n"
-            << "Both targets receive virtual foreground/capture state, but no "
-               "Windows API hook or physical suppression is active.\n"
-            << "Press Ctrl+C or close both targets to stop.\n";
+            << "Each target uses a separate process-local adapter DLL and virtual "
+               "keyboard/mouse/cursor/focus state. No Windows API hook or physical "
+               "suppression is active.\n"
+            << "Press Ctrl+C or close either controlled target to stop.\n";
 
+        bool writerFailure = false;
         while (!gStopRequested.load()) {
             router.processMessages();
-            bool anyRunning = false;
+            bool allRunning = true;
             for (const auto& session : sessions) {
-                anyRunning = anyRunning || session.process.running();
+                allRunning = allRunning && session.process.running();
             }
-            if (!anyRunning) break;
+            for (const auto& writer : writers) {
+                if (writer->failed()) {
+                    std::cerr << "Gate C target writer failed: "
+                              << writer->lastError() << '\n';
+                    writerFailure = true;
+                    break;
+                }
+            }
+            if (!allRunning || writerFailure) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
         router.stop();
         trace.flush();
-        cleanupSessions(sessions, false);
+        for (auto& writer : writers) writer->stop();
+
+        std::uint64_t droppedFrames = 0;
+        for (const auto& writer : writers) {
+            droppedFrames += writer->droppedFrames();
+            if (writer->failed()) writerFailure = true;
+        }
+        if (droppedFrames != 0) {
+            std::cerr << "Gate C bounded queues rejected " << droppedFrames
+                      << " input frames; those route attempts were marked failed.\n";
+        }
+
+        const bool cleanExit = cleanupSessions(sessions, writerFailure);
         SetConsoleCtrlHandler(consoleControlHandler, FALSE);
-        return EXIT_SUCCESS;
+        return writerFailure || !cleanExit ? 46 : EXIT_SUCCESS;
     }
 
     HostOptions m_options;

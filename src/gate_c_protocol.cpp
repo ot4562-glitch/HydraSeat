@@ -453,8 +453,18 @@ bool decodeInputEvent(const DecodedFrame& frame, InputEventMessage& message,
     }
     message.kind = static_cast<InputKind>(rawKind);
     message.keyTransition = static_cast<KeyTransition>(rawTransition);
-    if (message.kind == InputKind::Keyboard && message.vkey >= 256) {
-        if (error != nullptr) *error = "keyboard virtual key is out of range";
+    if (message.kind == InputKind::Keyboard) {
+        if (message.vkey >= 256) {
+            if (error != nullptr) *error = "keyboard virtual key is out of range";
+            return false;
+        }
+        if (message.keyTransition != KeyTransition::Down &&
+            message.keyTransition != KeyTransition::Up) {
+            if (error != nullptr) *error = "keyboard event requires a down/up transition";
+            return false;
+        }
+    } else if (message.keyTransition != KeyTransition::None) {
+        if (error != nullptr) *error = "mouse event must not contain a key transition";
         return false;
     }
     return finishDecode(frame, MessageType::InputEvent, reader, error);
@@ -521,6 +531,10 @@ bool decodeStateSnapshot(const DecodedFrame& frame,
         !reader.readI32(message.clipRight) ||
         !reader.readI32(message.clipBottom)) {
         if (error != nullptr) *error = reader.error();
+        return false;
+    }
+    if (message.probeVkey != 0xffffu && message.probeVkey >= 256u) {
+        if (error != nullptr) *error = "snapshot probe virtual key is out of range";
         return false;
     }
     if (message.clipEnabled &&

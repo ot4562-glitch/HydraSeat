@@ -1,9 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
-project(HydraSeat VERSION 0.1.0 LANGUAGES CXX)
+project(HydraSeat VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
 
 # Include directories
 include_directories(include .)
@@ -92,8 +95,28 @@ add_library(hydra_gate_c_core STATIC
     include/hydra/gate_c_transport.hpp
     include/hydra/virtual_input_state.hpp
 )
+set_target_properties(hydra_gate_c_core PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+if(WIN32)
+    target_link_libraries(hydra_gate_c_core PUBLIC Bcrypt.lib)
+endif()
 if(MSVC)
     target_compile_options(hydra_gate_c_core PRIVATE /W4 /permissive-)
+endif()
+
+# Process-local Gate C adapter boundary. The controlled target links this
+# shared library normally; no process injection is performed.
+add_library(hydra_gate_c_adapter SHARED
+    src/gate_c_adapter.cpp
+    include/hydra/gate_c_adapter.h
+)
+target_compile_definitions(hydra_gate_c_adapter PRIVATE
+    HYDRA_GATE_C_ADAPTER_BUILD=1
+)
+target_link_libraries(hydra_gate_c_adapter PRIVATE hydra_gate_c_core)
+if(MSVC)
+    target_compile_options(hydra_gate_c_adapter PRIVATE /W4 /permissive-)
 endif()
 
 # Core Executable target (Windows GUI subsystem)
@@ -166,7 +189,7 @@ endif()
 add_executable(hydra_gate_c_target
     src/gate_c_target.cpp
 )
-target_link_libraries(hydra_gate_c_target PRIVATE hydra_gate_c_core)
+target_link_libraries(hydra_gate_c_target PRIVATE hydra_gate_c_core hydra_gate_c_adapter)
 if(WIN32)
     target_link_libraries(hydra_gate_c_target PRIVATE User32.lib)
 endif()
@@ -257,6 +280,27 @@ if(MSVC)
     target_compile_options(gate_c_protocol_tests PRIVATE /W4 /permissive-)
 endif()
 add_test(NAME GateCProtocolTests COMMAND gate_c_protocol_tests)
+
+# C ABI adapter tests exercise independent process-local contexts and
+# GetAsyncKeyState/GetKeyboardState-style semantics without installing hooks.
+add_executable(gate_c_adapter_tests
+    tests/test_gate_c_adapter.cpp
+)
+target_link_libraries(gate_c_adapter_tests PRIVATE hydra_gate_c_adapter)
+if(MSVC)
+    target_compile_options(gate_c_adapter_tests PRIVATE /W4 /permissive-)
+endif()
+add_test(NAME GateCAdapterTests COMMAND gate_c_adapter_tests)
+
+add_executable(gate_c_adapter_c_smoke
+    tests/test_gate_c_adapter_c.c
+)
+target_link_libraries(gate_c_adapter_c_smoke PRIVATE hydra_gate_c_adapter)
+if(MSVC)
+    target_compile_options(gate_c_adapter_c_smoke PRIVATE /W4)
+endif()
+add_test(NAME GateCAdapterCSmoke COMMAND gate_c_adapter_c_smoke)
+
 add_test(NAME GateCTargetSelfTest COMMAND hydra_gate_c_target --self-test)
 
 if(WIN32)

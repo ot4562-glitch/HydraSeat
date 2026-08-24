@@ -119,7 +119,36 @@ Controllers remain outside Gate A/B routing because the current `InputRouter` do
 
 This is a Gate A/B diagnostic route, not a game compatibility backend. It does not use ordinary messages to impersonate native game input, suppress physical input, virtualize polling/cursor/focus state, or claim zero input bleed.
 
-### 5. Compatibility Profile and Planner
+### 5. Gate C Controlled-Process Runtime
+
+Gate C introduces a process boundary without attaching to a third-party game.
+
+#### `hydra_gate_c_core`
+
+- encodes and validates a fixed-width little-endian protocol rather than serializing C++ objects;
+- bounds every payload/frame and enforces a monotonic input/control sequence;
+- uses local Windows named pipes with overlapped timeouts and `PIPE_REJECT_REMOTE_CLIENTS`;
+- authenticates each controlled child with a random session token and validates Seat ID, child PID and architecture;
+- represents keyboard, mouse, virtual cursor, clip, foreground and capture state independently for each target process.
+
+#### `hydra_gate_c_adapter`
+
+The adapter is a normally loaded shared library with a versioned C ABI. It owns one process-local `VirtualInputState` per adapter context and exposes controlled-test equivalents for async/key/keyboard state, mouse buttons/wheel, cursor/clip and virtual foreground/capture queries. It does not install hooks or modify Windows APIs.
+
+#### `hydra_gate_c_host` and `hydra_gate_c_target`
+
+- the host starts only HydraSeat-owned target binaries and validates their handshake;
+- each Seat receives a distinct target process and adapter context;
+- Raw Input delivery uses one bounded writer queue per target so slow pipe writes do not block the Raw Input window procedure indefinitely;
+- queue overflow, target failure and protocol failure remain visible and terminate the controlled session rather than rerouting input;
+- synthetic Windows CI starts two processes and proves different A/B key edges, mouse state, cursor state and virtual foreground state do not cross between them;
+- the target displays virtual state beside actual OS foreground state to make the current limitation visible.
+
+The current target calls the adapter C ABI directly. Gate C remains incomplete until HydraSeat-owned probe binaries observe these values through the actual Raw Input, polling, cursor and focus API surfaces. No commercial-process injection, physical suppression or anti-cheat interaction is implemented.
+
+See [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
+
+### 6. Compatibility Profile and Planner
 
 The planner is the Phase 3 control plane. It receives:
 
@@ -137,7 +166,7 @@ It produces an `IsolationPlan` containing:
 
 The planner fails closed. A low-compatibility message route cannot satisfy Raw Input, cursor, foreground or physical-suppression requirements.
 
-### 6. Input Isolation Backends
+### 7. Input Isolation Backends
 
 Backends are optional, independently discoverable components.
 
@@ -171,7 +200,7 @@ An optional installed-driver adapter may use HidHide's documented control API. I
 
 Separate XInput slot-remapping and DirectInput order/visibility components are selected according to the target game's actual input API.
 
-### 7. Process and Window Manager
+### 8. Process and Window Manager
 
 Planned responsibilities:
 
@@ -183,7 +212,7 @@ Planned responsibilities:
 - roll back helpers and state when a process exits;
 - isolate named objects only when an explicit profile requires it.
 
-### 8. Display Manager (`DisplayManager`)
+### 9. Display Manager (`DisplayManager`)
 
 Planned responsibilities:
 
@@ -194,7 +223,7 @@ Planned responsibilities:
 
 Virtual-display creation remains Phase 4.
 
-### 9. Audio Manager
+### 10. Audio Manager
 
 Planned responsibilities:
 

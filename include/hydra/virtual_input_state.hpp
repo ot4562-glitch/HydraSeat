@@ -38,6 +38,10 @@ public:
     std::int32_t cursorX() const noexcept { return m_cursorX; }
     std::int32_t cursorY() const noexcept { return m_cursorY; }
     bool clipEnabled() const noexcept { return m_clipEnabled; }
+    std::int32_t clipLeft() const noexcept { return m_clipLeft; }
+    std::int32_t clipTop() const noexcept { return m_clipTop; }
+    std::int32_t clipRight() const noexcept { return m_clipRight; }
+    std::int32_t clipBottom() const noexcept { return m_clipBottom; }
     bool virtualForeground() const noexcept { return m_virtualForeground; }
     bool virtualCapture() const noexcept { return m_virtualCapture; }
     std::uint64_t lastAppliedSequence() const noexcept {

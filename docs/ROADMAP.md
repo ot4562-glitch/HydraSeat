@@ -53,7 +53,13 @@ Feasibility gates:
 - [ ] Gate A physical acceptance — validate two keyboards/two pointing devices and repeated hot-plug on the target Windows PC
 - [x] Gate B implementation — fail-closed exclusive-device routing to two HydraSeat-owned target windows
 - [ ] Gate B physical acceptance — validate Seat counters and trace routing with the user's saved hardware profile
-- [ ] Gate C — per-process Raw Input, key-state, cursor and focus virtualization in HydraSeat test processes
+- [x] Gate C foundation — versioned host/target protocol, local named-pipe transport, token/Seat/PID/architecture handshake, and child cleanup
+- [x] Gate C process-state implementation — process-local adapter DLL/C ABI for keyboard, async edge, mouse, cursor, clip, virtual foreground and capture state
+- [x] Gate C synthetic process acceptance — two separate Windows target processes retain different A/B key, mouse, cursor and virtual-focus state in CI
+- [x] Gate C interactive routing path — Seat-owned Raw Input uses bounded per-target writer queues and fails visibly on backpressure/target failure
+- [ ] Gate C physical acceptance — route the user's two keyboards/two pointing devices into the two controlled target processes
+- [ ] Gate C controlled API interposition — HydraSeat-owned probes observe virtual values through Raw Input, polling, cursor and focus API surfaces
+- [ ] Gate C crash/watchdog acceptance — adapter/host/target failure restores a clean controlled session without orphan processes
 - [ ] Gate D — optional HidHide session-cloak experiment with watchdog and crash rollback
 - [ ] Gate E — two different non-anti-cheat games with measured zero cross-seat input bleed
 
@@ -64,6 +70,8 @@ Exit condition:
 Detailed design: [PHASE3_INPUT_ISOLATION_DESIGN.md](PHASE3_INPUT_ISOLATION_DESIGN.md)
 
 Gate A/B testing: [PHASE3_GATE_A_B_TESTING.md](PHASE3_GATE_A_B_TESTING.md)
+
+Gate C testing: [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md)
 
 ---
 

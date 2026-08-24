@@ -65,7 +65,7 @@ private:
 #endif
 };
 
-SessionToken generateSessionToken();
+std::optional<SessionToken> generateSessionToken();
 std::wstring makeGateCPipeName(std::uint32_t hostProcessId,
                                std::uint32_t seatId,
                                const SessionToken& token);

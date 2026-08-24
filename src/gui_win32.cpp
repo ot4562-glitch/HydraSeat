@@ -59,6 +59,7 @@ static Win32App* g_appInstance = nullptr;
 #define ID_BTN_SAVE_PROF  1005
 #define ID_BTN_LOAD_PROF  1006
 #define ID_BTN_ISOLATION  1007
+#define ID_BTN_GATE_C     1008
 
 #define TIMER_FLASH_RESET 2001
 
@@ -505,20 +506,24 @@ void Win32App::setupUI() {
     SendMessageW(m_p2Group, WM_SETFONT, (WPARAM)hFontBold, TRUE);
 
     // Isolation Toggle Button
-    m_isolationBtn = CreateWindowExW(0, L"BUTTON", L"Phase 3 Diagnostic Routing Intent: OFF",
+    m_isolationBtn = CreateWindowExW(0, L"BUTTON", L"Diagnostic Intent: OFF",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        20, 642, 440, 42, m_hwnd, (HMENU)ID_BTN_ISOLATION, GetModuleHandle(NULL), NULL);
+        20, 642, 285, 42, m_hwnd, (HMENU)ID_BTN_ISOLATION, GetModuleHandle(NULL), NULL);
 
-    // Launch Button at bottom
-    m_launchBtn = CreateWindowExW(0, L"BUTTON", L"Launch Phase 3 Input Lab",
+    // Phase 3 development harnesses.
+    m_launchBtn = CreateWindowExW(0, L"BUTTON", L"Gate A/B Input Lab",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        490, 642, 440, 42, m_hwnd, (HMENU)ID_BTN_LAUNCH, GetModuleHandle(NULL), NULL);
+        322, 642, 285, 42, m_hwnd, (HMENU)ID_BTN_LAUNCH, GetModuleHandle(NULL), NULL);
+    m_gateCBtn = CreateWindowExW(0, L"BUTTON", L"Gate C Process Lab",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        624, 642, 306, 42, m_hwnd, (HMENU)ID_BTN_GATE_C, GetModuleHandle(NULL), NULL);
 
     HFONT hFontBtn = CreateFontW(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     SendMessageW(m_isolationBtn, WM_SETFONT, (WPARAM)hFontBtn, TRUE);
     SendMessageW(m_launchBtn, WM_SETFONT, (WPARAM)hFontBtn, TRUE);
+    SendMessageW(m_gateCBtn, WM_SETFONT, (WPARAM)hFontBtn, TRUE);
 }
 
 void Win32App::layoutDeviceTiles() {
@@ -884,13 +889,13 @@ void Win32App::toggleIsolationMode() {
     m_inputRouter.setIsolationMode(!current);
 
     if (!current) {
-        SetWindowTextW(m_isolationBtn, L"Phase 3 Diagnostic Routing Intent: ON");
+        SetWindowTextW(m_isolationBtn, L"Diagnostic Intent: ON");
         MessageBoxW(
             m_hwnd,
             L"Diagnostic routing intent is ON.\n\nThis flag does not hide physical devices, suppress normal Windows input, virtualize game key state, or guarantee zero input bleed. Use the Phase 3 Input Lab to validate Gate A/B behavior.",
             L"HydraSeat Phase 3 Diagnostics", MB_OK | MB_ICONWARNING);
     } else {
-        SetWindowTextW(m_isolationBtn, L"Phase 3 Diagnostic Routing Intent: OFF");
+        SetWindowTextW(m_isolationBtn, L"Diagnostic Intent: OFF");
     }
 }
 
@@ -957,6 +962,77 @@ void Win32App::launchMultiseat() {
         L"HydraSeat Phase 3 Input Lab", MB_OK | MB_ICONINFORMATION);
 }
 
+void Win32App::launchGateCControlledLab() {
+    wchar_t modulePath[MAX_PATH]{};
+    const DWORD moduleLength = GetModuleFileNameW(
+        nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
+    if (moduleLength == 0 || moduleLength >= std::size(modulePath)) {
+        MessageBoxW(m_hwnd, L"Could not locate the HydraSeat executable directory.",
+                    L"HydraSeat Gate C Process Lab", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    std::wstring directory(modulePath, moduleLength);
+    const auto separator = directory.find_last_of(L"\\/");
+    if (separator != std::wstring::npos) {
+        directory.resize(separator + 1);
+    } else {
+        directory.clear();
+    }
+
+    const std::wstring hostPath = directory + L"hydra_gate_c_host.exe";
+    const std::wstring targetPath = directory + L"hydra_gate_c_target.exe";
+    const std::wstring adapterPath = directory + L"hydra_gate_c_adapter.dll";
+    for (const auto& required : {hostPath, targetPath, adapterPath}) {
+        const DWORD attributes = GetFileAttributesW(required.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES ||
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+            const std::wstring message =
+                required + L" was not found. Build the complete Gate C targets first.";
+            MessageBoxW(m_hwnd, message.c_str(),
+                        L"HydraSeat Gate C Process Lab",
+                        MB_OK | MB_ICONWARNING);
+            return;
+        }
+    }
+
+    wchar_t profilePath[MAX_PATH]{};
+    const DWORD profileLength = GetFullPathNameW(
+        L"workspace_config.json", static_cast<DWORD>(std::size(profilePath)),
+        profilePath, nullptr);
+    const std::wstring profile =
+        profileLength > 0 && profileLength < std::size(profilePath)
+            ? std::wstring(profilePath, profileLength)
+            : L"workspace_config.json";
+
+    std::wstring commandLine = L"\"" + hostPath +
+        L"\" --profile \"" + profile + L"\"";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(
+            hostPath.c_str(), commandLine.data(), nullptr, nullptr, FALSE,
+            CREATE_NEW_CONSOLE, nullptr, directory.c_str(), &startup, &process)) {
+        const DWORD error = GetLastError();
+        const std::wstring message =
+            L"Could not start hydra_gate_c_host.exe. Win32 error: " +
+            std::to_wstring(error);
+        MessageBoxW(m_hwnd, message.c_str(),
+                    L"HydraSeat Gate C Process Lab",
+                    MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    MessageBoxW(
+        m_hwnd,
+        L"Gate C launched two HydraSeat-owned controlled target processes.\n\n"
+        L"They receive independent virtual keyboard, mouse, cursor, clip, foreground, and capture state through the adapter DLL. No commercial game is injected, normal Windows input is not suppressed, and zero-bleed game support is not yet claimed.",
+        L"HydraSeat Gate C Process Lab",
+        MB_OK | MB_ICONINFORMATION);
+}
+
 LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (uMsg == WM_INPUT && g_appInstance) {
         g_appInstance->m_inputRouter.handleRawInput(reinterpret_cast<HRAWINPUT>(lParam));
@@ -997,6 +1073,8 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
             g_appInstance->toggleIsolationMode();
         } else if (wmId == ID_BTN_LAUNCH && g_appInstance) {
             g_appInstance->launchMultiseat();
+        } else if (wmId == ID_BTN_GATE_C && g_appInstance) {
+            g_appInstance->launchGateCControlledLab();
         }
     } else if (uMsg == WM_DESTROY) {
         KillTimer(hwnd, TIMER_FLASH_RESET);

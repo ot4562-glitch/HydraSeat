@@ -65,6 +65,7 @@ private:
     void loadWorkspaceProfile();
     void toggleIsolationMode();
     void launchMultiseat();
+    void launchGateCControlledLab();
 
     HWND m_hwnd{nullptr};
     HWND m_poolGroup{nullptr};
@@ -76,6 +77,7 @@ private:
     HWND m_refreshBtn{nullptr};
     HWND m_isolationBtn{nullptr};
     HWND m_launchBtn{nullptr};
+    HWND m_gateCBtn{nullptr};
     HWND m_deviceStatusLabel{nullptr};
 
     std::vector<std::unique_ptr<VisualDeviceTile>> m_deviceTiles;

@@ -261,7 +261,7 @@ The roadmap is intentionally incremental.
 - **Phase 0 — Research & Foundation:** complete, including related-system and clean-room research.
 - **Phase 1 — Hardware Detection:** complete and validated with Windows/MSVC CI.
 - **Phase 2 — Seat Composition / Assignment UI:** complete in the current Win32 prototype, including multi-display Seats, primary-display selection, exclusive device ownership, and validated JSON profiles.
-- **Phase 3 — Input Compatibility / Isolation:** current. The capability planner and the Gate A/B `hydra_input_lab` observation/routing harness are implemented. Physical Gate A/B acceptance, process-local state virtualization, device cloaking, and verified zero-bleed enforcement are **not** complete yet.
+- **Phase 3 — Input Compatibility / Isolation:** current. The capability planner, Gate A/B input observation, and the Gate C controlled-process protocol/adapter foundation are implemented. Physical acceptance, actual Windows API interposition, device cloaking, and verified zero-bleed game enforcement are **not** complete yet.
 - **Later phases:** display routing, virtual displays, two-game MVP verification, game profiles, Seat shell, and extension adapters.
 
 The most important technical milestone is not simply launching two windows. It is proving that two people can concurrently use different games/apps on different Seat display groups **without either user's keyboard/mouse input or foreground behavior interfering with the other Seat.**
@@ -311,12 +311,53 @@ The lab is deliberately limited:
 
 Implementation is complete, but the physical acceptance checklist still needs to be run with the user's actual two-keyboard/two-mouse setup. See [Phase 3 Gate A/B testing](docs/PHASE3_GATE_A_B_TESTING.md).
 
+### Gate C Controlled Process Lab
+
+Gate C adds a versioned host/target protocol and a separate process-local adapter DLL. It launches only HydraSeat-owned controlled targets; it does not inject into a game.
+
+```powershell
+.\build\Release\hydra_gate_c_host.exe `
+  --self-test `
+  --target .\build\Release\hydra_gate_c_target.exe
+
+.\build\Release\hydra_gate_c_host.exe `
+  --profile workspace_config.json `
+  --trace hydra_gate_c_host.jsonl
+```
+
+Or use the **Gate C Process Lab** button in the main UI.
+
+Implemented Gate C state:
+
+- versioned little-endian protocol with bounded frames and monotonic sequences;
+- local named pipes with timeout handling, remote-client rejection and full session-token validation;
+- Seat/PID/architecture handshake;
+- cryptographic Windows session-token generation through `BCryptGenRandom`;
+- process-local `hydra_gate_c_adapter.dll` with a versioned C ABI;
+- `GetAsyncKeyState`-style one-shot edges;
+- `GetKeyState` / `GetKeyboardState`-style high bits;
+- mouse button and wheel state;
+- virtual cursor, clip, foreground and capture state;
+- two separate controlled target processes with different Seat states;
+- bounded per-target writer queues so a slow target cannot block Raw Input indefinitely;
+- Windows CI verification that A/B keys, mouse state, cursor state and virtual foreground do not cross between the two controlled processes.
+
+Important boundary:
+
+- controlled targets call the adapter API directly;
+- no Import Address Table patch, detour, process injection, driver control or physical suppression is installed;
+- the two targets can both report `virtual foreground=true`, but ordinary Windows APIs in an unmodified game still see the real OS foreground state;
+- Gate C is not complete until HydraSeat-owned probes observe the virtual values through the actual Raw Input, polling, cursor and focus API surfaces.
+
+See [Phase 3 Gate C controlled-process testing](docs/PHASE3_GATE_C_TESTING.md).
+
 Research and implementation specifications:
 
 - [Related systems and source/license matrix](docs/RELATED_SYSTEMS_RESEARCH.md)
 - [Phase 3 input-isolation architecture](docs/PHASE3_INPUT_ISOLATION_DESIGN.md)
 - [Clean-room and third-party source policy](docs/CLEAN_ROOM_POLICY.md)
 - [Gate A/B physical input-lab procedure](docs/PHASE3_GATE_A_B_TESTING.md)
+- [Gate C controlled-process protocol and acceptance](docs/PHASE3_GATE_C_TESTING.md)
 
 
 ---
@@ -344,3 +385,5 @@ See [docs/RELATED_SYSTEMS_RESEARCH.md](docs/RELATED_SYSTEMS_RESEARCH.md) and [do
 See [docs/CLEAN_ROOM_POLICY.md](docs/CLEAN_ROOM_POLICY.md) before using external source or binaries.
 
 See [docs/PHASE3_GATE_A_B_TESTING.md](docs/PHASE3_GATE_A_B_TESTING.md) before claiming Gate A/B physical acceptance.
+
+See [docs/PHASE3_GATE_C_TESTING.md](docs/PHASE3_GATE_C_TESTING.md) before claiming Gate C API or physical acceptance.

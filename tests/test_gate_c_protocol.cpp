@@ -1,4 +1,5 @@
 #include "hydra/gate_c_protocol.hpp"
+#include "hydra/gate_c_transport.hpp"
 #include "hydra/virtual_input_state.hpp"
 
 #include <algorithm>
@@ -165,6 +166,37 @@ void testProtocolRejectsMalformedFrames() {
     check(!decodeInputEvent(frame, input, &error),
           "out-of-range virtual key is rejected semantically");
 
+    input = {};
+    input.kind = InputKind::Keyboard;
+    input.keyTransition = KeyTransition::None;
+    input.vkey = 0x41;
+    frame = decodeOrFail(encodeInputEvent(31, input),
+                         "transitionless key frame decodes structurally");
+    check(!decodeInputEvent(frame, input, &error),
+          "keyboard input without a down/up transition is rejected");
+
+    input = {};
+    input.kind = InputKind::Mouse;
+    input.keyTransition = KeyTransition::Down;
+    frame = decodeOrFail(encodeInputEvent(32, input),
+                         "mouse key-transition frame decodes structurally");
+    check(!decodeInputEvent(frame, input, &error),
+          "mouse input carrying a key transition is rejected");
+
+    QuerySnapshotMessage invalidQuery;
+    invalidQuery.probeVkey = 300;
+    frame = decodeOrFail(encodeQuerySnapshot(33, invalidQuery),
+                         "invalid snapshot query decodes structurally");
+    check(!decodeQuerySnapshot(frame, invalidQuery, &error),
+          "out-of-range snapshot probe is rejected");
+
+    StateSnapshotMessage invalidSnapshot;
+    invalidSnapshot.probeVkey = 300;
+    frame = decodeOrFail(encodeStateSnapshot(34, invalidSnapshot),
+                         "invalid snapshot response decodes structurally");
+    check(!decodeStateSnapshot(frame, invalidSnapshot, &error),
+          "out-of-range snapshot response probe is rejected");
+
     ControlStateMessage control;
     control.clipEnabled = true;
     control.clipLeft = 10;
@@ -183,6 +215,22 @@ void testProtocolRejectsMalformedFrames() {
     check(!tokenFromHex("0011"), "short session token is rejected");
     check(!tokenFromHex("00112233445566778899aabbccddeefg"),
           "non-hex session token is rejected");
+}
+
+void testSessionTokenGeneration() {
+    const auto token = hydra::gatec::generateSessionToken();
+    check(token.has_value(), "session token generation succeeds");
+    const bool allZero = std::all_of(
+        token->begin(), token->end(),
+        [](std::uint8_t byte) { return byte == 0; });
+    check(!allZero, "session token is not the all-zero sentinel");
+    const auto encoded = hydra::gatec::tokenToHex(*token);
+    check(encoded.size() == 32 &&
+              hydra::gatec::tokenFromHex(encoded) == token,
+          "generated session token round-trips through hexadecimal form");
+    const auto pipeName = hydra::gatec::makeGateCPipeName(1234, 2, *token);
+    check(pipeName.find(L"HydraSeat.GateC.1234.2.") != std::wstring::npos,
+          "Gate C pipe name contains the host and Seat identity");
 }
 
 void testVirtualInputState() {
@@ -261,6 +309,7 @@ void testVirtualInputState() {
 int main() {
     testProtocolRoundTrips();
     testProtocolRejectsMalformedFrames();
+    testSessionTokenGeneration();
     testVirtualInputState();
     std::cout << "Gate C protocol and virtual input-state tests passed.\n";
     return EXIT_SUCCESS;

@@ -1,7 +1,8 @@
+#include "hydra/gate_c_adapter.h"
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/gate_c_transport.hpp"
-#include "hydra/virtual_input_state.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -32,7 +33,95 @@ using hydra::gatec::QuerySnapshotMessage;
 using hydra::gatec::SessionToken;
 using hydra::gatec::StateSnapshotMessage;
 using hydra::gatec::TransportStatus;
-using hydra::gatec::VirtualInputState;
+
+class AdapterOwner {
+public:
+    AdapterOwner() : m_handle(hydra_gate_c_adapter_create()) {}
+    ~AdapterOwner() { hydra_gate_c_adapter_destroy(m_handle); }
+
+    AdapterOwner(const AdapterOwner&) = delete;
+    AdapterOwner& operator=(const AdapterOwner&) = delete;
+
+    HydraGateCAdapterHandle get() const noexcept { return m_handle; }
+    explicit operator bool() const noexcept { return m_handle != nullptr; }
+
+private:
+    HydraGateCAdapterHandle m_handle{nullptr};
+};
+
+HydraGateCAdapterInputEventV1 toAdapterEvent(
+    const InputEventMessage& message) noexcept {
+    HydraGateCAdapterInputEventV1 result{};
+    result.struct_size = sizeof(result);
+    result.kind = message.kind == hydra::gatec::InputKind::Keyboard
+                      ? HYDRA_GATE_C_ADAPTER_INPUT_KEYBOARD
+                      : HYDRA_GATE_C_ADAPTER_INPUT_MOUSE;
+    result.key_transition = static_cast<std::uint8_t>(message.keyTransition);
+    result.is_touchpad = message.isTouchpad ? 1u : 0u;
+    result.timestamp_micros = message.timestampMicros;
+    result.vkey = message.vkey;
+    result.scan_code = message.scanCode;
+    result.keyboard_flags = message.keyboardFlags;
+    result.delta_x = message.deltaX;
+    result.delta_y = message.deltaY;
+    result.mouse_button_flags = message.mouseButtonFlags;
+    result.wheel_delta = message.wheelDelta;
+    return result;
+}
+
+HydraGateCAdapterControlStateV1 toAdapterControl(
+    const ControlStateMessage& message) noexcept {
+    HydraGateCAdapterControlStateV1 result{};
+    result.struct_size = sizeof(result);
+    result.cursor_x = message.cursorX;
+    result.cursor_y = message.cursorY;
+    result.clip_enabled = message.clipEnabled ? 1u : 0u;
+    result.virtual_foreground = message.virtualForeground ? 1u : 0u;
+    result.virtual_capture = message.virtualCapture ? 1u : 0u;
+    result.clip_left = message.clipLeft;
+    result.clip_top = message.clipTop;
+    result.clip_right = message.clipRight;
+    result.clip_bottom = message.clipBottom;
+    return result;
+}
+
+[[maybe_unused]] StateSnapshotMessage fromAdapterSnapshot(
+    const HydraGateCAdapterSnapshotV1& source) noexcept {
+    StateSnapshotMessage result;
+    result.lastAppliedSequence = source.last_applied_sequence;
+    std::copy_n(source.key_down_bits, result.keyDownBits.size(),
+                result.keyDownBits.begin());
+    std::copy_n(source.key_pressed_edge_bits,
+                result.keyPressedEdgeBits.size(),
+                result.keyPressedEdgeBits.begin());
+    result.mouseButtonsDown = source.mouse_buttons_down;
+    result.wheelAccumulator = source.wheel_accumulator;
+    result.probeVkey = source.probe_vkey;
+    result.asyncKeyStateValue = source.async_key_state_value;
+    result.keyboardStateByte = source.keyboard_state_byte;
+    result.clipEnabled = source.clip_enabled != 0;
+    result.virtualForeground = source.virtual_foreground != 0;
+    result.virtualCapture = source.virtual_capture != 0;
+    result.cursorX = source.cursor_x;
+    result.cursorY = source.cursor_y;
+    result.clipLeft = source.clip_left;
+    result.clipTop = source.clip_top;
+    result.clipRight = source.clip_right;
+    result.clipBottom = source.clip_bottom;
+    return result;
+}
+
+bool adapterSnapshotKeyDown(const HydraGateCAdapterSnapshotV1& snapshot,
+                            std::uint32_t vkey) noexcept {
+    if (vkey >= 256u) return false;
+    const auto byteIndex = static_cast<std::size_t>(vkey / 8u);
+    const auto mask = static_cast<std::uint8_t>(1u << (vkey % 8u));
+    return (snapshot.key_down_bits[byteIndex] & mask) != 0;
+}
+
+[[maybe_unused]] std::string adapterResultMessage(HydraGateCAdapterResult result) {
+    return "adapter result " + std::to_string(static_cast<int>(result));
+}
 
 struct TargetOptions {
     std::wstring pipeName;
@@ -55,7 +144,12 @@ void printUsage(std::ostream& output) {
 }
 
 int runLocalSelfTest() {
-    VirtualInputState state;
+    AdapterOwner adapter;
+    if (!adapter || hydra_gate_c_adapter_api_version() !=
+                        HYDRA_GATE_C_ADAPTER_API_VERSION) {
+        return 9;
+    }
+
     ControlStateMessage control;
     control.cursorX = 10;
     control.cursorY = 20;
@@ -65,7 +159,9 @@ int runLocalSelfTest() {
     control.clipTop = 0;
     control.clipRight = 100;
     control.clipBottom = 100;
-    if (!state.applyControl(1, control)) {
+    const auto adapterControl = toAdapterControl(control);
+    if (hydra_gate_c_adapter_apply_control(
+            adapter.get(), 1, &adapterControl) != HYDRA_GATE_C_ADAPTER_OK) {
         return 10;
     }
 
@@ -73,12 +169,22 @@ int runLocalSelfTest() {
     key.kind = hydra::gatec::InputKind::Keyboard;
     key.keyTransition = hydra::gatec::KeyTransition::Down;
     key.vkey = 0x41;
-    if (!state.applyInput(2, key) || !state.keyDown(0x41) ||
-        state.consumeAsyncKeyState(0x41) != 0x8001u) {
+    const auto adapterKey = toAdapterEvent(key);
+    if (hydra_gate_c_adapter_apply_input(
+            adapter.get(), 2, &adapterKey) != HYDRA_GATE_C_ADAPTER_OK) {
         return 11;
     }
 
-    std::cout << "HydraSeat Gate C target self-test passed.\n";
+    HydraGateCAdapterSnapshotV1 snapshot{};
+    snapshot.struct_size = sizeof(snapshot);
+    if (hydra_gate_c_adapter_get_snapshot(
+            adapter.get(), 0x41, &snapshot) != HYDRA_GATE_C_ADAPTER_OK ||
+        !adapterSnapshotKeyDown(snapshot, 0x41) ||
+        snapshot.async_key_state_value != 0x8001u) {
+        return 12;
+    }
+
+    std::cout << "HydraSeat Gate C target/adapter self-test passed.\n";
     return EXIT_SUCCESS;
 }
 
@@ -174,13 +280,17 @@ public:
 
     int run(HINSTANCE instance, int showCommand) {
         m_instance = instance;
+        if (!m_adapter || hydra_gate_c_adapter_api_version() !=
+                              HYDRA_GATE_C_ADAPTER_API_VERSION) {
+            return 19;
+        }
         if (!m_options.headless && !createWindow(showCommand)) {
             return 20;
         }
         if (!connectAndHandshake()) {
-            if (m_hwnd != nullptr) {
-                DestroyWindow(m_hwnd);
-                m_hwnd = nullptr;
+            if (const HWND window = m_hwnd.load(); window != nullptr) {
+                DestroyWindow(window);
+                m_hwnd.store(nullptr);
             }
             return 21;
         }
@@ -217,7 +327,7 @@ private:
             SetWindowLongPtrW(hwnd, GWLP_USERDATA,
                               reinterpret_cast<LONG_PTR>(self));
             if (self != nullptr) {
-                self->m_hwnd = hwnd;
+                self->m_hwnd.store(hwnd);
             }
         }
         if (self != nullptr) {
@@ -242,7 +352,7 @@ private:
             DestroyWindow(hwnd);
             return 0;
         case WM_DESTROY:
-            m_hwnd = nullptr;
+            m_hwnd.store(nullptr);
             PostQuitMessage(0);
             return 0;
         default:
@@ -266,15 +376,16 @@ private:
         const std::wstring title =
             L"HydraSeat Gate C Target - Seat " +
             std::to_wstring(m_options.seatId);
-        m_hwnd = CreateWindowExW(
+        const HWND window = CreateWindowExW(
             WS_EX_APPWINDOW, kWindowClass, title.c_str(),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
             650, 520, nullptr, nullptr, m_instance, this);
-        if (m_hwnd == nullptr) {
+        if (window == nullptr) {
             return false;
         }
-        ShowWindow(m_hwnd, showCommand);
-        UpdateWindow(m_hwnd);
+        m_hwnd.store(window);
+        ShowWindow(window, showCommand);
+        UpdateWindow(window);
         return true;
     }
 
@@ -294,7 +405,7 @@ private:
         hello.processId = GetCurrentProcessId();
         hello.architectureBits =
             static_cast<std::uint16_t>(sizeof(void*) * 8);
-        hello.targetWindow = reinterpret_cast<std::uint64_t>(m_hwnd);
+        hello.targetWindow = reinterpret_cast<std::uint64_t>(m_hwnd.load());
         if (!m_channel.writeFrame(hydra::gatec::encodeHello(1, hello),
                                   kIoTimeoutMs, &error, &systemError)) {
             setProtocolError("Hello write failed: " + error, systemError);
@@ -350,8 +461,8 @@ private:
         }
 
         m_stopping.store(true);
-        if (m_hwnd != nullptr) {
-            PostMessageW(m_hwnd, WM_CLOSE, 0, 0);
+        if (const HWND window = m_hwnd.load(); window != nullptr) {
+            PostMessageW(window, WM_CLOSE, 0, 0);
         }
     }
 
@@ -362,12 +473,13 @@ private:
             if (!hydra::gatec::decodeInputEvent(frame, message, &error)) {
                 return sendError(frame.sequence, 1001, error);
             }
-            {
-                std::scoped_lock lock(m_stateMutex);
-                if (!m_state.applyInput(frame.sequence, message)) {
-                    return sendError(frame.sequence, 1002,
-                                     "stale or invalid input sequence");
-                }
+            const auto adapterEvent = toAdapterEvent(message);
+            const auto result = hydra_gate_c_adapter_apply_input(
+                m_adapter.get(), frame.sequence, &adapterEvent);
+            if (result != HYDRA_GATE_C_ADAPTER_OK) {
+                return sendError(frame.sequence,
+                                 1100u + static_cast<std::uint32_t>(result),
+                                 adapterResultMessage(result));
             }
             notifyStateChanged();
             return true;
@@ -377,12 +489,13 @@ private:
             if (!hydra::gatec::decodeControlState(frame, message, &error)) {
                 return sendError(frame.sequence, 1003, error);
             }
-            {
-                std::scoped_lock lock(m_stateMutex);
-                if (!m_state.applyControl(frame.sequence, message)) {
-                    return sendError(frame.sequence, 1004,
-                                     "stale or invalid control sequence");
-                }
+            const auto adapterControl = toAdapterControl(message);
+            const auto result = hydra_gate_c_adapter_apply_control(
+                m_adapter.get(), frame.sequence, &adapterControl);
+            if (result != HYDRA_GATE_C_ADAPTER_OK) {
+                return sendError(frame.sequence,
+                                 1200u + static_cast<std::uint32_t>(result),
+                                 adapterResultMessage(result));
             }
             notifyStateChanged();
             return true;
@@ -393,19 +506,16 @@ private:
                 return sendError(frame.sequence, 1005, error);
             }
 
-            StateSnapshotMessage snapshot;
-            {
-                std::scoped_lock lock(m_stateMutex);
-                snapshot = m_state.snapshot();
-                snapshot.probeVkey = query.probeVkey;
-                if (query.probeVkey < 256u) {
-                    const auto keyboard = m_state.keyboardState();
-                    snapshot.keyboardStateByte =
-                        keyboard[static_cast<std::size_t>(query.probeVkey)];
-                    snapshot.asyncKeyStateValue =
-                        m_state.consumeAsyncKeyState(query.probeVkey);
-                }
+            HydraGateCAdapterSnapshotV1 adapterSnapshot{};
+            adapterSnapshot.struct_size = sizeof(adapterSnapshot);
+            const auto result = hydra_gate_c_adapter_get_snapshot(
+                m_adapter.get(), query.probeVkey, &adapterSnapshot);
+            if (result != HYDRA_GATE_C_ADAPTER_OK) {
+                return sendError(frame.sequence,
+                                 1300u + static_cast<std::uint32_t>(result),
+                                 adapterResultMessage(result));
             }
+            const auto snapshot = fromAdapterSnapshot(adapterSnapshot);
             return m_channel.writeFrame(
                 hydra::gatec::encodeStateSnapshot(frame.sequence, snapshot),
                 kIoTimeoutMs, &error, nullptr);
@@ -433,8 +543,8 @@ private:
     }
 
     void notifyStateChanged() {
-        if (m_hwnd != nullptr) {
-            PostMessageW(m_hwnd, kStateChangedMessage, 0, 0);
+        if (const HWND window = m_hwnd.load(); window != nullptr) {
+            PostMessageW(window, kStateChangedMessage, 0, 0);
         }
     }
 
@@ -446,17 +556,26 @@ private:
     }
 
     void paint(HWND hwnd) {
-        StateSnapshotMessage snapshot;
-        {
-            std::scoped_lock lock(m_stateMutex);
-            snapshot = m_state.snapshot();
-        }
+        HydraGateCAdapterSnapshotV1 adapterSnapshot{};
+        adapterSnapshot.struct_size = sizeof(adapterSnapshot);
+        const auto adapterResult = hydra_gate_c_adapter_get_snapshot(
+            m_adapter.get(), HYDRA_GATE_C_ADAPTER_NO_PROBE_KEY,
+            &adapterSnapshot);
+        const StateSnapshotMessage snapshot =
+            adapterResult == HYDRA_GATE_C_ADAPTER_OK
+                ? fromAdapterSnapshot(adapterSnapshot)
+                : StateSnapshotMessage{};
         std::string lastError;
         std::uint32_t systemError = 0;
         {
             std::scoped_lock lock(m_errorMutex);
             lastError = m_lastError;
             systemError = m_lastSystemError;
+        }
+        if (adapterResult != HYDRA_GATE_C_ADAPTER_OK) {
+            if (!lastError.empty()) lastError += "; ";
+            lastError += "adapter snapshot failed: " +
+                         adapterResultMessage(adapterResult);
         }
 
         PAINTSTRUCT paint{};
@@ -542,10 +661,9 @@ private:
 
     TargetOptions m_options;
     HINSTANCE m_instance{nullptr};
-    HWND m_hwnd{nullptr};
+    std::atomic<HWND> m_hwnd{nullptr};
     PipeChannel m_channel;
-    VirtualInputState m_state;
-    std::mutex m_stateMutex;
+    AdapterOwner m_adapter;
     std::mutex m_errorMutex;
     std::string m_lastError;
     std::uint32_t m_lastSystemError{0};

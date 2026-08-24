@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <chrono>
 #include <random>
+
+#ifdef _WIN32
+#include <bcrypt.h>
+#endif
 #include <utility>
 
 namespace hydra::gatec {
@@ -273,17 +277,30 @@ TransportResult PipeChannel::readFrame(
 #endif
 }
 
-SessionToken generateSessionToken() {
+std::optional<SessionToken> generateSessionToken() {
     SessionToken token{};
-    std::random_device random;
-    const auto now = static_cast<std::uint64_t>(
-        std::chrono::high_resolution_clock::now().time_since_epoch().count());
-    for (std::size_t index = 0; index < token.size(); ++index) {
-        const auto randomByte = static_cast<std::uint8_t>(random() & 0xffu);
-        const auto timeByte = static_cast<std::uint8_t>(
-            (now >> ((index % 8) * 8)) & 0xffu);
-        token[index] = static_cast<std::uint8_t>(randomByte ^ timeByte ^
-                                                 static_cast<std::uint8_t>(index * 29));
+#ifdef _WIN32
+    const NTSTATUS status = BCryptGenRandom(
+        nullptr, reinterpret_cast<PUCHAR>(token.data()),
+        static_cast<ULONG>(token.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    if (status < 0) {
+        return std::nullopt;
+    }
+#else
+    try {
+        std::random_device random;
+        for (auto& byte : token) {
+            byte = static_cast<std::uint8_t>(random() & 0xffu);
+        }
+    } catch (...) {
+        return std::nullopt;
+    }
+#endif
+    const bool allZero = std::all_of(
+        token.begin(), token.end(),
+        [](std::uint8_t byte) { return byte == 0; });
+    if (allZero) {
+        return std::nullopt;
     }
     return token;
 }
