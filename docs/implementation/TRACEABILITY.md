@@ -24,6 +24,7 @@ This document maps the user's intended product behavior to the design decisions,
 | User can return the split PC to ordinary Windows with one clear operation | D-033 | P4-CTRL-02, P8-RESET-01 | Stop/Return transaction verifies rollback; all monitors/input return to normal without reboot |
 | User can reconfigure monitors/input with a few guided steps | D-034 | P4-CTRL-02, Phase 6 profile UI | Active session safely stops, editor opens on Management Seat, validation/save/start uses a new plan |
 | User can choose manual, hidden background, or automatic validated startup | D-032 | P8-BOOT-01 | Reboot/logon matrix proves Manual, BackgroundIdle, and AutoActivateValidatedSession behavior |
+| UI/UX and end-user README are available in English, Korean, and Simplified Chinese | D-035 | P7-I18N-01, P7-A11Y-01, P10-UX-01 | `en-US`/`ko-KR`/`zh-CN` catalog parity, three-language critical-flow acceptance, and README language/version/status parity |
 | Startup is silent and ordinary use has no repeated UAC | D-004, D-020 | P8-PRIV-01, P8-BOOT-01 | Standard-user logon/reboot acceptance |
 | Dangerous operations recover automatically | D-009, D-020 | P8-WATCH-01, P8-RESET-01, P8-JOURNAL-01 | Host/helper kill, timeout, reset, safe mode, no orphan state |
 | Device hiding occurs only after replacement path works | D-008, D-009 | P3-REC-01, P3-D-01/02 | Guarded physical cloak test with spare input/expiry/watchdog |

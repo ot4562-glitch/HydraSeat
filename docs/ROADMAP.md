@@ -157,6 +157,7 @@ Detailed implementation: [Phase 6 packet roadmap](implementation/PHASE6_LAUNCHER
 
 - [ ] Launch one scoped shell process per Seat
 - [ ] Keep an always-available HydraSeat management-console entry on the configured Management Seat shell; non-management Seats remain read-mostly for whole-machine controls
+- [ ] Add shared UI localization catalogs with English default plus Korean (`ko-KR`) and Simplified Chinese (`zh-CN`), while source comments and machine-readable identifiers remain English
 - [ ] Add Seat launcher and pinned profiles
 - [ ] Add Seat-owned task/window surface
 - [ ] Add per-Seat multi-monitor wallpaper and desktop zones
@@ -164,7 +165,7 @@ Detailed implementation: [Phase 6 packet roadmap](implementation/PHASE6_LAUNCHER
 - [ ] Add Seat-scoped launcher/window/recovery hotkeys
 - [ ] Add Seat-scoped runtime notifications
 - [ ] Define truthful optional clipboard policy
-- [ ] Complete DPI/accessibility/localization readiness
+- [ ] Complete DPI/accessibility/localized-layout readiness across English/Korean/Chinese UI
 - [ ] Create internal shell extension boundary
 - [ ] Prove shell crash/restart and Explorer coexistence
 

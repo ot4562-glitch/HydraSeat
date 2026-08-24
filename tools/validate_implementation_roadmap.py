@@ -233,8 +233,9 @@ def validate(root: Path) -> tuple[Validation, dict[str, Packet]]:
     if missing_phase_files:
         result.error("missing phase documents: " + ", ".join(missing_phase_files))
 
+    readme_paths = sorted(root.glob("README*.md"))
     entrypoint_paths = [
-        root / "README.md",
+        *readme_paths,
         root / "AGENTS.md",
         root / ".agents" / "AGENTS.md",
     ]

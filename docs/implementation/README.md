@@ -98,6 +98,7 @@ Detailed specifications:
 
 - [Product requirement traceability](TRACEABILITY.md)
 - [Non-negotiable decisions](DECISIONS.md)
+- [Localization policy](../LOCALIZATION.md)
 - [Codex implementation playbook](CODEX_PLAYBOOK.md)
 - [Current execution status](STATUS.md)
 - [PHASE3_INPUT_ISOLATION.md](PHASE3_INPUT_ISOLATION.md)

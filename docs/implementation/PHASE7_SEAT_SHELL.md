@@ -18,7 +18,7 @@ Phase 7 is complete when:
 6. Seat software cursors stay within Seat bounds and do not require multiple global Windows cursors;
 7. notifications and optional clipboard policy do not leak by default;
 8. shell crash/restart does not stop or corrupt the active Seat runtime;
-9. DPI/accessibility/localization basics pass;
+9. DPI/accessibility pass and the complete critical control workflow is usable in `en-US`, `ko-KR`, and `zh-CN`;
 10. UI/tray/shell all show the same host state;
 11. Explorer and ordinary single-user Windows behavior are restored on stop/reset.
 
@@ -33,7 +33,7 @@ P6-CLOSE-01 + P4-RUN/IPC/WIN/DIS
           +-> P7-HOTKEY-01
 
 P7-SHELL-01 -> P7-NOTIFY-01 -> optional P7-CLIP-01
-all UI paths -> P7-A11Y-01 -> P7-REC-01 -> P7-CLOSE-01
+all UI paths -> P7-I18N-01 -> P7-A11Y-01 -> P7-REC-01 -> P7-CLOSE-01
 ```
 
 ---
@@ -478,7 +478,102 @@ One limited policy is implemented/tested or the packet is formally deferred with
 
 ---
 
-## P7-A11Y-01 — DPI, accessibility, input modality, and localization readiness
+## P7-I18N-01 — UI localization framework and English/Korean/Chinese catalogs
+
+**State:** BLOCKED
+
+**Goal**
+
+Make every shipping Management Seat, Seat shell, profile/editor, setup, status, warning, and recovery surface localizable before the final UI hardens. English is the canonical fallback and the initial release catalogs are `en-US`, `ko-KR`, and `zh-CN` (Simplified Chinese).
+
+**Depends on**
+
+- primary Phase 7 UI/control-surface models
+- D-035
+
+**Create/modify**
+
+- `include/hydra/localization.hpp`
+- `src/localization.cpp`
+- `resources/i18n/en-US.json`
+- `resources/i18n/ko-KR.json`
+- `resources/i18n/zh-CN.json`
+- `schemas/localization-catalog.schema.json`
+- UI/shell translation bindings;
+- locale settings in the per-user configuration;
+- localization validator/tests.
+
+**Core contracts**
+
+```cpp
+using MessageId = std::string_view;
+
+struct LocaleId;
+struct LocalizedArgument;
+struct LocalizedMessage;
+struct LocalizationCatalogInfo;
+class LocalizationCatalog;
+class LocalizationService;
+```
+
+Catalog messages use stable English-like IDs such as `session.stop_return_to_windows`, never English display text as the lookup key. Resources are UTF-8. Formatting arguments are named rather than positional where practical so translators may reorder them safely.
+
+**Implementation skeleton**
+
+1. Define supported locale identifiers `en-US`, `ko-KR`, and `zh-CN`; keep `en-US` compiled/packaged as the unconditional fallback.
+2. Define a bounded versioned JSON catalog schema with locale, schema version, message map, optional translator note metadata, and named placeholders.
+3. Implement catalog parsing/validation independent of Qt so Win32 and future Qt surfaces can share the same message IDs.
+4. Reject duplicate keys, malformed UTF-8, unsupported schema versions, invalid placeholder syntax, and catalogs whose placeholder sets do not match English.
+5. Load the requested per-user locale; on first run, map supported Windows UI language families to a supported locale and otherwise choose `en-US`.
+6. Make locale override explicit in the Management Seat settings and persist it transactionally.
+7. Replace shipping user-visible literal strings with message IDs as each UI surface enters Phase 7; developer logs/protocol/error codes remain stable English identifiers.
+8. Support live catalog reload/locale switch for disposable UI and shell clients without restarting the active Seat session.
+9. Provide a missing-key path that renders the English fallback and records a bounded diagnostic with the missing message ID; never render a blank recovery/security control.
+10. Use Windows/system font fallback and Unicode text shaping; do not bundle private fonts merely to satisfy Korean/Chinese glyph coverage.
+11. Add tooling that compares all supported catalogs against English for key parity, placeholder parity, duplicate keys, invalid Unicode, and accidental untranslated critical strings.
+12. Add screenshot/manual review fixtures for representative compact, normal, long, warning, recovery, and multi-monitor strings at mixed DPI.
+
+**Language policy**
+
+- UI/UX default language: English (`en-US`).
+- Supported release languages: English, Korean (`ko-KR`), Simplified Chinese (`zh-CN`).
+- Source-code comments and developer-facing implementation notes: English only.
+- Protocol names, JSON/schema keys, CLI switches, diagnostic codes, capability IDs, backend IDs, packet IDs, and compatibility IDs: stable English identifiers and never localized.
+- User-visible diagnostic descriptions may be localized but always expose/copy the stable diagnostic code.
+- Traditional Chinese may be added later as a separate locale without changing runtime protocols.
+
+**Automated tests**
+
+- all three catalogs parse and validate;
+- exact key parity with `en-US` for required release strings;
+- exact named-placeholder parity;
+- fallback from missing `ko-KR`/`zh-CN` optional string to English;
+- missing critical English key fails build/validation;
+- invalid/future schema version and malformed UTF-8 rejection;
+- unsupported locale -> English fallback;
+- Windows-language detection mapping;
+- locale persistence and corrupt-settings fallback;
+- runtime locale change updates two independent shell/UI clients without changing host/session state;
+- no localization resource can change command/protocol/schema semantics.
+
+**Manual acceptance**
+
+- complete Management Seat Start -> Active -> Stop / Return -> Reconfigure workflows in English, Korean, and Simplified Chinese;
+- verify Korean/Chinese glyph rendering without custom font installation on a clean supported Windows machine;
+- verify long strings, mixed 100/150/200% DPI, and two-monitor Management Seat layouts;
+- verify recovery/reset controls remain recognizable and fully visible in every language.
+
+**Done when**
+
+`en-US`, `ko-KR`, and `zh-CN` catalogs have key/placeholder parity, all primary UI surfaces resolve strings through the localization service, locale switching does not disturb an active session, and the three-language manual UI checklist is recorded.
+
+**Suggested commit**
+
+`feat: implement P7-I18N-01 multilingual UI catalogs`
+
+---
+
+## P7-A11Y-01 — DPI, accessibility, input modality, and localized-layout readiness
 
 **State:** BLOCKED
 
@@ -489,6 +584,7 @@ Ensure the shell/control surfaces are usable across mixed-DPI displays and commo
 **Depends on**
 
 - primary Phase 7 UI packets
+- P7-I18N-01
 
 **Coverage**
 
@@ -497,8 +593,8 @@ Ensure the shell/control surfaces are usable across mixed-DPI displays and commo
 - screen-reader labels for main UI/shell where toolkit permits;
 - high contrast and scalable text;
 - color not sole status indicator;
-- localization-ready strings/resource IDs;
-- left-to-right/long string layout;
+- render `en-US`, `ko-KR`, and `zh-CN` catalogs from P7-I18N-01 without clipping critical actions;
+- left-to-right/long string layout and CJK/Korean system-font fallback;
 - controller navigation optional after controller UI policy.
 
 **Invariants**
@@ -512,7 +608,7 @@ Ensure the shell/control surfaces are usable across mixed-DPI displays and commo
 
 - 100/125/150/200% DPI;
 - mixed DPI Seat displays;
-- long localized strings;
+- long strings and critical workflows in `en-US`, `ko-KR`, and `zh-CN`;
 - keyboard navigation;
 - high contrast;
 - scale change/hot-plug.
@@ -617,7 +713,8 @@ The failure matrix passes on a physical multi-display system.
 - launcher/task/background/cursor/status work across multi-monitor Seats;
 - no global Explorer replacement;
 - notifications and clipboard policy truthful;
-- DPI/accessibility checklist passes;
+- `en-US`, `ko-KR`, and `zh-CN` localization catalogs have required key/placeholder parity and critical UI workflows pass in all three languages;
+- DPI/accessibility checklist passes in all three supported languages;
 - shell crashes/restarts safely;
 - user experiences distinct Seat environments while runtime remains host-owned;
 - Phase 8 receives stable host/shell/watchdog/install boundaries.

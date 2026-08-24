@@ -84,7 +84,10 @@ Read the full decisions in `docs/implementation/DECISIONS.md`. At minimum:
 - controller support is API-specific (XInput, DirectInput, Raw HID, SDL, vendor APIs are distinct);
 - optional components are explicit, version/hash/license/trust checked, and never silently downloaded/executed;
 - recovery is part of the feature, not later cleanup work;
-- performance and compatibility claims require measurement/matrix evidence.
+- performance and compatibility claims require measurement/matrix evidence;
+- shipping UI is localized through stable message IDs with `en-US` fallback and required `ko-KR`/`zh-CN` catalogs; source-code comments and developer-facing implementation notes remain English;
+- machine-readable protocols, schema keys, CLI switches, diagnostic codes, capability/backend/profile identifiers, and packet IDs are never localized;
+- read `docs/LOCALIZATION.md` before adding user-visible UI text or end-user documentation.
 
 ## 6. Clean-room and third-party boundaries
 

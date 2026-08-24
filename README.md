@@ -1,5 +1,7 @@
 # HydraSeat 🎮
 
+**English** | [한국어](README.ko.md) | [简体中文](README.zh-CN.md)
+
 An experimental Windows local gaming multiseat framework. The repository license is not yet formally declared; see the clean-room policy before reusing code.
 
 [![License: not yet declared](https://img.shields.io/badge/license-not%20yet%20declared-lightgrey.svg)](docs/CLEAN_ROOM_POLICY.md)
@@ -91,6 +93,12 @@ Three startup modes are planned:
 - **Auto-Activate Validated Session** — after logon, HydraSeat may automatically restore one explicitly selected, previously validated Seat layout only if crash-journal, safe-mode, hardware/topology, capability, privilege, watchdog, and rollback preflight all pass. Otherwise it stays safely idle instead of partially splitting the PC.
 
 This gives both intended usage styles: an always-available appliance-like split-PC setup after boot, or a program the user launches only when multiseat gaming is needed.
+
+### Language support
+
+The canonical UI language is English (`en-US`). The planned initial release UI/UX locales are English, Korean (`ko-KR`), and Simplified Chinese (`zh-CN`). User-visible strings will use stable localization IDs with English fallback, while source-code comments, protocols, schema keys, CLI switches, diagnostic codes, and other machine/developer identifiers remain English. See [Localization Policy](docs/LOCALIZATION.md).
+
+The README is available in [English](README.md), [Korean](README.ko.md), and [Simplified Chinese](README.zh-CN.md). README translation availability does not mean the runtime UI localization packet is already implemented; that work is tracked as `P7-I18N-01`.
 
 ---
 

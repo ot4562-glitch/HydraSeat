@@ -307,3 +307,30 @@ Reconfigure
 ```
 
 A future packet may permit specific hot-reconfiguration operations, but only when that operation has its own capability, atomic transition, rollback, and physical acceptance. Unsupported live reconfiguration fails closed and uses the safe stop-edit-start path.
+
+## D-035 — English-first localization with Korean and Simplified Chinese as release languages
+
+HydraSeat user-facing UI and end-user documentation are internationalized from the start rather than translated after UI code is complete.
+
+Initial supported locales are:
+
+- `en-US` — canonical source language and unconditional fallback;
+- `ko-KR` — Korean;
+- `zh-CN` — Simplified Chinese.
+
+Windows UI language may select the initial locale when it exactly matches a supported locale/family, but the user can always override it in the Management Seat control console. Unsupported locales fall back to `en-US`. Locale selection is per Windows user and does not alter protocol/schema/profile semantics.
+
+Rules:
+
+- user-visible UI strings use stable localization message IDs; no new shipping UI text is embedded ad hoc in widgets/window procedures;
+- localization resources are UTF-8 and versioned/tested for key and placeholder parity;
+- machine-readable protocol fields, schema keys, CLI option names, diagnostic/error codes, source identifiers, and compatibility IDs remain stable English identifiers;
+- source-code comments, developer-facing docstrings, commit-oriented technical comments, and implementation notes are written in English;
+- localized UI may translate explanatory diagnostic text, but retains/copies the stable diagnostic code for support;
+- layouts must tolerate Korean/Chinese glyphs, longer translations, mixed DPI, and Windows system-font fallback without bundling private font files;
+- locale changes must not require restarting an active Seat session; at most the disposable UI/shell client may relayout/reload resources;
+- security/recovery buttons must remain semantically identifiable in all supported languages;
+- `README.md` is the canonical English README and links to maintained `README.ko.md` and `README.zh-CN.md` versions; localized README files link back to all language variants;
+- release validation checks localized README/version/link consistency and supported-locale UI resource completeness.
+
+Traditional Chinese or additional locales may be added later through the same resource contract without changing core runtime protocols.
