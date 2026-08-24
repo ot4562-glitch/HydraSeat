@@ -15,20 +15,30 @@ P3-API-01 adds a read-only controlled Win32 API probe and a fixed-width
 comparison snapshot. Its Windows/MSVC baseline is validated by CI run
 `32722277035`, where all 15 tests, including both API probe self-tests, passed.
 
-P3-ARCH-01 is Windows-validated by CI run `32726477354`. It adds explicit
+P3-ARCH-01 is Windows-validated by CI run `32727711605`. It adds explicit
 Win32 process-architecture detection, PE-machine preflight, a bounded schema-v1
 artifact manifest/selector, deterministic `gate-c/x86` and `gate-c/x64`
 layouts, and x86/x64 CI coverage. Both native matrix legs and the real
 x64-host-to-x86/x64 controlled target/probe job passed.
 
-This is not yet a general game hook or a completed Gate C implementation. The controlled targets call HydraSeat's adapter API directly. Commercial games still call the ordinary Windows APIs unless a later, explicitly approved compatibility adapter interposes those calls.
+P3-API-02 is now `VALIDATED` by Windows CI run `32780563364`. It adds a
+separate startup-loaded polling shim for HydraSeat-owned probes, transactional
+process-internal IAT patching, fixed-width C diagnostics, exact unpatch, and
+x86/x64 artifact selection. Native x64/x86 CTest and the real x64-host-to-x64/x86
+ordinary-polling two-probe matrix all passed.
+
+This is not a general game hook or a completed Gate C implementation. The
+controlled targets still call HydraSeat's adapter API directly; only the
+explicitly launched API probe may opt into the polling shim. Commercial games
+remain unsupported and are never modified by this packet.
 
 ## Safety boundary
 
 The Gate C lab performs none of the following:
 
 - injection into a third-party or commercial process;
-- Import Address Table patching, detours or system-wide hooks;
+- Import Address Table patching outside the explicitly launched HydraSeat API
+  probe, code detours, or system-wide hooks;
 - anti-cheat, DRM or protected-process bypass;
 - HidHide control or driver installation;
 - physical keyboard/mouse suppression;
@@ -81,12 +91,43 @@ The API probe is a separate HydraSeat-owned process. It:
 - reads the matching process-local state through the existing adapter C ABI;
 - returns both observations in one versioned `ProbeSnapshot` frame;
 - treats HWND values as transient runtime diagnostics, never persisted identity;
-- never calls a Win32 cursor/focus/capture setter and installs no hook or shim.
+- never calls a Win32 cursor/focus/capture setter;
+- optionally loads the explicitly selected polling shim before the controlled
+  session and refuses DLL unload until exact unpatch succeeds.
 
 Visible probe mode shows the last OS and adapter observations side by side. A
 foreground mismatch is expected before interposition: two adapters may both
 report virtual foreground while Windows still has only one real foreground
 window.
+
+### `hydra_gate_c_shim.dll`
+
+The P3-API-02 shim is a separate architecture-matching DLL loaded through the
+normal Windows loader only by `hydra_gate_c_api_probe.exe`. It parses only the
+current executable image and patches only its named `GetAsyncKeyState`,
+`GetKeyState`, and `GetKeyboardState` imports. Direct `USER32.dll` and
+explicit NTUSER API-set module-name families are allowed; ordinal imports
+cannot identify an allowlisted function and are not matched.
+Forwarded-export resolution does not require a second patch path because the
+loader has already placed the final callable address in the probe's IAT slot.
+
+All three imports must exist exactly once. Install is all-or-rollback, exact
+original pointers are retained, pointer-sized IAT ranges receive temporary
+write protection, and old protection is immediately restored. The shim calls
+the probe-owned adapter context and owns no keyboard state. Inactive and
+out-of-domain calls use the saved original directly. Adapter loss/read failure
+enters visible fail-closed mode for supported keys. Lifecycle transitions wait
+for active adapter reads, restore the IAT, and only then permit unload.
+
+Shim ABI v1 is `__cdecl` and uses packed fixed-width config/status structures
+with `struct_size`, generation, API masks, result, adapter-result, system-error,
+and rollback diagnostics. Toggle low bits are explicitly unsupported in v1:
+`GetKeyState` returns only the adapter high bit and every `GetKeyboardState`
+low bit is zero.
+
+Provenance: this slice was independently implemented from the packet/design
+requirements and Windows SDK declarations. No third-party implementation code
+or reference-repository source was copied, adapted, or used as a build input.
 
 ### `hydra_gate_c_adapter.dll`
 
@@ -264,15 +305,17 @@ Compiles and calls the exported adapter API from a C11 translation unit, confirm
 
 The version-1 internal manifest is bounded to 8 entries and 128 bytes per
 relative path. It has canonical `(architecture, artifact kind)` ordering and
-contains target, adapter, and API-probe descriptors under:
+contains target, adapter, API-probe, and polling-shim descriptors under:
 
 ```text
 <artifact-root>/x86/hydra_gate_c_target.exe
 <artifact-root>/x86/hydra_gate_c_adapter.dll
 <artifact-root>/x86/hydra_gate_c_api_probe.exe
+<artifact-root>/x86/hydra_gate_c_shim.dll
 <artifact-root>/x64/hydra_gate_c_target.exe
 <artifact-root>/x64/hydra_gate_c_adapter.dll
 <artifact-root>/x64/hydra_gate_c_api_probe.exe
+<artifact-root>/x64/hydra_gate_c_shim.dll
 ```
 
 Configure and run each native matrix leg with:
@@ -305,7 +348,40 @@ and the repeated normal, missing-window, handshake-timeout, abnormal-exit, and
 host-disconnect matrix against the x86 API probe. Unit tests
 also reject future schema versions, over-limit/duplicate/unknown/missing
 entries, non-canonical order, absolute/traversal paths, malformed PE files, and
-wrong target/adapter architectures.
+wrong target/adapter/shim architectures.
+
+### Polling shim component and process tests
+
+```powershell
+ctest --test-dir build --build-config Release -R GateCPollingShim --output-on-failure
+ctest --test-dir build --build-config Release -R GateCShimCSmoke --output-on-failure
+```
+
+The component tests cover fixed C/C++ ABI sizes, install/uninstall/reinstall,
+missing/duplicate/already-patched imports, malformed slot metadata, partial
+install rollback, protection failure, retryable uninstall failure, exact
+pointer restoration, adapter-unavailable fail-closed behavior, async high/edge
+semantics, zero toggle bits, null/no-partial keyboard-state behavior, and
+out-of-domain pass-through.
+
+On Windows the controlled probe and two-process checks are:
+
+```powershell
+.\build-x64\gate-c\x64\hydra_gate_c_api_probe.exe `
+  --polling-shim-self-test `
+  --shim .\build-x64\gate-c\x64\hydra_gate_c_shim.dll
+
+.\build-x64\gate-c\x64\hydra_gate_c_host.exe `
+  --polling-shim-self-test `
+  --target .\build-x64\gate-c\x64\hydra_gate_c_api_probe.exe `
+  --shim .\build-x64\gate-c\x64\hydra_gate_c_shim.dll
+```
+
+The host launches two probes, applies different A/B adapter state, verifies
+the ordinary imported polling APIs see only their own Seat, then requires
+successful unpatch before clean exit. Artifact-root mode preflights probe,
+adapter, and shim PE machines before launch. Forced probe termination changes
+no other process because the patch is confined to the terminated process.
 
 ### Target self-test
 
@@ -461,27 +537,23 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] Explicit process/PE architecture detection and bounded manifest selector source
 - [x] Deterministic architecture-neutral names under `gate-c/x86` and `gate-c/x64`
 - [x] Declared x86/x64 CTest and x64-host-to-x86-target CI jobs
-- [x] Windows/MSVC execution of the x86/x64 architecture matrix and x64-host-to-x86-target/probe self-tests (`32726477354`)
+- [x] Windows/MSVC execution of the x86/x64 architecture matrix and x64-host-to-x86-target/probe self-tests (`32727711605`)
+- [x] P3-API-02 polling shim source, fixed C ABI, transactional IAT engine, architecture manifest, native x64/x86 tests, and cross-architecture ordinary-polling proof (`32780563364`)
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Controlled Raw Input consumer that calls `RegisterRawInputDevices` / `GetRawInputData`
-- [ ] Controlled probe using actual Win32 polling/cursor/focus APIs through opt-in compatibility shims (P3-API-02/P3-API-03)
-- [ ] Clean-room API interposition for HydraSeat-owned test binaries
+- [ ] Cursor/focus/capture API shim for the controlled probe (P3-API-03)
 - [ ] Adapter crash/watchdog recovery acceptance
 - [ ] Commercial non-anti-cheat game profile experiment
 - [ ] Physical device cloaking/suppression
 
 ## Next implementation step
 
-P3-ARCH-01 passed the Windows/MSVC x86/x64 and real x64-host-to-x86-target
-matrix in run `32726477354`. P3-API-02 may now begin controlled polling API
-interposition, still limited to HydraSeat-owned probe executables:
-
-1. Add an opt-in compatibility shim loaded at process startup, not injected into an arbitrary running process.
-2. Interpose `GetAsyncKeyState`, `GetKeyState`, and `GetKeyboardState` only for the controlled probe.
-3. Make every interposed call use the adapter C ABI rather than owning duplicate state.
-4. Prove rollback and unhook behavior before proceeding to cursor/focus or Raw Input packets.
+P3-API-02 passed the declared Windows/MSVC native x64, native x86, and
+x64-host-to-x64/x86 polling-probe matrix in run `32780563364` and is now
+`VALIDATED`. P3-API-03 may begin, but it must preserve the polling-shim
+regressions and remain limited to HydraSeat-owned controlled probes.
 
 Gate C is not complete until controlled probes observe Seat-local values through the API surface a real game would call.

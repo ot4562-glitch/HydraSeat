@@ -71,7 +71,7 @@ Research:
 ### Remaining critical path
 
 - [ ] Controlled probe records real OS polling/cursor/focus/Raw Input baseline (`P3-API-01`)
-- [ ] Startup-loaded polling shim for HydraSeat-owned probes
+- [x] Startup-loaded polling shim for HydraSeat-owned probes
 - [ ] Cursor/focus/capture shim for HydraSeat-owned probes
 - [ ] Raw Input registration/data behavior probe and virtualization shim
 - [x] x86/x64 controlled adapter matrix

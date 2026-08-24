@@ -137,7 +137,7 @@ Windows CI can launch two probes and show that each has independent adapter stat
 
 ## P3-API-02 — Startup-loaded polling API shim for controlled probes
 
-**State:** READY
+**State:** VALIDATED
 
 **Goal**
 
@@ -159,7 +159,8 @@ Make a HydraSeat-owned probe receive Seat-local `GetAsyncKeyState`, `GetKeyState
 
 **Implementation skeleton**
 
-1. Build a separate `hydra_gate_c_shim32/64.dll`.
+1. Build a separate architecture-neutral `hydra_gate_c_shim.dll` under each
+   deterministic `gate-c/x86` and `gate-c/x64` directory.
 2. Load it explicitly at controlled probe startup; do not inject an already running process.
 3. Patch only the controlled probe's intended imports.
 4. Keep original function pointers and an idempotent unpatch table.
@@ -203,7 +204,7 @@ Two controlled probes call the ordinary polling APIs and receive their own Seat 
 
 ## P3-API-03 — Cursor, clip, focus, and capture shim
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 
@@ -394,7 +395,7 @@ Support and test both target architectures without pointer-size assumptions.
 - CMake architecture-specific output naming;
 - CI matrix for x64 and x86;
 - `hydra_gate_c_target32/64.exe` or architecture-neutral installed naming;
-- `hydra_gate_c_shim32/64.dll` when P3-API-02 exists;
+- `hydra_gate_c_shim.dll` under each architecture directory when P3-API-02 exists;
 - host architecture selector and manifest;
 - protocol/ABI tests across both builds.
 

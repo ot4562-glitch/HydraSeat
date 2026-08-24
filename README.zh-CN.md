@@ -353,7 +353,7 @@ Gate C 仅运行 HydraSeat 自己的 controlled target，用于验证 versioned 
 当前默认 packet：
 
 ```text
-P3-API-01 — Controlled Win32 API probe baseline
+P3-API-02 — Startup-loaded polling API shim for controlled probes
 ```
 
 开始编码前阅读：

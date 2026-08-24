@@ -71,8 +71,8 @@ jobs:
     - name: Build controlled architecture artifacts
       shell: pwsh
       run: |
-        cmake --build build-cross-x64 --config Release --parallel --target hydra_gate_c_host hydra_gate_c_target hydra_gate_c_api_probe hydra_gate_c_adapter
-        cmake --build build-cross-x86 --config Release --parallel --target hydra_gate_c_target hydra_gate_c_api_probe hydra_gate_c_adapter
+        cmake --build build-cross-x64 --config Release --parallel --target hydra_gate_c_host hydra_gate_c_target hydra_gate_c_api_probe hydra_gate_c_adapter hydra_gate_c_shim
+        cmake --build build-cross-x86 --config Release --parallel --target hydra_gate_c_target hydra_gate_c_api_probe hydra_gate_c_adapter hydra_gate_c_shim
 
     - name: Stage deterministic x86 and x64 artifact manifest layout
       shell: pwsh
@@ -82,9 +82,11 @@ jobs:
         Copy-Item build-cross-x64\gate-c\x64\hydra_gate_c_target.exe matrix-artifacts\gate-c\x64\
         Copy-Item build-cross-x64\gate-c\x64\hydra_gate_c_api_probe.exe matrix-artifacts\gate-c\x64\
         Copy-Item build-cross-x64\gate-c\x64\hydra_gate_c_adapter.dll matrix-artifacts\gate-c\x64\
+        Copy-Item build-cross-x64\gate-c\x64\hydra_gate_c_shim.dll matrix-artifacts\gate-c\x64\
         Copy-Item build-cross-x86\gate-c\x86\hydra_gate_c_target.exe matrix-artifacts\gate-c\x86\
         Copy-Item build-cross-x86\gate-c\x86\hydra_gate_c_api_probe.exe matrix-artifacts\gate-c\x86\
         Copy-Item build-cross-x86\gate-c\x86\hydra_gate_c_adapter.dll matrix-artifacts\gate-c\x86\
+        Copy-Item build-cross-x86\gate-c\x86\hydra_gate_c_shim.dll matrix-artifacts\gate-c\x86\
 
     - name: Run x64 host to native x64 and cross-architecture x86 targets
       shell: pwsh
@@ -96,4 +98,8 @@ jobs:
         & .\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe --protocol-error-self-test --artifact-root .\matrix-artifacts\gate-c --target-architecture x86
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & .\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe --baseline-self-test --artifact-root .\matrix-artifacts\gate-c --target-architecture x86
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & .\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe --polling-shim-self-test --artifact-root .\matrix-artifacts\gate-c --target-architecture x64
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & .\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe --polling-shim-self-test --artifact-root .\matrix-artifacts\gate-c --target-architecture x86
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

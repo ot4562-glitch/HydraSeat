@@ -56,6 +56,7 @@ using hydra::gatec::TransportStatus;
 
 struct HostOptions {
     std::wstring targetPath;
+    std::wstring shimPath;
     std::wstring artifactRoot;
     hydra::gatec::ProcessArchitecture requestedArchitecture{
         hydra::gatec::ProcessArchitecture::Unknown};
@@ -64,6 +65,7 @@ struct HostOptions {
     bool selfTest{false};
     bool architectureSelfTest{false};
     bool baselineSelfTest{false};
+    bool pollingShimSelfTest{false};
     bool protocolErrorSelfTest{false};
     bool showHelp{false};
 };
@@ -76,6 +78,8 @@ void printUsage(std::ostream& output) {
         << "  hydra_gate_c_host --architecture-self-test --artifact-root <gate-c>\n"
         << "                     --target-architecture <x86|x64>\n"
         << "  hydra_gate_c_host --baseline-self-test --target <hydra_gate_c_api_probe.exe>\n"
+        << "  hydra_gate_c_host --polling-shim-self-test --target <hydra_gate_c_api_probe.exe>\n"
+        << "                     --shim <hydra_gate_c_shim.dll>\n"
         << "  hydra_gate_c_host --protocol-error-self-test [--target <hydra_gate_c_target.exe>]\n"
         << "  hydra_gate_c_host [--profile <workspace_config.json>] [--trace <file.jsonl>]\n"
         << "                     [--target <hydra_gate_c_target.exe>]\n\n"
@@ -183,6 +187,8 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
         const std::wstring argument = argv[index];
         if (argument == L"--target" && index + 1 < argc) {
             options.targetPath = argv[++index];
+        } else if (argument == L"--shim" && index + 1 < argc) {
+            options.shimPath = argv[++index];
         } else if (argument == L"--artifact-root" && index + 1 < argc) {
             options.artifactRoot = argv[++index];
         } else if (argument == L"--target-architecture" && index + 1 < argc) {
@@ -200,6 +206,8 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
             options.architectureSelfTest = true;
         } else if (argument == L"--baseline-self-test") {
             options.baselineSelfTest = true;
+        } else if (argument == L"--polling-shim-self-test") {
+            options.pollingShimSelfTest = true;
         } else if (argument == L"--protocol-error-self-test") {
             options.protocolErrorSelfTest = true;
         } else if (argument == L"--help" || argument == L"-h") {
@@ -211,6 +219,7 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
     const int selfTestModes = static_cast<int>(options.selfTest) +
         static_cast<int>(options.architectureSelfTest) +
         static_cast<int>(options.baselineSelfTest) +
+        static_cast<int>(options.pollingShimSelfTest) +
         static_cast<int>(options.protocolErrorSelfTest);
     if (selfTestModes > 1) {
         return false;
@@ -219,11 +228,27 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
     const bool hasArchitecture = options.requestedArchitecture !=
         hydra::gatec::ProcessArchitecture::Unknown;
     if (hasArtifactRoot != hasArchitecture ||
-        (hasArtifactRoot && !options.targetPath.empty()) ||
-        (options.architectureSelfTest && !hasArtifactRoot)) {
+        (hasArtifactRoot &&
+         (!options.targetPath.empty() || !options.shimPath.empty())) ||
+        (options.architectureSelfTest && !hasArtifactRoot) ||
+        (!options.pollingShimSelfTest && !options.shimPath.empty())) {
         return false;
     }
     return true;
+}
+
+std::wstring siblingShimPath() {
+    std::vector<wchar_t> buffer(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(
+        nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size()) {
+        return L"hydra_gate_c_shim.dll";
+    }
+    std::wstring path(buffer.data(), length);
+    const auto separator = path.find_last_of(L"\\/");
+    path.resize(separator == std::wstring::npos ? 0 : separator + 1);
+    path += L"hydra_gate_c_shim.dll";
+    return path;
 }
 
 std::wstring siblingTargetPath(bool apiProbe) {
@@ -483,13 +508,19 @@ public:
         : m_options(std::move(options)) {
         if (m_options.targetPath.empty() && m_options.artifactRoot.empty()) {
             m_options.targetPath = siblingTargetPath(
-                m_options.baselineSelfTest);
+                m_options.baselineSelfTest ||
+                m_options.pollingShimSelfTest);
+        }
+        if (m_options.pollingShimSelfTest &&
+            m_options.shimPath.empty() && m_options.artifactRoot.empty()) {
+            m_options.shimPath = siblingShimPath();
         }
     }
 
     int run() {
         if (!m_options.artifactRoot.empty()) {
-            const auto kind = m_options.baselineSelfTest
+            const auto kind = (m_options.baselineSelfTest ||
+                               m_options.pollingShimSelfTest)
                 ? hydra::gatec::GateCArtifactKind::ApiProbe
                 : hydra::gatec::GateCArtifactKind::ControlledTarget;
             const auto selected = hydra::gatec::resolveGateCArtifacts(
@@ -505,6 +536,9 @@ public:
             }
             m_options.targetPath =
                 selected.selection->executablePath.wstring();
+            if (m_options.pollingShimSelfTest) {
+                m_options.shimPath = selected.selection->shimPath.wstring();
+            }
             m_expectedArchitecture = selected.selection->architecture;
         }
         if (GetFileAttributesW(m_options.targetPath.c_str()) ==
@@ -531,11 +565,30 @@ public:
                          "the selected artifact architecture.\n";
             return 22;
         }
+        if (m_options.pollingShimSelfTest) {
+            if (GetFileAttributesW(m_options.shimPath.c_str()) ==
+                INVALID_FILE_ATTRIBUTES) {
+                std::cerr << "Controlled polling shim was not found.\n";
+                return 23;
+            }
+            const auto shimArchitecture =
+                hydra::gatec::detectPortableExecutableArchitecture(
+                    std::filesystem::path(m_options.shimPath));
+            if (!shimArchitecture ||
+                shimArchitecture.architecture != m_expectedArchitecture) {
+                std::cerr << "Controlled polling shim architecture does not "
+                             "match the selected probe.\n";
+                return 24;
+            }
+        }
         if (m_options.selfTest || m_options.architectureSelfTest) {
             return runProcessSelfTest();
         }
         if (m_options.baselineSelfTest) {
-            return runApiProbeBaselineSelfTest();
+            return runApiProbeBaselineSelfTest(false);
+        }
+        if (m_options.pollingShimSelfTest) {
+            return runApiProbeBaselineSelfTest(true);
         }
         if (m_options.protocolErrorSelfTest) {
             return runProtocolErrorSelfTest();
@@ -580,6 +633,10 @@ private:
         if (!extraArguments.empty()) {
             commandLine.push_back(L' ');
             commandLine.append(extraArguments);
+        }
+        if (m_options.pollingShimSelfTest) {
+            commandLine += L" --polling-shim --shim " +
+                           quoteArgument(m_options.shimPath);
         }
 
         STARTUPINFOW startup{};
@@ -663,7 +720,9 @@ private:
         ack.serverProcessId = GetCurrentProcessId();
         ack.grantedCapabilities = hydra::gatec::testCapabilityBits(
             requireOwnedWindow
-                ? hydra::gatec::kControlledApiProbeCapabilities
+                ? (m_options.pollingShimSelfTest
+                       ? hydra::gatec::kControlledPollingProbeCapabilities
+                       : hydra::gatec::kControlledApiProbeCapabilities)
                 : hydra::gatec::kControlledTargetCapabilities);
         if (!session.channel.writeFrame(
                 hydra::gatec::encodeHelloAck(1, ack), kIoTimeoutMs,
@@ -910,7 +969,7 @@ private:
         return EXIT_SUCCESS;
     }
 
-    int runApiProbeBaselineSelfTest() {
+    int runApiProbeBaselineSelfTest(bool pollingShim) {
         const auto runNormalCycle = [&]() -> bool {
             std::vector<TargetSession> sessions(2);
             sessions[0].seatId = 1;
@@ -1008,13 +1067,22 @@ private:
                                HYDRA_GATE_C_ADAPTER_OK);
             };
 
+            const bool firstAdapterAsync = pollingShim
+                ? firstA->adapter.asyncKeyState == 0x8000u &&
+                      firstASecond->adapter.asyncKeyState == 0x8000u
+                : firstA->adapter.asyncKeyState == 0x8001u &&
+                      firstASecond->adapter.asyncKeyState == 0x8000u;
+            const bool secondAdapterAsync = pollingShim
+                ? secondA->adapter.asyncKeyState == 0 &&
+                      secondB->adapter.asyncKeyState == 0x8000u
+                : secondA->adapter.asyncKeyState == 0 &&
+                      secondB->adapter.asyncKeyState == 0x8001u;
             const bool firstIsolated =
                 probeAdapterKeyDown(*firstA, 0x41) &&
                 !probeAdapterKeyDown(*firstA, 0x42) &&
                 firstA->adapter.keyboardState[0x41] == 0x80u &&
                 firstA->adapter.keyboardState[0x42] == 0 &&
-                firstA->adapter.asyncKeyState == 0x8001u &&
-                firstASecond->adapter.asyncKeyState == 0x8000u &&
+                firstAdapterAsync &&
                 firstA->adapter.cursorX == 15 &&
                 firstA->adapter.cursorY == 27 &&
                 (firstA->adapter.mouseButtonsDown & 1u) != 0 &&
@@ -1024,8 +1092,7 @@ private:
                 probeAdapterKeyDown(*secondB, 0x42) &&
                 secondA->adapter.keyboardState[0x41] == 0 &&
                 secondB->adapter.keyboardState[0x42] == 0x80u &&
-                secondA->adapter.asyncKeyState == 0 &&
-                secondB->adapter.asyncKeyState == 0x8001u &&
+                secondAdapterAsync &&
                 secondB->adapter.cursorX == 62 &&
                 secondB->adapter.cursorY == 71 &&
                 (secondB->adapter.mouseButtonsDown & (1u << 1)) != 0 &&
@@ -1045,8 +1112,31 @@ private:
                 firstA->monotonicTimestampMicros != 0 &&
                 secondA->monotonicTimestampMicros != 0;
 
+            const auto osValue = [](std::int16_t value) {
+                return static_cast<std::uint16_t>(value);
+            };
+            const bool ordinaryPollingIsolated = !pollingShim ||
+                (osValue(firstA->os.asyncKeyState) == 0x8001u &&
+                 osValue(firstASecond->os.asyncKeyState) == 0x8000u &&
+                 osValue(firstA->os.keyState) == 0x8000u &&
+                 firstA->os.keyboardState[0x41] == 0x80u &&
+                 firstA->os.keyboardState[0x42] == 0u &&
+                 osValue(secondA->os.asyncKeyState) == 0u &&
+                 osValue(secondB->os.asyncKeyState) == 0x8001u &&
+                 osValue(secondA->os.keyState) == 0u &&
+                 osValue(secondB->os.keyState) == 0x8000u &&
+                 secondA->os.keyboardState[0x41] == 0u &&
+                 secondB->os.keyboardState[0x42] == 0x80u &&
+                 firstA->asyncDownMatches && firstA->keyStateDownMatches &&
+                 firstA->keyboardStateDownMatches &&
+                 secondA->asyncDownMatches && secondA->keyStateDownMatches &&
+                 secondA->keyboardStateDownMatches &&
+                 secondB->asyncDownMatches && secondB->keyStateDownMatches &&
+                 secondB->keyboardStateDownMatches);
+
             const bool passed = firstIsolated && secondIsolated &&
-                baselineDifferenceObserved && completeObservations;
+                baselineDifferenceObserved && completeObservations &&
+                ordinaryPollingIsolated;
             const bool cleaned = cleanupSessions(sessions, !passed);
             return passed && cleaned &&
                 !sessions[0].process.running() &&
@@ -1117,11 +1207,19 @@ private:
             return 56;
         }
 
-        std::cout
-            << "HydraSeat Gate C API baseline self-test passed: two controlled "
-               "probe processes captured real Win32 polling/cursor/clip/focus/"
-               "capture observations beside independent Seat adapter state; "
-               "failure and repeated teardown paths left no child process.\n";
+        if (pollingShim) {
+            std::cout
+                << "HydraSeat Gate C polling shim process self-test passed: "
+                   "two startup-loaded controlled probes received independent "
+                   "Seat A/B state through ordinary polling APIs; failure, "
+                   "uninstall, and repeated teardown left no child process.\n";
+        } else {
+            std::cout
+                << "HydraSeat Gate C API baseline self-test passed: two controlled "
+                   "probe processes captured real Win32 polling/cursor/clip/focus/"
+                   "capture observations beside independent Seat adapter state; "
+                   "failure and repeated teardown paths left no child process.\n";
+        }
         return EXIT_SUCCESS;
     }
 

@@ -60,7 +60,8 @@ struct ArchitectureDetectionResult {
 enum class GateCArtifactKind : std::uint16_t {
     ControlledTarget = 1,
     AdapterLibrary = 2,
-    ApiProbe = 3
+    ApiProbe = 3,
+    PollingShim = 4
 };
 
 struct GateCArtifactEntry {
@@ -91,6 +92,7 @@ struct GateCArtifactSelection {
     GateCArtifactKind executableKind{GateCArtifactKind::ControlledTarget};
     std::filesystem::path executablePath;
     std::filesystem::path adapterPath;
+    std::filesystem::path shimPath;
 };
 
 struct GateCArtifactSelectionResult {

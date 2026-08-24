@@ -168,8 +168,10 @@ void testManifestValidationAndSelection() {
         manifest, ProcessArchitecture::X64, GateCArtifactKind::ApiProbe);
     check(selected &&
               selected.selection->executablePath.generic_string() ==
-                  "x64/hydra_gate_c_api_probe.exe",
-          "canonical x64 API probe selection is deterministic");
+                  "x64/hydra_gate_c_api_probe.exe" &&
+              selected.selection->shimPath.generic_string() ==
+                  "x64/hydra_gate_c_shim.dll",
+          "canonical x64 API probe and polling shim selection is deterministic");
 
     auto future = manifest;
     future.schemaVersion = 2;
@@ -242,7 +244,7 @@ void testManifestValidationAndSelection() {
 
     auto x64Only = manifest;
     x64Only.entries.erase(x64Only.entries.begin(),
-                          x64Only.entries.begin() + 3);
+                          x64Only.entries.begin() + 4);
     check(selectGateCArtifacts(x64Only, ProcessArchitecture::X86,
                                GateCArtifactKind::ControlledTarget).status ==
               ArtifactSelectionStatus::Unsupported,
@@ -254,6 +256,13 @@ void testManifestValidationAndSelection() {
                                GateCArtifactKind::ControlledTarget).status ==
               ArtifactSelectionStatus::MissingArtifact,
           "an incomplete architecture reports a missing artifact");
+
+    auto missingShim = manifest;
+    missingShim.entries.erase(missingShim.entries.begin() + 3);
+    check(selectGateCArtifacts(missingShim, ProcessArchitecture::X86,
+                               GateCArtifactKind::ApiProbe).status ==
+              ArtifactSelectionStatus::MissingArtifact,
+          "an API probe manifest without its polling shim is rejected");
 }
 
 void testArtifactPreflight() {
@@ -300,12 +309,22 @@ void testArtifactPreflight() {
     check(malformed.status == ArtifactSelectionStatus::MalformedImage,
           "malformed selected binaries are rejected before launch");
 
+    writeBytes(root / "x86/hydra_gate_c_api_probe.exe",
+               peHeader(ProcessArchitecture::X86));
+    writeBytes(root / "x86/hydra_gate_c_shim.dll",
+               peHeader(ProcessArchitecture::X64));
+    auto wrongShim = hydra::gatec::resolveGateCArtifacts(
+        root, manifest, ProcessArchitecture::X86,
+        GateCArtifactKind::ApiProbe);
+    check(wrongShim.status == ArtifactSelectionStatus::ArchitectureMismatch,
+          "a wrong-architecture polling shim is rejected before launch");
+
     std::filesystem::remove_all(root, ignored);
 }
 
 #ifdef _WIN32
 void runWindowsRuntimeSelfTest(int argc, char** argv) {
-    check(argc == 5, "runtime self-test receives expected arguments");
+    check(argc == 6, "runtime self-test receives expected arguments");
     const auto expected = hydra::gatec::parseProcessArchitecture(argv[2]);
     check(expected.has_value(), "runtime expected architecture parses");
     const auto process = hydra::gatec::detectProcessArchitecture(
@@ -350,9 +369,12 @@ void runWindowsRuntimeSelfTest(int argc, char** argv) {
         std::filesystem::path(argv[3]));
     const auto adapter = hydra::gatec::detectPortableExecutableArchitecture(
         std::filesystem::path(argv[4]));
-    check(target && adapter && target.architecture == *expected &&
-              adapter.architecture == *expected,
-          "built target and adapter PE machines match the configured architecture");
+    const auto shim = hydra::gatec::detectPortableExecutableArchitecture(
+        std::filesystem::path(argv[5]));
+    check(target && adapter && shim && target.architecture == *expected &&
+              adapter.architecture == *expected &&
+              shim.architecture == *expected,
+          "built target, adapter, and shim PE machines match the configured architecture");
 }
 #endif
 

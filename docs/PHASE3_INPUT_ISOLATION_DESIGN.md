@@ -440,15 +440,21 @@ Implemented foundation:
 - explicit target-process detection through `IsWow64Process2` with a bounded
   legacy fallback, plus PE-machine preflight before child launch;
 - a bounded schema-v1 artifact manifest and deterministic architecture-neutral
-  target/adapter/API-probe names under `gate-c/x86` and `gate-c/x64`;
+  target/adapter/API-probe/polling-shim names under `gate-c/x86` and
+  `gate-c/x64`;
+- a code-complete startup-loaded polling shim that transactionally patches
+  only the controlled probe's three allowlisted IAT entries and restores them
+  before unload;
 - bounded per-target writer queues for interactive Raw Input routing;
 - orderly shutdown and force-termination cleanup for controlled child processes.
 
 Remaining Gate C pass criteria:
 
 - run physical Seat-owned keyboards/mice through the controlled target processes;
-- make HydraSeat-owned probe processes observe Seat-local values through the actual Raw Input, polling, cursor and focus API surfaces;
-- prove that installing and removing the controlled compatibility shim restores ordinary API behavior;
+- validate x64/x86 HydraSeat-owned probe processes observing Seat-local values
+  through the ordinary polling APIs;
+- make controlled probes observe Seat-local values through the actual Raw
+  Input, cursor and focus API surfaces;
 - prove adapter/host/target failure leaves no orphan child or persistent global state;
 - confirm no global cursor clipping and no physical suppression are performed during Gate C;
 - keep anti-cheat/protected and commercial targets out of scope until all controlled criteria pass.
@@ -503,13 +509,14 @@ Only after Gate E may Phase 3 be marked complete.
 | Two-process synthetic state separation | Partial | Yes | No | Controlled process only |
 | Bounded per-target writer queues | Partial | Yes | Gate C physical acceptance pending | Controlled process only |
 | Raw Input API virtualization | No | Pending | Pending | Controlled probe only |
-| Polling/cursor/focus API interposition | No | Pending | Pending | Controlled probe only |
+| Polling API interposition | Yes | CI pending | No | Controlled probe only |
+| Cursor/focus API interposition | No | Pending | Pending | Controlled probe only |
 | HidHide session lifecycle | No | Yes | Yes | No |
 | Two-game zero-bleed | No | Yes | Yes | Profile-dependent |
 
 ## Implemented non-invasive baseline
 
-The non-invasive Phase 3 foundation now contains four implementation slices.
+The non-invasive Phase 3 foundation now contains five implementation slices.
 
 ### Capability-planning slice
 
@@ -555,12 +562,30 @@ Gate A/B **implementation** is complete, but physical acceptance remains pending
 6. Windows CI declares native x86/x64 full test jobs and a separate x64 host
    job that selects and launches an actual x86 controlled target/adapter pair.
 
-This slice remains `CODE_COMPLETE`, not `VALIDATED`, until the declared Windows
-matrix supplies x86 and cross-architecture process evidence. The next
-source-code slice after that validation is controlled API interposition for
-HydraSeat-owned probes. Gate C remains incomplete until probes obtain the
-Seat-local values through the APIs an ordinary game would call. Commercial
-games, physical device cloaking and anti-cheat targets remain out of scope. See
+This slice is `VALIDATED` by Windows CI run `32727711605`, including native
+x64/x86 and x64-host-to-x64/x86 controlled target/probe evidence.
+
+### Gate C controlled polling-shim slice
+
+1. `hydra_gate_c_shim.dll` is normally loaded at controlled probe startup; no
+   already-running process is injected or remotely modified.
+2. Only the current executable's named `GetAsyncKeyState`, `GetKeyState`, and
+   `GetKeyboardState` imports from allowlisted USER32/NTUSER module families
+   are eligible.
+3. Install requires all three unique entries and performs reverse rollback on
+   any write/protection failure; uninstall restores the exact saved pointers.
+4. A fixed-width versioned C ABI reports lifecycle, generation, masks,
+   adapter/system failures, and rollback completion in both architectures.
+5. The probe owns the sole adapter context; the shim borrows it and maintains
+   no duplicate input state. Adapter loss is fail-closed for the supported
+   polling domain.
+6. Portable strict-GCC transaction and ABI tests pass. Windows CI run
+   `32780563364` also passes native x64/x86 and x64-host-to-x64/x86
+   polling-probe execution, so P3-API-02 is `VALIDATED`.
+
+Gate C remains incomplete until later controlled probes cover Raw Input plus
+cursor/focus surfaces while preserving the validated polling-shim behavior. Commercial games, physical
+device cloaking and anti-cheat targets remain out of scope. See
 [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
 
 ## Related documents
