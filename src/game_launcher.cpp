@@ -35,8 +35,8 @@ bool GameLauncher::launchGameForWorkspace(const GameProfile& game, const Workspa
     );
 
     if (success) {
-        std::wcout << L"[GameLauncher] Started " << game.title 
-                   << L" for Workspace #" << workspace.workspaceId 
+        std::wcout << L"[GameLauncher] Started " << game.title
+                   << L" for Seat #" << workspace.seatId
                    << L" (PID: " << pi.dwProcessId << L")\n";
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);

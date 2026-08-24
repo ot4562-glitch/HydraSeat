@@ -1,70 +1,114 @@
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <string>
-#include <vector>
 #include <unordered_map>
-#include <memory>
+#include <unordered_set>
+#include <vector>
 
 namespace hydra {
 
-struct WorkspaceConfig {
-    uint32_t workspaceId{1};
+using SeatId = std::uint32_t;
+
+enum class SeatDeviceType { Display, Keyboard, Mouse, Controller, AudioOutput, AudioInput };
+
+struct SeatConfig {
+    SeatId seatId{0};
     std::wstring name;
-    std::wstring displayDeviceName;
-    std::wstring keyboardDevicePath;
-    std::wstring mouseDevicePath;
-    uint32_t controllerIndex{0};
-    uint64_t targetHwnd{0}; // Window handle of assigned game window
+    std::vector<std::wstring> displayIds;
+    std::optional<std::wstring> primaryDisplayId;
+    std::vector<std::wstring> keyboardIds;
+    std::vector<std::wstring> mouseIds;
+    std::vector<std::wstring> controllerIds;
+    std::optional<std::wstring> audioOutputEndpointId;
+    std::optional<std::wstring> audioInputEndpointId;
+    std::uint64_t targetHwnd{0};
     bool active{true};
+
+    bool operator==(const SeatConfig&) const = default;
 };
+
+// Keep the public Phase 1 type name while callers migrate to Seat terminology.
+using WorkspaceConfig = SeatConfig;
 
 class WorkspaceManager {
 public:
-    WorkspaceManager() = default;
-    ~WorkspaceManager() = default;
+    SeatId createSeat(const std::wstring& name = {});
+    bool removeSeat(SeatId seatId);
+    bool renameSeat(SeatId seatId, const std::wstring& name);
 
-    // Create a new player workspace
-    uint32_t createWorkspace(const std::wstring& name);
+    bool assignDisplay(SeatId seatId, const std::wstring& displayId,
+                       bool makePrimary = false, bool shareable = false);
+    bool unassignDisplay(SeatId seatId, const std::wstring& displayId);
+    bool setPrimaryDisplay(SeatId seatId, const std::wstring& displayId);
+    bool assignKeyboard(SeatId seatId, const std::wstring& deviceId,
+                        bool shareable = false);
+    bool unassignKeyboard(SeatId seatId, const std::wstring& deviceId);
+    bool assignMouse(SeatId seatId, const std::wstring& deviceId,
+                     bool shareable = false);
+    bool unassignMouse(SeatId seatId, const std::wstring& deviceId);
+    bool assignController(SeatId seatId, const std::wstring& controllerId,
+                          bool shareable = false);
+    bool unassignController(SeatId seatId, const std::wstring& controllerId);
 
-    // Remove a workspace by ID
-    bool removeWorkspace(uint32_t workspaceId);
+    // Compatibility overloads for existing XInput-index callers.
+    bool assignController(SeatId seatId, std::uint32_t xinputIndex,
+                          bool shareable = false);
+    bool unassignController(SeatId seatId, std::uint32_t xinputIndex);
 
-    // Assign display to workspace
-    bool assignDisplay(uint32_t workspaceId, const std::wstring& displayDeviceName);
+    bool assignAudioOutput(SeatId seatId, const std::wstring& endpointId,
+                           bool shareable = false);
+    bool unassignAudioOutput(SeatId seatId);
+    bool assignAudioInput(SeatId seatId, const std::wstring& endpointId,
+                          bool shareable = false);
+    bool unassignAudioInput(SeatId seatId);
+    bool assignTargetWindow(SeatId seatId, std::uint64_t hwnd);
+    bool setActive(SeatId seatId, bool active);
 
-    // Assign physical keyboard to workspace
-    bool assignKeyboard(uint32_t workspaceId, const std::wstring& keyboardDevicePath);
+    bool setDeviceShareable(SeatDeviceType type, const std::wstring& deviceId,
+                            bool shareable);
+    bool isDeviceShareable(SeatDeviceType type, const std::wstring& deviceId) const;
+    std::vector<SeatId> findDeviceOwners(SeatDeviceType type,
+                                         const std::wstring& deviceId) const;
+    std::optional<SeatId> findDisplayOwner(const std::wstring& displayId) const;
+    std::optional<SeatId> findKeyboardOwner(const std::wstring& deviceId) const;
+    std::optional<SeatId> findMouseOwner(const std::wstring& deviceId) const;
+    std::optional<SeatId> findControllerOwner(const std::wstring& controllerId) const;
+    std::optional<SeatId> findAudioOutputOwner(const std::wstring& endpointId) const;
+    std::optional<SeatId> findAudioInputOwner(const std::wstring& endpointId) const;
 
-    // Assign physical mouse to workspace
-    bool assignMouse(uint32_t workspaceId, const std::wstring& mouseDevicePath);
+    const SeatConfig* getSeat(SeatId seatId) const;
+    std::vector<SeatConfig> getAllSeats() const;
 
-    // Assign gamepad controller to workspace
-    bool assignController(uint32_t workspaceId, uint32_t controllerIndex);
-
-    // Set target window handle for workspace input isolation
-    bool assignTargetWindow(uint32_t workspaceId, uint64_t hwnd);
-
-    // Get configuration for a specific workspace
-    const WorkspaceConfig* getWorkspace(uint32_t workspaceId) const;
-
-    // Get workspace by keyboard path
-    uint32_t findWorkspaceByKeyboardPath(const std::wstring& keyboardPath) const;
-
-    // Get workspace by mouse path
-    uint32_t findWorkspaceByMousePath(const std::wstring& mousePath) const;
-
-    // Get all active workspaces
-    std::vector<WorkspaceConfig> getAllWorkspaces() const;
-
-    // Save profile configurations to file
     bool saveToFile(const std::string& filePath = "workspace_config.json") const;
-
-    // Load profile configurations from file
+    // Loading is transactional: any parse or validation failure leaves state intact.
     bool loadFromFile(const std::string& filePath = "workspace_config.json");
+    const std::string& lastError() const noexcept { return m_lastError; }
+
+    // Compatibility wrappers for existing WorkspaceManager callers.
+    SeatId createWorkspace(const std::wstring& name = {}) { return createSeat(name); }
+    bool removeWorkspace(SeatId id) { return removeSeat(id); }
+    const WorkspaceConfig* getWorkspace(SeatId id) const { return getSeat(id); }
+    std::vector<WorkspaceConfig> getAllWorkspaces() const { return getAllSeats(); }
+    SeatId findWorkspaceByKeyboardPath(const std::wstring& path) const;
+    SeatId findWorkspaceByMousePath(const std::wstring& path) const;
 
 private:
-    uint32_t m_nextId{1};
-    std::unordered_map<uint32_t, WorkspaceConfig> m_workspaces;
+    static std::wstring normalizeId(const std::wstring& value);
+    static std::wstring resourceKey(SeatDeviceType type, const std::wstring& deviceId);
+    bool canAssign(SeatId seatId, SeatDeviceType type, const std::wstring& deviceId,
+                   bool explicitlyShareable);
+    bool assignToList(SeatId seatId, SeatDeviceType type, const std::wstring& deviceId,
+                      std::vector<std::wstring> SeatConfig::*member, bool shareable);
+    bool unassignFromList(SeatId seatId, SeatDeviceType type, const std::wstring& deviceId,
+                          std::vector<std::wstring> SeatConfig::*member);
+    void removeUnusedShareableResources();
+
+    SeatId m_nextId{1};
+    std::unordered_map<SeatId, SeatConfig> m_seats;
+    std::unordered_set<std::wstring> m_shareableResources;
+    mutable std::string m_lastError;
 };
 
 } // namespace hydra

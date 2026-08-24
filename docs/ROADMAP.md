@@ -20,18 +20,18 @@
 
 ---
 
-## Phase 2: Device Assignment UI & Workspace Matrix (Current)
-- [ ] Build Qt 6 drag-and-drop workspace assignment UI
-- [ ] Implement `WorkspaceManager` state machine
-- [ ] Save and load workspace profiles to JSON
+## Phase 2: Seat Composition & Assignment UI (Complete)
+- [x] Build drag-and-drop Seat assignment UI (current Win32 prototype; Qt 6 migration is UI polish, not a data-model blocker)
+- [x] Implement `WorkspaceManager` / Seat composition state machine with multi-display ownership and explicit primary display
+- [x] Save and load validated Seat profiles to UTF-8 JSON
 
 ---
 
-## Phase 3: Raw Input Router Core
-- [ ] Implement Win32 Raw Input sink window & hook loop
-- [ ] Intercept individual physical keyboard events independently
-- [ ] Intercept individual physical mouse events independently
-- [ ] Route input events to target window handles without OS merging
+## Phase 3: Raw Input Router Core (Current)
+- [x] Implement Win32 Raw Input sink window & hook loop
+- [x] Identify individual physical keyboard events independently (routing/isolation enforcement still in progress)
+- [x] Identify individual physical mouse events independently (routing/isolation enforcement still in progress)
+- [ ] Route input events to target window handles without OS merging (Phase 3 isolation backend skeleton added; zero-bleed enforcement not yet implemented)
 
 ---
 

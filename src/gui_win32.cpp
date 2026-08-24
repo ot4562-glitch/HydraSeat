@@ -113,6 +113,20 @@ LRESULT CALLBACK Win32App::DeviceTileProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         return 0;
     }
 
+    if (uMsg == WM_RBUTTONUP) {
+        if (tile && g_appInstance && tile->type == DeviceCategory::Display &&
+            tile->owner != PartitionOwner::Pool) {
+            for (auto& candidate : g_appInstance->m_deviceTiles) {
+                if (candidate && candidate->type == DeviceCategory::Display &&
+                    candidate->owner == tile->owner) {
+                    candidate->isPrimaryDisplay = (candidate.get() == tile);
+                    InvalidateRect(candidate->hwndControl, nullptr, FALSE);
+                }
+            }
+        }
+        return 0;
+    }
+
     if (uMsg == WM_PAINT) {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
@@ -177,7 +191,10 @@ LRESULT CALLBACK Win32App::DeviceTileProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                 RECT textRect = screenRect;
                 textRect.right -= 6;
                 textRect.bottom -= 4;
-                DrawTextW(hdc, tile->displayLabel.c_str(), -1, &textRect, DT_SINGLELINE | DT_RIGHT | DT_BOTTOM);
+                const std::wstring monitorLabel = tile->isPrimaryDisplay
+                                                      ? tile->displayLabel + L" PRIMARY"
+                                                      : tile->displayLabel;
+                DrawTextW(hdc, monitorLabel.c_str(), -1, &textRect, DT_SINGLELINE | DT_RIGHT | DT_BOTTOM);
 
                 SelectObject(hdc, oldFontS);
                 DeleteObject(hFontS);
@@ -263,12 +280,30 @@ void Win32App::dropTileAtScreenPos(VisualDeviceTile* tile, POINT screenPt) {
     POINT clientPt = screenPt;
     ScreenToClient(m_hwnd, &clientPt);
 
+    const PartitionOwner oldOwner = tile->owner;
     if (clientPt.x < 315) {
         tile->owner = PartitionOwner::Pool;
     } else if (clientPt.x >= 315 && clientPt.x < 635) {
         tile->owner = PartitionOwner::Player1;
     } else {
         tile->owner = PartitionOwner::Player2;
+    }
+
+    if (tile->type == DeviceCategory::Display) {
+        if (tile->owner == PartitionOwner::Pool) {
+            tile->isPrimaryDisplay = false;
+        } else if (oldOwner != tile->owner) {
+            bool ownerAlreadyHasPrimary = false;
+            for (const auto& candidate : m_deviceTiles) {
+                if (candidate && candidate.get() != tile &&
+                    candidate->type == DeviceCategory::Display &&
+                    candidate->owner == tile->owner && candidate->isPrimaryDisplay) {
+                    ownerAlreadyHasPrimary = true;
+                    break;
+                }
+            }
+            tile->isPrimaryDisplay = !ownerAlreadyHasPrimary;
+        }
     }
 
     layoutDeviceTiles();
@@ -733,34 +768,103 @@ void Win32App::refreshHardware() {
 }
 
 void Win32App::saveWorkspaceProfile() {
-    m_workspaceManager.createWorkspace(L"Player 1");
-    m_workspaceManager.createWorkspace(L"Player 2");
+    m_workspaceManager = WorkspaceManager{};
+    const SeatId seat1 = m_workspaceManager.createSeat(L"Player 1");
+    const SeatId seat2 = m_workspaceManager.createSeat(L"Player 2");
 
+    const auto assignTile = [this](SeatId seatId, const VisualDeviceTile& tile) {
+        const std::wstring& stableId = tile.deviceId.empty() ? tile.devicePath : tile.deviceId;
+        if (stableId.empty()) return false;
+        switch (tile.type) {
+        case DeviceCategory::Display:
+            return m_workspaceManager.assignDisplay(seatId, stableId, tile.isPrimaryDisplay);
+        case DeviceCategory::Keyboard:
+            return m_workspaceManager.assignKeyboard(seatId, stableId);
+        case DeviceCategory::Mouse:
+        case DeviceCategory::Touchpad:
+            return m_workspaceManager.assignMouse(seatId, stableId);
+        case DeviceCategory::Gamepad:
+            return m_workspaceManager.assignController(seatId, stableId);
+        }
+        return false;
+    };
+
+    bool valid = true;
     for (const auto& tilePtr : m_deviceTiles) {
-        if (!tilePtr) continue;
-        uint32_t wsId = (tilePtr->owner == PartitionOwner::Player1) ? 1 : (tilePtr->owner == PartitionOwner::Player2 ? 2 : 0);
-        if (wsId > 0) {
-            if (tilePtr->type == DeviceCategory::Display) {
-                m_workspaceManager.assignDisplay(wsId, tilePtr->name);
-            } else if (tilePtr->type == DeviceCategory::Keyboard) {
-                m_workspaceManager.assignKeyboard(wsId, tilePtr->name);
-            } else if (tilePtr->type == DeviceCategory::Mouse || tilePtr->type == DeviceCategory::Touchpad) {
-                m_workspaceManager.assignMouse(wsId, tilePtr->name);
-            }
+        if (!tilePtr || tilePtr->owner == PartitionOwner::Pool) continue;
+        const SeatId seatId = tilePtr->owner == PartitionOwner::Player1 ? seat1 : seat2;
+        valid = assignTile(seatId, *tilePtr) && valid;
+    }
+
+    for (const SeatId seatId : {seat1, seat2}) {
+        const auto* seat = m_workspaceManager.getSeat(seatId);
+        if (seat && !seat->displayIds.empty() && !seat->primaryDisplayId) {
+            valid = m_workspaceManager.setPrimaryDisplay(seatId, seat->displayIds.front()) && valid;
         }
     }
 
+    if (!valid) {
+        MessageBoxW(m_hwnd,
+            L"One or more devices could not be assigned. A physical device may only belong to one Seat unless explicitly shareable.",
+            L"HydraSeat Seat Manager", MB_OK | MB_ICONERROR);
+        return;
+    }
+
     if (m_workspaceManager.saveToFile("workspace_config.json")) {
-        MessageBoxW(m_hwnd, L"Workspace partition assignments saved to workspace_config.json!", L"HydraSeat Profile Manager", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(m_hwnd,
+            L"Seat assignments saved to workspace_config.json.\n\nTip: right-click a display tile inside a Seat to mark it PRIMARY.",
+            L"HydraSeat Seat Manager", MB_OK | MB_ICONINFORMATION);
+    } else {
+        MessageBoxW(m_hwnd, L"Could not save workspace_config.json.",
+                    L"HydraSeat Seat Manager", MB_OK | MB_ICONERROR);
     }
 }
 
 void Win32App::loadWorkspaceProfile() {
-    if (m_workspaceManager.loadFromFile("workspace_config.json")) {
-        MessageBoxW(m_hwnd, L"Workspace profile loaded successfully!", L"HydraSeat Profile Manager", MB_OK | MB_ICONINFORMATION);
-    } else {
-        MessageBoxW(m_hwnd, L"No saved workspace_config.json found.", L"HydraSeat Profile Manager", MB_OK | MB_ICONWARNING);
+    if (!m_workspaceManager.loadFromFile("workspace_config.json")) {
+        MessageBoxW(m_hwnd, L"Could not load workspace_config.json.",
+                    L"HydraSeat Seat Manager", MB_OK | MB_ICONWARNING);
+        return;
     }
+
+    for (auto& tile : m_deviceTiles) {
+        if (!tile) continue;
+        tile->owner = PartitionOwner::Pool;
+        tile->isPrimaryDisplay = false;
+    }
+
+    const auto containsId = [](const std::vector<std::wstring>& ids, const std::wstring& id) {
+        return std::find(ids.begin(), ids.end(), id) != ids.end();
+    };
+
+    for (const auto& seat : m_workspaceManager.getAllSeats()) {
+        const PartitionOwner owner = seat.seatId == 1 ? PartitionOwner::Player1
+                                      : seat.seatId == 2 ? PartitionOwner::Player2
+                                                         : PartitionOwner::Pool;
+        if (owner == PartitionOwner::Pool) continue;
+        for (auto& tile : m_deviceTiles) {
+            if (!tile) continue;
+            const std::wstring& stableId = tile->deviceId.empty() ? tile->devicePath : tile->deviceId;
+            bool assigned = false;
+            switch (tile->type) {
+            case DeviceCategory::Display: assigned = containsId(seat.displayIds, stableId); break;
+            case DeviceCategory::Keyboard: assigned = containsId(seat.keyboardIds, stableId); break;
+            case DeviceCategory::Mouse:
+            case DeviceCategory::Touchpad: assigned = containsId(seat.mouseIds, stableId); break;
+            case DeviceCategory::Gamepad: assigned = containsId(seat.controllerIds, stableId); break;
+            }
+            if (assigned) {
+                tile->owner = owner;
+                tile->isPrimaryDisplay = tile->type == DeviceCategory::Display &&
+                    seat.primaryDisplayId && *seat.primaryDisplayId == stableId;
+            }
+        }
+    }
+
+    layoutDeviceTiles();
+    MessageBoxW(m_hwnd,
+        L"Seat profile loaded successfully. Multiple displays per Seat and primary-display selection were restored.",
+        L"HydraSeat Seat Manager", MB_OK | MB_ICONINFORMATION);
 }
 
 void Win32App::toggleIsolationMode() {

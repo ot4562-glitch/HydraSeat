@@ -2,9 +2,11 @@
 #include "hydra/hardware_detector.hpp"
 #include "hydra/hid_usage.hpp"
 #include "hydra/input_router.hpp"
+#include "hydra/input_isolation.hpp"
 #include "hydra/workspace_manager.hpp"
 
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <string_view>
 
@@ -72,22 +74,96 @@ void testHardwareDetector() {
 }
 
 void testWorkspaceManager() {
+    const std::string roundTripPath = "hydra_seat_roundtrip_test.json";
+    const std::string malformedPath = "hydra_seat_malformed_test.json";
+
     hydra::WorkspaceManager mgr;
-    const uint32_t ws1 = mgr.createWorkspace(L"Player 1");
-    const uint32_t ws2 = mgr.createWorkspace(L"Player 2");
+    const auto seat1 = mgr.createSeat(L"민성");
+    const auto seat2 = mgr.createSeat(L"Player 2");
+    check(seat1 == 1 && seat2 == 2, "seat IDs are deterministic");
 
-    check(ws1 == 1, "first workspace ID is 1");
-    check(ws2 == 2, "second workspace ID is 2");
-    check(mgr.getAllWorkspaces().size() == 2, "two workspaces were created");
+    check(mgr.assignDisplay(seat1, L"Display:LG", true), "first display assignment succeeds");
+    check(mgr.assignDisplay(seat1, L"Display:Samsung"), "second display can belong to one seat");
+    check(mgr.setPrimaryDisplay(seat1, L"Display:Samsung"), "primary display can be changed explicitly");
+    check(!mgr.assignDisplay(seat2, L"Display:LG"), "display ownership is exclusive by default");
 
-    check(mgr.assignDisplay(ws1, L"\\\\.\\DISPLAY1"), "display assignment succeeds");
+    check(mgr.assignKeyboard(seat1, L"Keyboard:A"), "keyboard assignment succeeds");
+    check(!mgr.assignKeyboard(seat2, L"keyboard:a"), "keyboard ownership is case-insensitively exclusive");
+    check(mgr.assignMouse(seat1, L"Mouse:A"), "mouse assignment succeeds");
+    check(!mgr.assignMouse(seat2, L"MOUSE:A"), "mouse ownership is exclusive");
+    check(mgr.assignController(seat1, L"Controller:XInput:0"), "controller assignment succeeds");
+    check(!mgr.assignController(seat2, L"Controller:XInput:0"), "controller ownership is exclusive");
 
-    const auto* wsConfig = mgr.getWorkspace(ws1);
-    check(wsConfig != nullptr, "created workspace can be retrieved");
-    check(wsConfig->displayDeviceName == L"\\\\.\\DISPLAY1",
-          "assigned display is retained");
+    check(mgr.assignKeyboard(seat1, L"Keyboard:Shared", true), "shareable keyboard assignment succeeds");
+    check(mgr.assignKeyboard(seat2, L"Keyboard:Shared"), "explicitly shareable device can belong to two seats");
 
-    std::cout << "[Test] WorkspaceManager tests passed." << std::endl;
+    check(mgr.assignAudioOutput(seat1, L"Audio:Headset"), "audio output assignment succeeds");
+    check(mgr.assignAudioInput(seat1, L"Audio:Mic"), "audio input assignment succeeds");
+
+    const auto* config = mgr.getSeat(seat1);
+    check(config != nullptr, "created seat can be retrieved");
+    check(config->displayIds.size() == 2, "seat retains multiple displays");
+    check(config->primaryDisplayId && *config->primaryDisplayId == L"Display:Samsung",
+          "explicit primary display is retained");
+
+    check(mgr.saveToFile(roundTripPath), "seat profile saves as JSON");
+    hydra::WorkspaceManager loaded;
+    check(loaded.loadFromFile(roundTripPath), "saved seat profile loads successfully");
+    check(loaded.getAllSeats() == mgr.getAllSeats(), "save/load preserves all seat configuration");
+    check(loaded.isDeviceShareable(hydra::SeatDeviceType::Keyboard, L"Keyboard:Shared"),
+          "save/load preserves shareable-device policy");
+    check(loaded.createSeat(L"After Load") == 3, "next seat ID advances after load");
+
+    const auto beforeMalformed = loaded.getAllSeats();
+    {
+        std::ofstream malformed(malformedPath, std::ios::binary | std::ios::trunc);
+        malformed << "{ this is not valid json";
+    }
+    check(!loaded.loadFromFile(malformedPath), "malformed JSON is rejected");
+    check(loaded.getAllSeats() == beforeMalformed, "failed load is transactional");
+
+    check(mgr.unassignKeyboard(seat1, L"Keyboard:A"), "device can be unassigned");
+    check(mgr.assignKeyboard(seat2, L"Keyboard:A"), "unassignment releases exclusive ownership");
+    check(mgr.removeSeat(seat2), "seat removal succeeds");
+    check(!mgr.findKeyboardOwner(L"Keyboard:A"), "removing a seat releases its device ownership");
+
+    std::remove(roundTripPath.c_str());
+    std::remove(malformedPath.c_str());
+    std::cout << "[Test] Seat/WorkspaceManager tests passed." << std::endl;
+}
+
+void testInputIsolationSkeleton() {
+    hydra::WorkspaceManager seats;
+    const auto seat1 = seats.createSeat(L"Seat 1");
+    const auto seat2 = seats.createSeat(L"Seat 2");
+    check(seats.assignTargetWindow(seat1, 0x1111), "seat 1 target window assignment succeeds");
+    check(seats.assignTargetWindow(seat2, 0x2222), "seat 2 target window assignment succeeds");
+
+    hydra::SeatRoutingPolicy routing;
+    check(routing.bindDevice(L"Keyboard:A", seat1), "routing policy binds keyboard A");
+    check(routing.bindDevice(L"Keyboard:B", seat2), "routing policy binds keyboard B");
+
+    const auto routeA = routing.route(L"keyboard:a", seats, true);
+    const auto routeB = routing.route(L"Keyboard:B", seats, false);
+    check(routeA.seatId && *routeA.seatId == seat1 && routeA.targetHwnd == 0x1111,
+          "routing policy resolves seat 1 target window");
+    check(routeA.consumePhysicalInput, "isolation request is represented in route decision");
+    check(routeB.seatId && *routeB.seatId == seat2 && routeB.targetHwnd == 0x2222,
+          "routing policy resolves seat 2 target window");
+    check(!routeB.consumePhysicalInput, "non-isolated route does not request physical suppression");
+
+    hydra::UnsupportedIsolationBackend backend;
+    check(backend.start(), "placeholder isolation backend can initialize safely");
+    check(!backend.applyRoute(L"Keyboard:A", routeA),
+          "placeholder backend explicitly refuses to claim real isolation");
+    check(!hydra::hasCapability(backend.capabilities(),
+                                hydra::InputIsolationCapability::PhysicalDeviceSuppression),
+          "Phase 3 skeleton does not claim physical device suppression");
+    backend.stop();
+
+    routing.clearSeat(seat1);
+    check(!routing.ownerOf(L"Keyboard:A"), "routing policy removes bindings for deleted seat");
+    std::cout << "[Test] Phase 3 input-isolation skeleton tests passed." << std::endl;
 }
 
 } // namespace
@@ -97,6 +173,7 @@ int main() {
     testHidUsageClassification();
     testHardwareDetector();
     testWorkspaceManager();
+    testInputIsolationSkeleton();
     std::cout << "All HydraSeat Engine Tests Passed!" << std::endl;
     return EXIT_SUCCESS;
 }

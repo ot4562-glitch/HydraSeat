@@ -44,6 +44,7 @@ set(HYDRA_HARDWARE_SOURCES
 
 set(HYDRA_SOURCES
     src/input_router.cpp
+    src/input_isolation.cpp
     src/display_manager.cpp
     src/workspace_manager.cpp
     src/game_launcher.cpp
@@ -60,6 +61,7 @@ set(HYDRA_HARDWARE_HEADERS
 
 set(HYDRA_HEADERS
     include/hydra/input_router.hpp
+    include/hydra/input_isolation.hpp
     include/hydra/display_manager.hpp
     include/hydra/workspace_manager.hpp
     include/hydra/game_launcher.hpp

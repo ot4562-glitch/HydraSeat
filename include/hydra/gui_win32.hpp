@@ -39,6 +39,7 @@ struct VisualDeviceTile {
     std::wstring devicePath;
     PartitionOwner owner{PartitionOwner::Pool};
     uint64_t flashUntil{0};
+    bool isPrimaryDisplay{false};
     bool isDragging{false};
 };
 
