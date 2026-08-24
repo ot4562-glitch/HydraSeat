@@ -52,7 +52,13 @@ bool waitForOverlapped(HANDLE handle, OVERLAPPED& overlapped,
         return false;
     }
     if (wait != WAIT_OBJECT_0) {
-        error = GetLastError();
+        const DWORD waitError =
+            wait == WAIT_FAILED ? GetLastError() : ERROR_OPERATION_ABORTED;
+        CancelIoEx(handle, &overlapped);
+        WaitForSingleObject(overlapped.hEvent, INFINITE);
+        DWORD ignored = 0;
+        GetOverlappedResult(handle, &overlapped, &ignored, FALSE);
+        error = waitError;
         return false;
     }
     if (!GetOverlappedResult(handle, &overlapped, &transferred, FALSE)) {

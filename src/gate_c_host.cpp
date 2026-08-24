@@ -54,7 +54,7 @@ struct HostOptions {
     std::string profilePath{"workspace_config.json"};
     std::string tracePath{"hydra_gate_c_host.jsonl"};
     bool selfTest{false};
-    bool headlessTargets{false};
+    bool protocolErrorSelfTest{false};
     bool showHelp{false};
 };
 
@@ -63,8 +63,9 @@ void printUsage(std::ostream& output) {
         << "HydraSeat Gate C controlled-process host\n\n"
         << "Usage:\n"
         << "  hydra_gate_c_host --self-test [--target <hydra_gate_c_target.exe>]\n"
+        << "  hydra_gate_c_host --protocol-error-self-test [--target <hydra_gate_c_target.exe>]\n"
         << "  hydra_gate_c_host [--profile <workspace_config.json>] [--trace <file.jsonl>]\n"
-        << "                     [--target <hydra_gate_c_target.exe>] [--headless-targets]\n\n"
+        << "                     [--target <hydra_gate_c_target.exe>]\n\n"
         << "The host launches only HydraSeat's controlled target executable. It does\n"
         << "not inject, hook, hide devices, or attach to a commercial game.\n";
 }
@@ -175,12 +176,16 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
             options.tracePath = wideToUtf8(argv[++index]);
         } else if (argument == L"--self-test") {
             options.selfTest = true;
-            options.headlessTargets = true;
+        } else if (argument == L"--protocol-error-self-test") {
+            options.protocolErrorSelfTest = true;
         } else if (argument == L"--help" || argument == L"-h") {
             options.showHelp = true;
         } else {
             return false;
         }
+    }
+    if (options.selfTest && options.protocolErrorSelfTest) {
+        return false;
     }
     return true;
 }
@@ -302,16 +307,19 @@ public:
         if (m_failed.load() || m_stopping.load()) {
             return false;
         }
-        const auto sequence = m_session.nextSequence++;
-        auto frame = hydra::gatec::encodeInputEvent(sequence, input);
-        if (frame.empty()) {
-            return false;
-        }
 
         {
             std::scoped_lock lock(m_mutex);
+            if (m_failed.load() || m_stopping.load()) {
+                return false;
+            }
             if (m_queue.size() >= kMaximumQueuedFrames) {
                 ++m_droppedFrames;
+                return false;
+            }
+            const auto sequence = m_session.nextSequence++;
+            auto frame = hydra::gatec::encodeInputEvent(sequence, input);
+            if (frame.empty()) {
                 return false;
             }
             m_queue.push_back(std::move(frame));
@@ -325,6 +333,12 @@ public:
             return;
         }
         m_stopping.store(true);
+        {
+            std::scoped_lock lock(m_mutex);
+            m_droppedFrames.fetch_add(
+                static_cast<std::uint64_t>(m_queue.size()));
+            m_queue.clear();
+        }
         m_thread.request_stop();
         m_condition.notify_all();
         m_thread.join();
@@ -350,10 +364,10 @@ private:
                     return token.stop_requested() || m_stopping.load() ||
                            !m_queue.empty();
                 });
+                if (token.stop_requested() || m_stopping.load()) {
+                    break;
+                }
                 if (m_queue.empty()) {
-                    if (token.stop_requested() || m_stopping.load()) {
-                        break;
-                    }
                     continue;
                 }
                 frame = std::move(m_queue.front());
@@ -434,6 +448,9 @@ public:
         }
         if (m_options.selfTest) {
             return runProcessSelfTest();
+        }
+        if (m_options.protocolErrorSelfTest) {
+            return runProtocolErrorSelfTest();
         }
         return runInteractive();
     }
@@ -728,6 +745,69 @@ private:
             << "HydraSeat Gate C process self-test passed: two separate target "
                "processes retained independent keyboard, async-edge, mouse, "
                "cursor, clip, and virtual-focus state.\n";
+        return EXIT_SUCCESS;
+    }
+
+    int runProtocolErrorSelfTest() {
+        TargetSession session;
+        session.seatId = 1;
+        if (!launchTarget(session, true)) {
+            session.process.terminate(94);
+            session.channel.close();
+            return 36;
+        }
+
+        ControlStateMessage control;
+        control.cursorX = 10;
+        control.cursorY = 10;
+        control.virtualForeground = true;
+        if (!sendControl(session, control)) {
+            session.process.terminate(95);
+            session.channel.close();
+            return 37;
+        }
+
+        InputEventMessage staleInput;
+        staleInput.kind = InputKind::Keyboard;
+        staleInput.keyTransition = KeyTransition::Down;
+        staleInput.vkey = 0x41;
+        // sendControl consumed sequence 2. Reusing sequence 2 must be rejected
+        // by the adapter and terminate the controlled target session.
+        if (!session.channel.writeFrame(
+                hydra::gatec::encodeInputEvent(2, staleInput),
+                kIoTimeoutMs)) {
+            session.process.terminate(96);
+            session.channel.close();
+            return 38;
+        }
+
+        const auto response = session.channel.readFrame(kIoTimeoutMs);
+        if (!response || !response.frame ||
+            response.frame->type != MessageType::Error ||
+            response.frame->sequence != 2) {
+            session.process.terminate(97);
+            session.channel.close();
+            return 39;
+        }
+        hydra::gatec::ErrorMessage errorMessage;
+        if (!hydra::gatec::decodeError(*response.frame, errorMessage) ||
+            errorMessage.errorCode != 1103u) {
+            session.process.terminate(98);
+            session.channel.close();
+            return 40;
+        }
+
+        std::uint32_t exitCode = 0;
+        if (!session.process.wait(kProcessExitTimeoutMs, &exitCode) ||
+            exitCode != 23u) {
+            session.process.terminate(99);
+            session.channel.close();
+            return 41;
+        }
+        session.channel.close();
+        std::cout
+            << "HydraSeat Gate C protocol-error self-test passed: stale "
+               "state input produced an Error frame and fail-closed target exit.\n";
         return EXIT_SUCCESS;
     }
 

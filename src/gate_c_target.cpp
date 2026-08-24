@@ -537,9 +537,13 @@ private:
                    std::string_view message) {
         setProtocolError(std::string(message), code);
         std::string writeError;
-        return m_channel.writeFrame(
+        (void)m_channel.writeFrame(
             hydra::gatec::encodeError(sequence, ErrorMessage{code}),
             kIoTimeoutMs, &writeError, nullptr);
+        // Any malformed, stale, or unexpected frame terminates the controlled
+        // session after a best-effort Error response. Continuing would let the
+        // host and target disagree about process-local state.
+        return false;
     }
 
     void notifyStateChanged() {

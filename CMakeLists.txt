@@ -312,6 +312,12 @@ if(WIN32)
         COMMAND hydra_gate_c_host --self-test --target $<TARGET_FILE:hydra_gate_c_target>
     )
     set_tests_properties(GateCProcessSelfTest PROPERTIES TIMEOUT 45)
+
+    add_test(
+        NAME GateCProtocolErrorSelfTest
+        COMMAND hydra_gate_c_host --protocol-error-self-test --target $<TARGET_FILE:hydra_gate_c_target>
+    )
+    set_tests_properties(GateCProtocolErrorSelfTest PROPERTIES TIMEOUT 30)
 else()
     add_test(NAME GateCHostPortableSelfTest COMMAND hydra_gate_c_host --self-test)
 endif()

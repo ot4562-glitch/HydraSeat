@@ -243,6 +243,16 @@ Target 2
 
 The test passes only when both child exit codes are zero and cleanup completes.
 
+### Protocol-error fail-closed self-test
+
+```powershell
+.\build\Release\hydra_gate_c_host.exe `
+  --protocol-error-self-test `
+  --target .\build\Release\hydra_gate_c_target.exe
+```
+
+The host first applies sequence 2, then deliberately sends a second state-changing frame with the stale sequence 2. The target must return an `Error` frame, terminate its controlled session with the expected nonzero code, and leave no running child. Continuing after the protocol/state disagreement is a test failure.
+
 ## Manual controlled-process run
 
 Prerequisites:
