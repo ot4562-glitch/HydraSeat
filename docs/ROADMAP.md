@@ -74,7 +74,7 @@ Research:
 - [ ] Startup-loaded polling shim for HydraSeat-owned probes
 - [ ] Cursor/focus/capture shim for HydraSeat-owned probes
 - [ ] Raw Input registration/data behavior probe and virtualization shim
-- [ ] x86/x64 controlled adapter matrix
+- [x] x86/x64 controlled adapter matrix
 - [ ] XInput and DirectInput controlled/production routing
 - [ ] Input latency, queue, drop, and cross-Seat metrics
 - [ ] Physical Gate A/B/C acceptance with two input sets

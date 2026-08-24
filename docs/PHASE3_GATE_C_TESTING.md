@@ -12,9 +12,14 @@ Gate C now has an implemented **controlled-process foundation**:
 - an automated Windows self-test that proves their state does not bleed across processes.
 
 P3-API-01 adds a read-only controlled Win32 API probe and a fixed-width
-comparison snapshot. The source and portable serialization/regression tests are
-implemented; the required Win32 process self-test remains pending on a machine
-with CMake, MSVC, and the Windows SDK.
+comparison snapshot. Its Windows/MSVC baseline is validated by CI run
+`32722277035`, where all 15 tests, including both API probe self-tests, passed.
+
+P3-ARCH-01 is Windows-validated by CI run `32726477354`. It adds explicit
+Win32 process-architecture detection, PE-machine preflight, a bounded schema-v1
+artifact manifest/selector, deterministic `gate-c/x86` and `gate-c/x64`
+layouts, and x86/x64 CI coverage. Both native matrix legs and the real
+x64-host-to-x86/x64 controlled target/probe job passed.
 
 This is not yet a general game hook or a completed Gate C implementation. The controlled targets call HydraSeat's adapter API directly. Commercial games still call the ordinary Windows APIs unless a later, explicitly approved compatibility adapter interposes those calls.
 
@@ -42,6 +47,10 @@ The host:
 - starts one controlled target per Seat;
 - creates a unique local named pipe and session token per target;
 - validates the target's token, Seat ID, process ID and architecture;
+- selects a target/adapter pair from the bounded architecture manifest and
+  validates both PE machine values before launch;
+- validates the launched process with `IsWow64Process2`, using
+  `IsWow64Process` plus `GetNativeSystemInfo` only when the modern API is absent;
 - routes each exclusively owned Raw Input keyboard/mouse observation to a bounded per-target writer queue;
 - sends initial virtual cursor, clip, foreground and capture state;
 - records Gate A/B JSONL traces;
@@ -162,6 +171,12 @@ The ABI is versioned and uses packed fixed-width C structures with `struct_size`
 hydra_gate_c_adapter_api_version() == HYDRA_GATE_C_ADAPTER_API_VERSION
 ```
 
+All exports explicitly use `HYDRA_GATE_C_ADAPTER_CALL` (`__cdecl` on Windows).
+The public header declares the v1 structure sizes as 36, 32, and 120 bytes;
+both C11 and C++ tests assert those constants in x86 and x64 builds. Consumers
+link through the architecture-matching import library, so x86 decoration is
+resolved by the toolchain rather than guessed at runtime.
+
 Major functions:
 
 ```text
@@ -245,10 +260,57 @@ ctest --test-dir build --build-config Release -R GateCAdapterCSmoke --output-on-
 
 Compiles and calls the exported adapter API from a C11 translation unit, confirming that the public header is not accidentally dependent on C++ language features or C++ name mangling.
 
+### Architecture manifest and runtime tests
+
+The version-1 internal manifest is bounded to 8 entries and 128 bytes per
+relative path. It has canonical `(architecture, artifact kind)` ordering and
+contains target, adapter, and API-probe descriptors under:
+
+```text
+<artifact-root>/x86/hydra_gate_c_target.exe
+<artifact-root>/x86/hydra_gate_c_adapter.dll
+<artifact-root>/x86/hydra_gate_c_api_probe.exe
+<artifact-root>/x64/hydra_gate_c_target.exe
+<artifact-root>/x64/hydra_gate_c_adapter.dll
+<artifact-root>/x64/hydra_gate_c_api_probe.exe
+```
+
+Configure and run each native matrix leg with:
+
+```powershell
+cmake -S . -B build-x64 -A x64
+cmake --build build-x64 --config Release --parallel
+ctest --test-dir build-x64 --build-config Release --output-on-failure
+
+cmake -S . -B build-x86 -A Win32
+cmake --build build-x86 --config Release --parallel
+ctest --test-dir build-x86 --build-config Release --output-on-failure
+```
+
+After staging both architecture directories under one artifact root, the
+critical cross-architecture test is:
+
+```powershell
+.\build-x64\gate-c\x64\hydra_gate_c_host.exe `
+  --architecture-self-test `
+  --artifact-root .\matrix-artifacts\gate-c `
+  --target-architecture x86
+```
+
+It must select the x86 target and adapter, reject machine mismatches before
+launch, detect the real child architecture, complete the existing versioned
+handshake/state-separation test, and leave no child after shutdown. The same
+x64 host then runs the stale-protocol failure self-test against the x86 target
+and the repeated normal, missing-window, handshake-timeout, abnormal-exit, and
+host-disconnect matrix against the x86 API probe. Unit tests
+also reject future schema versions, over-limit/duplicate/unknown/missing
+entries, non-canonical order, absolute/traversal paths, malformed PE files, and
+wrong target/adapter architectures.
+
 ### Target self-test
 
 ```powershell
-.\build\Release\hydra_gate_c_target.exe --self-test
+.\build-x64\gate-c\x64\hydra_gate_c_target.exe --self-test
 ```
 
 Verifies that the executable loads and uses the adapter DLL and can apply/query controlled state.
@@ -256,9 +318,9 @@ Verifies that the executable loads and uses the adapter DLL and can apply/query 
 ### Two-process integration self-test
 
 ```powershell
-.\build\Release\hydra_gate_c_host.exe `
+.\build-x64\gate-c\x64\hydra_gate_c_host.exe `
   --self-test `
-  --target .\build\Release\hydra_gate_c_target.exe
+  --target .\build-x64\gate-c\x64\hydra_gate_c_target.exe
 ```
 
 The host starts two separate target processes and verifies:
@@ -289,9 +351,9 @@ The test passes only when both child exit codes are zero and cleanup completes.
 ### Protocol-error fail-closed self-test
 
 ```powershell
-.\build\Release\hydra_gate_c_host.exe `
+.\build-x64\gate-c\x64\hydra_gate_c_host.exe `
   --protocol-error-self-test `
-  --target .\build\Release\hydra_gate_c_target.exe
+  --target .\build-x64\gate-c\x64\hydra_gate_c_target.exe
 ```
 
 The host first applies sequence 2, then deliberately sends a second state-changing frame with the stale sequence 2. The target must return an `Error` frame, terminate its controlled session with the expected nonzero code, and leave no running child. Continuing after the protocol/state disagreement is a test failure.
@@ -309,7 +371,7 @@ missing target-window identity.
 ### Local API probe self-test
 
 ```powershell
-.\build\Release\hydra_gate_c_api_probe.exe --baseline-self-test
+.\build-x64\gate-c\x64\hydra_gate_c_api_probe.exe --baseline-self-test
 ```
 
 Creates a hidden HydraSeat-owned window, reads all baseline APIs on that UI
@@ -319,9 +381,9 @@ difference without modifying global state.
 ### Two-process API baseline and failure self-test
 
 ```powershell
-.\build\Release\hydra_gate_c_host.exe `
+.\build-x64\gate-c\x64\hydra_gate_c_host.exe `
   --baseline-self-test `
-  --target .\build\Release\hydra_gate_c_api_probe.exe
+  --target .\build-x64\gate-c\x64\hydra_gate_c_api_probe.exe
 ```
 
 The host launches two probes with different Seat adapter state and verifies:
@@ -346,7 +408,7 @@ Prerequisites:
 Run:
 
 ```powershell
-.\build\Release\hydra_gate_c_host.exe `
+.\build-x64\gate-c\x64\hydra_gate_c_host.exe `
   --profile workspace_config.json `
   --trace hydra_gate_c_host.jsonl
 ```
@@ -396,12 +458,15 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] Bounded interactive writer queues
 - [x] Versioned, bounded OS/adapter probe snapshot serialization
 - [x] Controlled API probe source and CMake/test integration
+- [x] Explicit process/PE architecture detection and bounded manifest selector source
+- [x] Deterministic architecture-neutral names under `gate-c/x86` and `gate-c/x64`
+- [x] Declared x86/x64 CTest and x64-host-to-x86-target CI jobs
+- [x] Windows/MSVC execution of the x86/x64 architecture matrix and x64-host-to-x86-target/probe self-tests (`32726477354`)
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Controlled Raw Input consumer that calls `RegisterRawInputDevices` / `GetRawInputData`
-- [ ] Windows/MSVC execution of the P3-API-01 local and two-process baseline self-tests
 - [ ] Controlled probe using actual Win32 polling/cursor/focus APIs through opt-in compatibility shims (P3-API-02/P3-API-03)
 - [ ] Clean-room API interposition for HydraSeat-owned test binaries
 - [ ] Adapter crash/watchdog recovery acceptance
@@ -410,9 +475,9 @@ A later implementation may coalesce relative mouse movement while preserving key
 
 ## Next implementation step
 
-First run and pass the P3-API-01 Release Windows/MSVC build and both Win32 probe
-self-tests documented above. Only then may P3-API-02 begin controlled polling
-API interposition, still limited to HydraSeat-owned probe executables:
+P3-ARCH-01 passed the Windows/MSVC x86/x64 and real x64-host-to-x86-target
+matrix in run `32726477354`. P3-API-02 may now begin controlled polling API
+interposition, still limited to HydraSeat-owned probe executables:
 
 1. Add an opt-in compatibility shim loaded at process startup, not injected into an arbitrary running process.
 2. Interpose `GetAsyncKeyState`, `GetKeyState`, and `GetKeyboardState` only for the controlled probe.

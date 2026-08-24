@@ -15,9 +15,12 @@ struct AdapterContext {
     hydra::gatec::VirtualInputState state;
 };
 
-static_assert(sizeof(HydraGateCAdapterInputEventV1) == 36);
-static_assert(sizeof(HydraGateCAdapterControlStateV1) == 32);
-static_assert(sizeof(HydraGateCAdapterSnapshotV1) == 120);
+static_assert(sizeof(HydraGateCAdapterInputEventV1) ==
+              HYDRA_GATE_C_ADAPTER_INPUT_EVENT_V1_BYTES);
+static_assert(sizeof(HydraGateCAdapterControlStateV1) ==
+              HYDRA_GATE_C_ADAPTER_CONTROL_STATE_V1_BYTES);
+static_assert(sizeof(HydraGateCAdapterSnapshotV1) ==
+              HYDRA_GATE_C_ADAPTER_SNAPSHOT_V1_BYTES);
 
 AdapterContext* contextOf(HydraGateCAdapterHandle handle) noexcept {
     return static_cast<AdapterContext*>(handle);
@@ -139,11 +142,13 @@ void copySnapshot(const hydra::gatec::StateSnapshotMessage& source,
 
 extern "C" {
 
-std::uint32_t hydra_gate_c_adapter_api_version(void) {
+std::uint32_t HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_api_version(void) {
     return HYDRA_GATE_C_ADAPTER_API_VERSION;
 }
 
-HydraGateCAdapterHandle hydra_gate_c_adapter_create(void) {
+HydraGateCAdapterHandle HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_create(void) {
     try {
         return new (std::nothrow) AdapterContext{};
     } catch (...) {
@@ -151,11 +156,12 @@ HydraGateCAdapterHandle hydra_gate_c_adapter_create(void) {
     }
 }
 
-void hydra_gate_c_adapter_destroy(HydraGateCAdapterHandle handle) {
+void HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_destroy(HydraGateCAdapterHandle handle) {
     delete contextOf(handle);
 }
 
-HydraGateCAdapterResult hydra_gate_c_adapter_reset(
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL hydra_gate_c_adapter_reset(
     HydraGateCAdapterHandle handle) {
     auto* context = contextOf(handle);
     if (context == nullptr) {
@@ -170,7 +176,8 @@ HydraGateCAdapterResult hydra_gate_c_adapter_reset(
     }
 }
 
-HydraGateCAdapterResult hydra_gate_c_adapter_apply_input(
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_apply_input(
     HydraGateCAdapterHandle handle, std::uint64_t sequence,
     const HydraGateCAdapterInputEventV1* eventData) {
     auto* context = contextOf(handle);
@@ -194,7 +201,8 @@ HydraGateCAdapterResult hydra_gate_c_adapter_apply_input(
     }
 }
 
-HydraGateCAdapterResult hydra_gate_c_adapter_apply_control(
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_apply_control(
     HydraGateCAdapterHandle handle, std::uint64_t sequence,
     const HydraGateCAdapterControlStateV1* controlData) {
     auto* context = contextOf(handle);
@@ -218,7 +226,8 @@ HydraGateCAdapterResult hydra_gate_c_adapter_apply_control(
     }
 }
 
-HydraGateCAdapterResult hydra_gate_c_adapter_get_async_key_state(
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_get_async_key_state(
     HydraGateCAdapterHandle handle, std::uint32_t vkey,
     std::uint16_t* value) {
     auto* context = contextOf(handle);
@@ -234,7 +243,8 @@ HydraGateCAdapterResult hydra_gate_c_adapter_get_async_key_state(
     }
 }
 
-HydraGateCAdapterResult hydra_gate_c_adapter_get_key_state(
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_get_key_state(
     HydraGateCAdapterHandle handle, std::uint32_t vkey,
     std::uint16_t* value) {
     auto* context = contextOf(handle);
@@ -250,7 +260,8 @@ HydraGateCAdapterResult hydra_gate_c_adapter_get_key_state(
     }
 }
 
-HydraGateCAdapterResult hydra_gate_c_adapter_get_keyboard_state(
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_get_keyboard_state(
     HydraGateCAdapterHandle handle, std::uint8_t* state,
     std::size_t stateBytes) {
     auto* context = contextOf(handle);
@@ -270,7 +281,8 @@ HydraGateCAdapterResult hydra_gate_c_adapter_get_keyboard_state(
     }
 }
 
-HydraGateCAdapterResult hydra_gate_c_adapter_get_control_state(
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_get_control_state(
     HydraGateCAdapterHandle handle,
     HydraGateCAdapterControlStateV1* controlState) {
     auto* context = contextOf(handle);
@@ -302,7 +314,8 @@ HydraGateCAdapterResult hydra_gate_c_adapter_get_control_state(
     }
 }
 
-HydraGateCAdapterResult hydra_gate_c_adapter_get_mouse_state(
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_get_mouse_state(
     HydraGateCAdapterHandle handle, std::uint32_t* buttonsDown,
     std::int64_t* wheelAccumulator) {
     auto* context = contextOf(handle);
@@ -320,7 +333,8 @@ HydraGateCAdapterResult hydra_gate_c_adapter_get_mouse_state(
     }
 }
 
-HydraGateCAdapterResult hydra_gate_c_adapter_get_snapshot(
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_get_snapshot(
     HydraGateCAdapterHandle handle, std::uint16_t probeVkey,
     HydraGateCAdapterSnapshotV1* snapshot) {
     auto* context = contextOf(handle);

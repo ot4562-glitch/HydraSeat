@@ -9,8 +9,10 @@
 #  else
 #    define HYDRA_GATE_C_ADAPTER_API __declspec(dllimport)
 #  endif
+#  define HYDRA_GATE_C_ADAPTER_CALL __cdecl
 #else
 #  define HYDRA_GATE_C_ADAPTER_API __attribute__((visibility("default")))
+#  define HYDRA_GATE_C_ADAPTER_CALL
 #endif
 
 #ifdef __cplusplus
@@ -21,6 +23,9 @@ extern "C" {
 #define HYDRA_GATE_C_ADAPTER_KEY_BYTES 32u
 #define HYDRA_GATE_C_ADAPTER_KEYBOARD_STATE_BYTES 256u
 #define HYDRA_GATE_C_ADAPTER_NO_PROBE_KEY 0xffffu
+#define HYDRA_GATE_C_ADAPTER_INPUT_EVENT_V1_BYTES 36u
+#define HYDRA_GATE_C_ADAPTER_CONTROL_STATE_V1_BYTES 32u
+#define HYDRA_GATE_C_ADAPTER_SNAPSHOT_V1_BYTES 120u
 
 typedef void* HydraGateCAdapterHandle;
 
@@ -100,60 +105,60 @@ typedef struct HydraGateCAdapterSnapshotV1 {
 
 #pragma pack(pop)
 
-HYDRA_GATE_C_ADAPTER_API uint32_t
+HYDRA_GATE_C_ADAPTER_API uint32_t HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_api_version(void);
 
-HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterHandle
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterHandle HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_create(void);
 
-HYDRA_GATE_C_ADAPTER_API void
+HYDRA_GATE_C_ADAPTER_API void HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_destroy(HydraGateCAdapterHandle handle);
 
-HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_reset(HydraGateCAdapterHandle handle);
 
-HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_apply_input(
     HydraGateCAdapterHandle handle,
     uint64_t sequence,
     const HydraGateCAdapterInputEventV1* event_data);
 
-HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_apply_control(
     HydraGateCAdapterHandle handle,
     uint64_t sequence,
     const HydraGateCAdapterControlStateV1* control_data);
 
-HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_get_async_key_state(
     HydraGateCAdapterHandle handle,
     uint32_t vkey,
     uint16_t* value);
 
-HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_get_key_state(
     HydraGateCAdapterHandle handle,
     uint32_t vkey,
     uint16_t* value);
 
-HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_get_keyboard_state(
     HydraGateCAdapterHandle handle,
     uint8_t* state,
     size_t state_bytes);
 
-HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_get_control_state(
     HydraGateCAdapterHandle handle,
     HydraGateCAdapterControlStateV1* control_state);
 
-HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_get_mouse_state(
     HydraGateCAdapterHandle handle,
     uint32_t* buttons_down,
     int64_t* wheel_accumulator);
 
-HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_get_snapshot(
     HydraGateCAdapterHandle handle,
     uint16_t probe_vkey,

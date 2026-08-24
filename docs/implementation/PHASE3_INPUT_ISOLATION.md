@@ -137,7 +137,7 @@ Windows CI can launch two probes and show that each has independent adapter stat
 
 ## P3-API-02 — Startup-loaded polling API shim for controlled probes
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 
@@ -383,7 +383,7 @@ Two controlled probes consume separate Raw Input streams through the ordinary AP
 
 ## P3-ARCH-01 — x86/x64 adapter and controlled-target matrix
 
-**State:** READY
+**State:** VALIDATED
 
 **Goal**
 
