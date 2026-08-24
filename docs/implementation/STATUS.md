@@ -3,9 +3,9 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-API-01 — Controlled Win32 API probe baseline**
-- Current validated fork baseline when this ledger was created: `01aef66`
-- Current validated Windows CI evidence: fork main run `32689630892`, 12/12 tests passed
+- Current default packet: **P3-ARCH-01 — x86 Gate C build and cross-architecture launcher selection**
+- Current validated implementation baseline: `3c5a480` (P3-API-01 source plus Win32 build fix)
+- Current validated Windows CI evidence: fork PR #8 run `32721435490`, 15/15 tests passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -35,7 +35,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 
 | Packet | State | Depends on | Immediate evidence required |
 | --- | --- | --- | --- |
-| P3-API-01 Controlled Win32 API probe baseline | READY | P3-STATE-01 | Probe executable reports actual OS API state and direct adapter state side by side |
+| P3-API-01 | VALIDATED | P3-STATE-01 | Controlled Win32 API probe baseline — Windows/MSVC PR #8 run `32721435490`; 15/15 tests including both API probe self-tests passed |
 | P3-API-02 Startup-loaded polling shim for controlled probe | BLOCKED | P3-API-01 | `GetAsyncKeyState`, `GetKeyState`, `GetKeyboardState` return Seat-local values in the probe |
 | P3-API-03 Cursor/focus/capture shim for controlled probe | BLOCKED | P3-API-02 | Probe sees Seat-local cursor/clip/focus/capture while global state remains unchanged |
 | P3-RAW-01 Raw Input registration/data probe | BLOCKED | P3-API-01 | Controlled probe records real registration/data behavior before interposition |
@@ -89,15 +89,30 @@ Rollback result:
 Next packet:
 ```
 
+### 2026-08-24 — P3-API-01
+
+State: VALIDATED
+Branch/commit: `feature/p3-api-01-win32-probe`; implementation/fix baseline `3c5a480`
+Windows CI: fork PR #8 run `32721435490` passed on Windows Server 2025 / MSVC x64; 15/15 CTest targets passed
+Automated tests:
+- strict GCC 15 snapshot build/test passed with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion`
+- Windows CMake/MSVC Release configure/build passed in PR #8 run `32721435490`
+- Windows CTest passed 15/15 targets, including `GateCProbeSnapshotTests`
+- `GateCApiProbeSelfTest` and `GateCApiProbeProcessSelfTest` both passed on the Windows runner
+Manual evidence: none required by this packet; Gate A/B/C physical gates remain pending and unchanged
+Known limitations: no API interposition exists; the probe records ordinary shared OS state beside direct adapter state
+Rollback result: Windows baseline self-test exercised missing-window, handshake-timeout, abnormal-exit, host-disconnect, repeated startup/shutdown, and no-orphan paths successfully
+Next packet: P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection; then unblock P3-API-02 for declared architectures
+
 ## Next Codex task
 
 Use:
 
 ```text
-Implement P3-API-01 exactly as specified in
+Implement P3-ARCH-01 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Do not implement API interposition yet. Build the controlled probe that reports
-actual OS polling/cursor/focus/Raw Input observations beside the existing adapter
-state, with deterministic snapshots and Windows integration tests.
+Add the declared x86 Gate C build/test matrix and deterministic x64-host selection
+of x86/x64 controlled targets/adapters. Do not begin polling/API interposition or
+claim 32-bit support until the Windows cross-architecture process tests pass.
 ```

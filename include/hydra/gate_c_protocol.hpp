@@ -28,7 +28,8 @@ enum class MessageType : std::uint16_t {
     QuerySnapshot = 5,
     StateSnapshot = 6,
     Shutdown = 7,
-    Error = 8
+    Error = 8,
+    ProbeSnapshot = 9
 };
 
 enum class InputKind : std::uint8_t {
@@ -48,7 +49,8 @@ enum class TestCapability : std::uint64_t {
     VirtualMouseState = 1ull << 1,
     VirtualCursorState = 1ull << 2,
     VirtualFocusState = 1ull << 3,
-    SnapshotQuery = 1ull << 4
+    SnapshotQuery = 1ull << 4,
+    ApiProbeBaselineSnapshot = 1ull << 5
 };
 
 constexpr TestCapability operator|(TestCapability left,
@@ -68,6 +70,10 @@ inline constexpr TestCapability kControlledTargetCapabilities =
     TestCapability::VirtualCursorState |
     TestCapability::VirtualFocusState |
     TestCapability::SnapshotQuery;
+
+inline constexpr TestCapability kControlledApiProbeCapabilities =
+    kControlledTargetCapabilities |
+    TestCapability::ApiProbeBaselineSnapshot;
 
 struct DecodedFrame {
     MessageType type{MessageType::Error};

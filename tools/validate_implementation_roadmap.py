@@ -295,9 +295,11 @@ def validate(root: Path) -> tuple[Validation, dict[str, Packet]]:
         if current_packet not in declared_ids:
             result.error(f"current default packet {current_packet} is not declared")
         current_state = status_states.get(current_packet)
-        if current_state and first_state_component(current_state) != "READY":
+        actionable_current_states = {"READY", "IN_PROGRESS", "CODE_COMPLETE"}
+        if current_state and first_state_component(current_state) not in actionable_current_states:
             result.error(
-                f"current default packet {current_packet} must be READY, got {current_state!r}"
+                f"current default packet {current_packet} must be READY, IN_PROGRESS, "
+                f"or CODE_COMPLETE, got {current_state!r}"
             )
 
     dependency_graph: dict[str, set[str]] = {}

@@ -177,7 +177,7 @@ void appendPadding(std::vector<std::byte>& output, std::size_t bytes) {
 
 bool knownMessageType(std::uint16_t raw) noexcept {
     return raw >= static_cast<std::uint16_t>(MessageType::Hello) &&
-           raw <= static_cast<std::uint16_t>(MessageType::Error);
+           raw <= static_cast<std::uint16_t>(MessageType::ProbeSnapshot);
 }
 
 bool finishDecode(const DecodedFrame& frame, MessageType expected,
@@ -611,6 +611,7 @@ std::string_view messageTypeName(MessageType type) noexcept {
     case MessageType::StateSnapshot: return "StateSnapshot";
     case MessageType::Shutdown: return "Shutdown";
     case MessageType::Error: return "Error";
+    case MessageType::ProbeSnapshot: return "ProbeSnapshot";
     }
     return "Unknown";
 }

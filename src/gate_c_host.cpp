@@ -1,4 +1,6 @@
+#include "hydra/gate_c_adapter.h"
 #include "hydra/gate_c_protocol.hpp"
+#include "hydra/gate_c_probe_snapshot.hpp"
 #include "hydra/gate_c_transport.hpp"
 #include "hydra/input_observation.hpp"
 #include "hydra/input_router.hpp"
@@ -44,6 +46,7 @@ using hydra::gatec::InputKind;
 using hydra::gatec::KeyTransition;
 using hydra::gatec::MessageType;
 using hydra::gatec::PipeChannel;
+using hydra::gatec::ProbeComparison;
 using hydra::gatec::QuerySnapshotMessage;
 using hydra::gatec::SessionToken;
 using hydra::gatec::StateSnapshotMessage;
@@ -54,6 +57,7 @@ struct HostOptions {
     std::string profilePath{"workspace_config.json"};
     std::string tracePath{"hydra_gate_c_host.jsonl"};
     bool selfTest{false};
+    bool baselineSelfTest{false};
     bool protocolErrorSelfTest{false};
     bool showHelp{false};
 };
@@ -63,6 +67,7 @@ void printUsage(std::ostream& output) {
         << "HydraSeat Gate C controlled-process host\n\n"
         << "Usage:\n"
         << "  hydra_gate_c_host --self-test [--target <hydra_gate_c_target.exe>]\n"
+        << "  hydra_gate_c_host --baseline-self-test --target <hydra_gate_c_api_probe.exe>\n"
         << "  hydra_gate_c_host --protocol-error-self-test [--target <hydra_gate_c_target.exe>]\n"
         << "  hydra_gate_c_host [--profile <workspace_config.json>] [--trace <file.jsonl>]\n"
         << "                     [--target <hydra_gate_c_target.exe>]\n\n"
@@ -176,6 +181,8 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
             options.tracePath = wideToUtf8(argv[++index]);
         } else if (argument == L"--self-test") {
             options.selfTest = true;
+        } else if (argument == L"--baseline-self-test") {
+            options.baselineSelfTest = true;
         } else if (argument == L"--protocol-error-self-test") {
             options.protocolErrorSelfTest = true;
         } else if (argument == L"--help" || argument == L"-h") {
@@ -184,13 +191,16 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
             return false;
         }
     }
-    if (options.selfTest && options.protocolErrorSelfTest) {
+    const int selfTestModes = static_cast<int>(options.selfTest) +
+        static_cast<int>(options.baselineSelfTest) +
+        static_cast<int>(options.protocolErrorSelfTest);
+    if (selfTestModes > 1) {
         return false;
     }
     return true;
 }
 
-std::wstring siblingTargetPath() {
+std::wstring siblingTargetPath(bool apiProbe) {
     std::vector<wchar_t> buffer(32768, L'\0');
     const DWORD length = GetModuleFileNameW(
         nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
@@ -204,7 +214,8 @@ std::wstring siblingTargetPath() {
     } else {
         path.clear();
     }
-    path += L"hydra_gate_c_target.exe";
+    path += apiProbe ? L"hydra_gate_c_api_probe.exe"
+                     : L"hydra_gate_c_target.exe";
     return path;
 }
 
@@ -430,12 +441,21 @@ InputEventMessage toProtocolEvent(const RawInputEvent& event) {
     return message;
 }
 
+bool probeAdapterKeyDown(const ProbeComparison& comparison,
+                         std::uint32_t vkey) noexcept {
+    if (vkey >= 256u) return false;
+    const auto byteIndex = static_cast<std::size_t>(vkey / 8u);
+    const auto mask = static_cast<std::uint8_t>(1u << (vkey % 8u));
+    return (comparison.adapter.keyDownBits[byteIndex] & mask) != 0;
+}
+
 class GateCHost {
 public:
     explicit GateCHost(HostOptions options)
         : m_options(std::move(options)) {
         if (m_options.targetPath.empty()) {
-            m_options.targetPath = siblingTargetPath();
+            m_options.targetPath = siblingTargetPath(
+                m_options.baselineSelfTest);
         }
     }
 
@@ -449,6 +469,9 @@ public:
         if (m_options.selfTest) {
             return runProcessSelfTest();
         }
+        if (m_options.baselineSelfTest) {
+            return runApiProbeBaselineSelfTest();
+        }
         if (m_options.protocolErrorSelfTest) {
             return runProtocolErrorSelfTest();
         }
@@ -456,7 +479,10 @@ public:
     }
 
 private:
-    bool launchTarget(TargetSession& session, bool headless) {
+    bool launchTarget(TargetSession& session, bool headless,
+                      std::wstring_view extraArguments = {},
+                      std::uint32_t handshakeTimeoutMs = kHandshakeTimeoutMs,
+                      bool requireOwnedWindow = false) {
         const auto token = hydra::gatec::generateSessionToken();
         if (!token) {
             std::cerr << "Cryptographic session-token generation failed for Seat "
@@ -486,6 +512,10 @@ private:
         if (headless) {
             commandLine += L" --headless";
         }
+        if (!extraArguments.empty()) {
+            commandLine.push_back(L' ');
+            commandLine.append(extraArguments);
+        }
 
         STARTUPINFOW startup{};
         startup.cb = sizeof(startup);
@@ -502,7 +532,7 @@ private:
         session.process.assign(process.hProcess, process.dwProcessId);
 
         if (!hydra::gatec::waitForGateCClient(
-                session.channel, kHandshakeTimeoutMs, &error, &systemError)) {
+                session.channel, handshakeTimeoutMs, &error, &systemError)) {
             std::cerr << "Pipe connection failed for Seat " << session.seatId
                       << ": " << error << " (" << systemError << ")\n";
             session.process.terminate(91);
@@ -529,12 +559,30 @@ private:
             return false;
         }
 
+        if (requireOwnedWindow) {
+            const HWND window = reinterpret_cast<HWND>(
+                static_cast<std::uintptr_t>(hello.targetWindow));
+            DWORD windowProcessId = 0;
+            const DWORD windowThreadId = window == nullptr
+                ? 0
+                : GetWindowThreadProcessId(window, &windowProcessId);
+            if (window == nullptr || windowThreadId == 0 ||
+                windowProcessId != session.process.processId()) {
+                std::cerr << "Probe target-window validation failed for Seat "
+                          << session.seatId << '\n';
+                rejectHello(session, 2003);
+                return false;
+            }
+        }
+
         session.targetWindow = hello.targetWindow;
         HelloAckMessage ack;
         ack.accepted = true;
         ack.serverProcessId = GetCurrentProcessId();
         ack.grantedCapabilities = hydra::gatec::testCapabilityBits(
-            hydra::gatec::kControlledTargetCapabilities);
+            requireOwnedWindow
+                ? hydra::gatec::kControlledApiProbeCapabilities
+                : hydra::gatec::kControlledTargetCapabilities);
         if (!session.channel.writeFrame(
                 hydra::gatec::encodeHelloAck(1, ack), kIoTimeoutMs,
                 &error, &systemError)) {
@@ -608,6 +656,36 @@ private:
             return snapshot;
         }
         return std::nullopt;
+    }
+
+    std::optional<ProbeComparison> queryProbeSnapshot(
+        TargetSession& session, std::uint16_t probeVkey) {
+        QuerySnapshotMessage query;
+        query.probeVkey = probeVkey;
+        const auto sequence = session.nextSequence++;
+        if (!session.channel.writeFrame(
+                hydra::gatec::encodeQuerySnapshot(sequence, query),
+                kIoTimeoutMs)) {
+            return std::nullopt;
+        }
+
+        const auto result = session.channel.readFrame(kIoTimeoutMs);
+        if (!result || !result.frame ||
+            result.frame->type != MessageType::ProbeSnapshot ||
+            result.frame->sequence != sequence) {
+            return std::nullopt;
+        }
+        auto decoded = hydra::gatec::decodeProbeComparison(
+            result.frame->payload);
+        if (!decoded || !decoded.comparison ||
+            decoded.comparison->sequence != sequence ||
+            decoded.comparison->seatId != session.seatId ||
+            decoded.comparison->processId != session.process.processId() ||
+            decoded.comparison->targetWindowRuntimeValue !=
+                session.targetWindow) {
+            return std::nullopt;
+        }
+        return std::move(decoded.comparison);
     }
 
     bool sendShutdown(TargetSession& session) {
@@ -745,6 +823,221 @@ private:
             << "HydraSeat Gate C process self-test passed: two separate target "
                "processes retained independent keyboard, async-edge, mouse, "
                "cursor, clip, and virtual-focus state.\n";
+        return EXIT_SUCCESS;
+    }
+
+    int runApiProbeBaselineSelfTest() {
+        const auto runNormalCycle = [&]() -> bool {
+            std::vector<TargetSession> sessions(2);
+            sessions[0].seatId = 1;
+            sessions[1].seatId = 2;
+            if (!launchTarget(sessions[0], true, {},
+                              kHandshakeTimeoutMs, true) ||
+                !launchTarget(sessions[1], true, {},
+                              kHandshakeTimeoutMs, true)) {
+                cleanupSessions(sessions, true);
+                return false;
+            }
+
+            ControlStateMessage firstControl;
+            firstControl.cursorX = 10;
+            firstControl.cursorY = 20;
+            firstControl.clipEnabled = true;
+            firstControl.virtualForeground = true;
+            firstControl.virtualCapture = true;
+            firstControl.clipLeft = 0;
+            firstControl.clipTop = 0;
+            firstControl.clipRight = 100;
+            firstControl.clipBottom = 100;
+            ControlStateMessage secondControl = firstControl;
+            secondControl.cursorX = 70;
+            secondControl.cursorY = 80;
+            if (!sendControl(sessions[0], firstControl) ||
+                !sendControl(sessions[1], secondControl)) {
+                cleanupSessions(sessions, true);
+                return false;
+            }
+
+            InputEventMessage keyA;
+            keyA.kind = InputKind::Keyboard;
+            keyA.keyTransition = KeyTransition::Down;
+            keyA.vkey = 0x41;
+            InputEventMessage keyB = keyA;
+            keyB.vkey = 0x42;
+            InputEventMessage firstMouse;
+            firstMouse.kind = InputKind::Mouse;
+            firstMouse.deltaX = 5;
+            firstMouse.deltaY = 7;
+            firstMouse.mouseButtonFlags = hydra::gatec::kMouseLeftDown;
+            firstMouse.wheelDelta = 120;
+            InputEventMessage secondMouse = firstMouse;
+            secondMouse.deltaX = -8;
+            secondMouse.deltaY = -9;
+            secondMouse.mouseButtonFlags = hydra::gatec::kMouseRightDown;
+            secondMouse.wheelDelta = -120;
+            if (!sendInput(sessions[0], keyA) ||
+                !sendInput(sessions[0], firstMouse) ||
+                !sendInput(sessions[1], keyB) ||
+                !sendInput(sessions[1], secondMouse)) {
+                cleanupSessions(sessions, true);
+                return false;
+            }
+
+            const auto firstA = queryProbeSnapshot(sessions[0], 0x41);
+            const auto secondA = queryProbeSnapshot(sessions[1], 0x41);
+            const auto secondB = queryProbeSnapshot(sessions[1], 0x42);
+            const auto firstASecond =
+                queryProbeSnapshot(sessions[0], 0x41);
+            if (!firstA || !secondA || !secondB || !firstASecond) {
+                cleanupSessions(sessions, true);
+                return false;
+            }
+
+            const auto capturedOnOwnedUiThread = [&](const TargetSession& session,
+                                                      const ProbeComparison& value) {
+                DWORD windowProcessId = 0;
+                const DWORD windowThreadId = GetWindowThreadProcessId(
+                    reinterpret_cast<HWND>(static_cast<std::uintptr_t>(
+                        session.targetWindow)), &windowProcessId);
+                return windowThreadId != 0 &&
+                    value.threadId == windowThreadId &&
+                    value.processId == windowProcessId &&
+                    value.os.keyboardStateSucceeded &&
+                    value.os.cursorPositionSucceeded &&
+                    value.os.clipRectangleSucceeded;
+            };
+            const auto adapterCallsSucceeded = [](const ProbeComparison& value) {
+                return value.adapter.snapshotResult ==
+                           static_cast<std::uint32_t>(
+                               HYDRA_GATE_C_ADAPTER_OK) &&
+                       value.adapter.keyStateResult ==
+                           static_cast<std::uint32_t>(
+                               HYDRA_GATE_C_ADAPTER_OK) &&
+                       value.adapter.keyboardStateResult ==
+                           static_cast<std::uint32_t>(
+                               HYDRA_GATE_C_ADAPTER_OK) &&
+                       value.adapter.controlStateResult ==
+                           static_cast<std::uint32_t>(
+                               HYDRA_GATE_C_ADAPTER_OK) &&
+                       value.adapter.mouseStateResult ==
+                           static_cast<std::uint32_t>(
+                               HYDRA_GATE_C_ADAPTER_OK);
+            };
+
+            const bool firstIsolated =
+                probeAdapterKeyDown(*firstA, 0x41) &&
+                !probeAdapterKeyDown(*firstA, 0x42) &&
+                firstA->adapter.keyboardState[0x41] == 0x80u &&
+                firstA->adapter.keyboardState[0x42] == 0 &&
+                firstA->adapter.asyncKeyState == 0x8001u &&
+                firstASecond->adapter.asyncKeyState == 0x8000u &&
+                firstA->adapter.cursorX == 15 &&
+                firstA->adapter.cursorY == 27 &&
+                (firstA->adapter.mouseButtonsDown & 1u) != 0 &&
+                firstA->adapter.wheelAccumulator == 120;
+            const bool secondIsolated =
+                !probeAdapterKeyDown(*secondA, 0x41) &&
+                probeAdapterKeyDown(*secondB, 0x42) &&
+                secondA->adapter.keyboardState[0x41] == 0 &&
+                secondB->adapter.keyboardState[0x42] == 0x80u &&
+                secondA->adapter.asyncKeyState == 0 &&
+                secondB->adapter.asyncKeyState == 0x8001u &&
+                secondB->adapter.cursorX == 62 &&
+                secondB->adapter.cursorY == 71 &&
+                (secondB->adapter.mouseButtonsDown & (1u << 1)) != 0 &&
+                secondB->adapter.wheelAccumulator == -120;
+            const bool baselineDifferenceObserved =
+                firstA->adapter.virtualForeground &&
+                secondA->adapter.virtualForeground &&
+                !firstA->osForegroundIsTarget &&
+                !secondA->osForegroundIsTarget &&
+                !firstA->foregroundMatches &&
+                !secondA->foregroundMatches;
+            const bool completeObservations =
+                capturedOnOwnedUiThread(sessions[0], *firstA) &&
+                capturedOnOwnedUiThread(sessions[1], *secondA) &&
+                adapterCallsSucceeded(*firstA) &&
+                adapterCallsSucceeded(*secondA) &&
+                firstA->monotonicTimestampMicros != 0 &&
+                secondA->monotonicTimestampMicros != 0;
+
+            const bool passed = firstIsolated && secondIsolated &&
+                baselineDifferenceObserved && completeObservations;
+            const bool cleaned = cleanupSessions(sessions, !passed);
+            return passed && cleaned &&
+                !sessions[0].process.running() &&
+                !sessions[1].process.running();
+        };
+
+        // Two full cycles prove deterministic startup, capture, shutdown, and
+        // release of both controlled child processes.
+        if (!runNormalCycle() || !runNormalCycle()) return 50;
+
+        TargetSession missingWindow;
+        missingWindow.seatId = 11;
+        if (launchTarget(missingWindow, true, L"--test-missing-window",
+                         2000, true) ||
+            missingWindow.process.running()) {
+            missingWindow.process.terminate(101);
+            missingWindow.channel.close();
+            return 51;
+        }
+        missingWindow.channel.close();
+
+        TargetSession handshakeTimeout;
+        handshakeTimeout.seatId = 12;
+        const auto timeoutStart = std::chrono::steady_clock::now();
+        if (launchTarget(handshakeTimeout, true, L"--test-no-handshake",
+                         250, true) ||
+            handshakeTimeout.process.running() ||
+            std::chrono::steady_clock::now() - timeoutStart >
+                std::chrono::seconds(5)) {
+            handshakeTimeout.process.terminate(102);
+            handshakeTimeout.channel.close();
+            return 52;
+        }
+        handshakeTimeout.channel.close();
+
+        TargetSession abnormalExit;
+        abnormalExit.seatId = 13;
+        if (!launchTarget(abnormalExit, true, L"--test-abnormal-exit",
+                          kHandshakeTimeoutMs, true)) {
+            abnormalExit.process.terminate(103);
+            abnormalExit.channel.close();
+            return 53;
+        }
+        std::uint32_t abnormalCode = 0;
+        if (!abnormalExit.process.wait(kProcessExitTimeoutMs, &abnormalCode) ||
+            abnormalCode != 77u || abnormalExit.process.running()) {
+            abnormalExit.process.terminate(104);
+            abnormalExit.channel.close();
+            return 54;
+        }
+        abnormalExit.channel.close();
+
+        TargetSession hostDisconnect;
+        hostDisconnect.seatId = 14;
+        if (!launchTarget(hostDisconnect, true, {},
+                          kHandshakeTimeoutMs, true)) {
+            hostDisconnect.process.terminate(105);
+            hostDisconnect.channel.close();
+            return 55;
+        }
+        hostDisconnect.connected = false;
+        hostDisconnect.channel.close();
+        std::uint32_t disconnectCode = 0;
+        if (!hostDisconnect.process.wait(
+                kProcessExitTimeoutMs, &disconnectCode) ||
+            disconnectCode != 24u || hostDisconnect.process.running()) {
+            hostDisconnect.process.terminate(106);
+            return 56;
+        }
+
+        std::cout
+            << "HydraSeat Gate C API baseline self-test passed: two controlled "
+               "probe processes captured real Win32 polling/cursor/clip/focus/"
+               "capture observations beside independent Seat adapter state; "
+               "failure and repeated teardown paths left no child process.\n";
         return EXIT_SUCCESS;
     }
 

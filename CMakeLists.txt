@@ -89,9 +89,11 @@ endif()
 # Phase 3 controlled-process protocol and virtual input-state core.
 add_library(hydra_gate_c_core STATIC
     src/gate_c_protocol.cpp
+    src/gate_c_probe_snapshot.cpp
     src/gate_c_transport.cpp
     src/virtual_input_state.cpp
     include/hydra/gate_c_protocol.hpp
+    include/hydra/gate_c_probe_snapshot.hpp
     include/hydra/gate_c_transport.hpp
     include/hydra/virtual_input_state.hpp
 )
@@ -197,6 +199,21 @@ if(MSVC)
     target_compile_options(hydra_gate_c_target PRIVATE /W4 /permissive-)
 endif()
 
+# P3-API-01 read-only Win32 API probe. This controlled executable observes
+# ordinary OS state beside the direct adapter state; it installs no shim/hook.
+add_executable(hydra_gate_c_api_probe
+    src/gate_c_api_probe.cpp
+)
+target_link_libraries(hydra_gate_c_api_probe PRIVATE
+    hydra_gate_c_core hydra_gate_c_adapter
+)
+if(WIN32)
+    target_link_libraries(hydra_gate_c_api_probe PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_gate_c_api_probe PRIVATE /W4 /permissive-)
+endif()
+
 # Phase 3 Gate C host: launches only the controlled target executable and
 # routes Seat-owned Raw Input observations over the versioned named-pipe protocol.
 add_executable(hydra_gate_c_host
@@ -281,6 +298,16 @@ if(MSVC)
 endif()
 add_test(NAME GateCProtocolTests COMMAND gate_c_protocol_tests)
 
+# P3-API-01 fixed-width, versioned OS/adapter comparison snapshot tests.
+add_executable(gate_c_probe_snapshot_tests
+    tests/test_gate_c_probe_snapshot.cpp
+)
+target_link_libraries(gate_c_probe_snapshot_tests PRIVATE hydra_gate_c_core)
+if(MSVC)
+    target_compile_options(gate_c_probe_snapshot_tests PRIVATE /W4 /permissive-)
+endif()
+add_test(NAME GateCProbeSnapshotTests COMMAND gate_c_probe_snapshot_tests)
+
 # C ABI adapter tests exercise independent process-local contexts and
 # GetAsyncKeyState/GetKeyboardState-style semantics without installing hooks.
 add_executable(gate_c_adapter_tests
@@ -304,6 +331,14 @@ add_test(NAME GateCAdapterCSmoke COMMAND gate_c_adapter_c_smoke)
 add_test(NAME GateCTargetSelfTest COMMAND hydra_gate_c_target --self-test)
 
 if(WIN32)
+    add_test(
+        NAME GateCApiProbeSelfTest
+        COMMAND hydra_gate_c_api_probe --baseline-self-test
+    )
+    set_tests_properties(GateCApiProbeSelfTest PROPERTIES TIMEOUT 15)
+endif()
+
+if(WIN32)
     # Launches two separate controlled target processes, performs the versioned
     # handshake, sends different Seat states, queries snapshots, and verifies
     # no cross-process state bleed. No device hiding or injection occurs.
@@ -318,6 +353,12 @@ if(WIN32)
         COMMAND hydra_gate_c_host --protocol-error-self-test --target $<TARGET_FILE:hydra_gate_c_target>
     )
     set_tests_properties(GateCProtocolErrorSelfTest PROPERTIES TIMEOUT 30)
+
+    add_test(
+        NAME GateCApiProbeProcessSelfTest
+        COMMAND hydra_gate_c_host --baseline-self-test --target $<TARGET_FILE:hydra_gate_c_api_probe>
+    )
+    set_tests_properties(GateCApiProbeProcessSelfTest PROPERTIES TIMEOUT 60)
 else()
     add_test(NAME GateCHostPortableSelfTest COMMAND hydra_gate_c_host --self-test)
 endif()
