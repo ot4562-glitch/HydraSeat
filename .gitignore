@@ -52,6 +52,10 @@ ui_*.h
 *.tmp
 *.bak
 
+# Python validator/tool caches
+__pycache__/
+*.py[cod]
+
 hydra_input_lab*.jsonl
 phase3-input-lab*.jsonl
 hydra_gate_c*.jsonl

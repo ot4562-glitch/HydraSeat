@@ -25,6 +25,36 @@ HydraSeat makes one physical Windows PC feel like multiple local gaming PCs with
                   Game / Apps          Game / Apps
 ```
 
+## Target production process topology
+
+The current development labs are intentionally separate executables. The planned production topology is:
+
+```text
+HydraSeat.exe
+  Configuration UI, tray UI, profile editor, start/stop/reset commands
+        │ versioned local control/state protocol
+        ▼
+hydra_host.exe
+  Authoritative per-user runtime state
+  Hardware/input/process/window/display/controller/audio routing
+  Compatibility-plan execution and diagnostics
+        │ leases / rollback manifest
+        ├──────────────────────────────► hydra_watchdog.exe
+        │                                 Independent timeout/crash recovery
+        │
+        ├─ Seat 1 process group ─► target A + optional adapter32/64.dll
+        ├─ Seat 2 process group ─► target B + optional adapter32/64.dll
+        ├─ Seat 1 shell ─────────► hydra_shell.exe
+        └─ Seat 2 shell ─────────► hydra_shell.exe
+
+hydra_reset.exe
+  Independent emergency reset and verification path
+```
+
+The UI and shell are disposable clients. They are not runtime authority. Optional adapters, drivers, providers, and extensions are capability-planned, version/hash/trust checked, and can be absent without breaking physical-display core operation.
+
+The packet-level construction order, ownership rules, rollback gates, and executable contracts are defined in [the master implementation roadmap](implementation/README.md) and [non-negotiable decisions](implementation/DECISIONS.md).
+
 ## Layer boundaries
 
 ### 1. Hardware Detector (`HardwareDetector`)
@@ -232,7 +262,7 @@ Planned responsibilities:
 - route supported per-application sessions to Seat outputs;
 - expose microphone ownership and diagnostics.
 
-## Phase 3 runtime transaction
+## Runtime activation transaction
 
 Risky activation must be transactional:
 
@@ -265,9 +295,13 @@ HydraSeat does not bypass anti-cheat, DRM or protected-process controls. Invasiv
 
 See:
 
+- [Master implementation roadmap](implementation/README.md)
+- [Product requirement traceability](implementation/TRACEABILITY.md)
+- [Non-negotiable decisions](implementation/DECISIONS.md)
 - [RELATED_SYSTEMS_RESEARCH.md](RELATED_SYSTEMS_RESEARCH.md)
 - [PHASE3_INPUT_ISOLATION_DESIGN.md](PHASE3_INPUT_ISOLATION_DESIGN.md)
 - [PHASE3_GATE_A_B_TESTING.md](PHASE3_GATE_A_B_TESTING.md)
+- [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md)
 - [CLEAN_ROOM_POLICY.md](CLEAN_ROOM_POLICY.md)
 
 Reference repositories are not build inputs. GPL, unlicensed and proprietary implementation code must not be copied into the core. Permissive code reuse requires an explicit HydraSeat license, dependency audit, attribution and third-party notices.

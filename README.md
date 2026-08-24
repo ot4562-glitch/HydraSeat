@@ -262,7 +262,7 @@ The roadmap is intentionally incremental.
 - **Phase 1 — Hardware Detection:** complete and validated with Windows/MSVC CI.
 - **Phase 2 — Seat Composition / Assignment UI:** complete in the current Win32 prototype, including multi-display Seats, primary-display selection, exclusive device ownership, and validated JSON profiles.
 - **Phase 3 — Input Compatibility / Isolation:** current. The capability planner, Gate A/B input observation, and the Gate C controlled-process protocol/adapter foundation are implemented. Physical acceptance, actual Windows API interposition, device cloaking, and verified zero-bleed game enforcement are **not** complete yet.
-- **Later phases:** display routing, virtual displays, two-game MVP verification, game profiles, Seat shell, and extension adapters.
+- **Later phases:** background runtime and display/window ownership, two-game MVP, launcher/profile manager, Seat shell, watchdog/installer/update productization, compatibility SDK, and release hardening through Phase 10.
 
 The most important technical milestone is not simply launching two windows. It is proving that two people can concurrently use different games/apps on different Seat display groups **without either user's keyboard/mouse input or foreground behavior interfering with the other Seat.**
 
@@ -362,6 +362,43 @@ Research and implementation specifications:
 
 ---
 
+## 🧱 Codex Implementation Roadmap
+
+Future implementation is split into bounded work packets so Codex can write code without re-inventing the architecture or falsely completing physical/game gates.
+
+Current default packet:
+
+```text
+P3-API-01 — Controlled Win32 API probe baseline
+```
+
+Start every coding task by reading:
+
+1. [Agent rules](.agents/AGENTS.md)
+2. [Non-negotiable decisions](docs/implementation/DECISIONS.md)
+3. [Master implementation roadmap](docs/implementation/README.md)
+4. [Current packet status](docs/implementation/STATUS.md)
+5. The active [Phase 3–10 packet specification](docs/implementation/README.md#4-phase-model)
+6. [Codex implementation playbook](docs/implementation/CODEX_PLAYBOOK.md)
+
+A packet defines its prerequisites, exact files/types, implementation order, invariants, automated tests, manual acceptance, rollback behavior, non-goals, and objective completion gate. Manual hardware/game/install/reboot checks remain pending until a human records real evidence.
+
+Inspect or generate the current Codex task, then validate before and after every packet:
+
+```text
+python tools/show_implementation_packet.py --current
+python tools/show_implementation_packet.py --current --prompt
+python tools/show_implementation_packet.py --ready
+python tools/validate_implementation_roadmap.py
+git diff --check
+```
+
+The `--prompt` command is the preferred way to hand a task to Codex because it validates the roadmap and emits the exact packet, prerequisites, scope restrictions, tests, status update, and manual-gate rules.
+
+The original product requirements and the exact packets/evidence that prove them are mapped in [Product Requirement Traceability](docs/implementation/TRACEABILITY.md).
+
+---
+
 ## 🛠️ Build Prerequisites
 
 - **OS**: Windows 10 / Windows 11 (64-bit)
@@ -374,7 +411,9 @@ Research and implementation specifications:
 
 ## 🚀 Roadmap
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed Phase 0 to Phase 7 deliverables.
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the Phase 0–10 summary.
+
+See [docs/implementation/README.md](docs/implementation/README.md) for the packet-level master plan, [docs/implementation/STATUS.md](docs/implementation/STATUS.md) for the current task, and [docs/implementation/CODEX_PLAYBOOK.md](docs/implementation/CODEX_PLAYBOOK.md) for the Codex workflow.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for internal component designs.
 

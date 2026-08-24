@@ -17,6 +17,17 @@ jobs:
     - name: Set up MSVC & CMake
       uses: ilammy/msvc-dev-cmd@v1
 
+    - name: Set up Python for roadmap validation
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Validate implementation roadmap
+      run: python tools/validate_implementation_roadmap.py
+
+    - name: Validate current Codex packet prompt
+      run: python tools/show_implementation_packet.py --current --prompt
+
     - name: Configure CMake
       run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 

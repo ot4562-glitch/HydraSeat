@@ -1,110 +1,234 @@
 # HydraSeat Development Roadmap
 
+This file is the phase-level summary. The implementation source of truth is the packetized master roadmap under [`docs/implementation/`](implementation/README.md). Coding agents must read [`STATUS.md`](implementation/STATUS.md), [`DECISIONS.md`](implementation/DECISIONS.md), and the active phase packet before editing code.
+
+Current default implementation packet:
+
+```text
+P3-API-01 — Controlled Win32 API probe baseline
+```
+
+Validate the roadmap with:
+
+```text
+python tools/validate_implementation_roadmap.py
+```
+
 ---
 
-## Phase 0: Research & Foundation (Complete)
-- [x] Establish C++20 / Qt 6 project workspace architecture
-- [x] Configure `.agents/AGENTS.md` autonomous iteration rules
-- [x] Document Windows input/display architectural design
-- [x] Evaluate Interception, HidHide, ViGEmBus, IDD and related systems
-- [x] Record related-product/source research and clean-room contribution policy
+## Phase 0 — Research and Foundation (Complete)
+
+- [x] Establish C++20 / optional Qt 6 project architecture
+- [x] Configure agent workflow and autonomous verification rules
+- [x] Document Windows input/display architecture
+- [x] Evaluate Interception, HidHide, ViGEmBus, IddCx/IDD, ProtoInput, Universal Split Screen, Nucleus Co-op, devreorder, Duo, and ASTER public behavior
+- [x] Record clean-room, source-license, and third-party research policy
 
 Research:
-- [PHASE0_RESEARCH.md](PHASE0_RESEARCH.md)
-- [RELATED_SYSTEMS_RESEARCH.md](RELATED_SYSTEMS_RESEARCH.md)
-- [CLEAN_ROOM_POLICY.md](CLEAN_ROOM_POLICY.md)
+
+- [Phase 0 research](PHASE0_RESEARCH.md)
+- [Related systems research](RELATED_SYSTEMS_RESEARCH.md)
+- [Clean-room policy](CLEAN_ROOM_POLICY.md)
 
 ---
 
-## Phase 1: Hardware Detection (Complete)
-- [x] Implement `HardwareDetector` module
-- [x] Detect and list physical display monitors and likely virtual displays
-- [x] Differentiate distinct physical keyboards through Raw Input plus SetupAPI/ConfigMgr identity
-- [x] Differentiate distinct mice and touchpads
-- [x] Differentiate XInput and generic HID controllers
-- [x] Build CLI hardware detection tool for verification
+## Phase 1 — Hardware Detection (Complete)
+
+- [x] Implement hardware detector and diagnostic CLI
+- [x] Detect physical monitors and likely virtual displays
+- [x] Resolve distinct keyboards/mice/touchpads through Raw Input plus SetupAPI/ConfigMgr identity
+- [x] Detect XInput and generic HID controllers
 - [x] Add deterministic identity tests and Windows/MSVC CI
 
 ---
 
-## Phase 2: Seat Composition & Assignment UI (Complete)
-- [x] Build drag-and-drop Seat assignment UI (current Win32 prototype; Qt 6 migration remains UI polish)
-- [x] Implement `WorkspaceManager` / Seat state machine
-- [x] Support multiple displays per Seat with an explicit primary display
-- [x] Support keyboard, mouse, controller and audio ownership
-- [x] Enforce exclusive physical-device assignment by default with explicit sharing
-- [x] Save and load validated Seat profiles to transactional UTF-8 JSON
+## Phase 2 — Seat Composition and Assignment UI (Complete)
+
+- [x] Replace single-display workspace assumptions with multi-display Seat composition
+- [x] Support explicit Seat primary display
+- [x] Assign keyboard, mouse, controller, render, and capture endpoint identities
+- [x] Enforce exclusive ownership by default with explicit sharing
+- [x] Save/load validated transactional UTF-8 JSON profiles
+- [x] Restore assignments in the current Win32 drag/drop prototype
 
 ---
 
-## Phase 3: Input Compatibility & Isolation (Current)
+## Phase 3 — Input Compatibility and Isolation (Current)
 
-Design:
-- [x] Implement Win32 Raw Input sink window and event decoding
-- [x] Identify individual physical keyboard and mouse events
-- [x] Add Seat routing-policy and backend interfaces
-- [x] Research ProtoInput, Universal Split Screen, Nucleus Co-op, HidHide, devreorder, Duo and ASTER behavior
-- [x] Define capability-planned, profile-driven architecture and recovery model
-- [x] Implement compatibility capability vocabulary, backend descriptors and deterministic planner
-- [x] Add `hydra_plan` diagnostics CLI and profile templates
+### Completed implementation foundations
 
-Feasibility gates:
-- [x] Gate A implementation — two-window Raw Input observation harness, per-device state ledger, composite-HID-aware hot-plug diagnostics, and JSONL trace
-- [ ] Gate A physical acceptance — validate two keyboards/two pointing devices and repeated hot-plug on the target Windows PC
-- [x] Gate B implementation — fail-closed exclusive-device routing to two HydraSeat-owned target windows
-- [ ] Gate B physical acceptance — validate Seat counters and trace routing with the user's saved hardware profile
-- [x] Gate C foundation — versioned host/target protocol, local named-pipe transport, token/Seat/PID/architecture handshake, and child cleanup
-- [x] Gate C process-state implementation — process-local adapter DLL/C ABI for keyboard, async edge, mouse, cursor, clip, virtual foreground and capture state
-- [x] Gate C synthetic process acceptance — two separate Windows target processes retain different A/B key, mouse, cursor and virtual-focus state in CI
-- [x] Gate C interactive routing path — Seat-owned Raw Input uses bounded per-target writer queues and fails visibly on backpressure/target failure
-- [ ] Gate C physical acceptance — route the user's two keyboards/two pointing devices into the two controlled target processes
-- [ ] Gate C controlled API interposition — HydraSeat-owned probes observe virtual values through Raw Input, polling, cursor and focus API surfaces
-- [ ] Gate C crash/watchdog acceptance — adapter/host/target failure restores a clean controlled session without orphan processes
-- [ ] Gate D — optional HidHide session-cloak experiment with watchdog and crash rollback
-- [ ] Gate E — two different non-anti-cheat games with measured zero cross-seat input bleed
+- [x] Raw Input observation and stable physical-device identity
+- [x] Composite-HID-aware hot-plug ledger
+- [x] Fail-closed exclusive keyboard/mouse Seat routing
+- [x] Gate A/B two-window diagnostic lab and JSONL traces
+- [x] Capability planner, backend descriptors, profile templates, and `hydra_plan`
+- [x] Versioned Gate C host/target protocol and local named-pipe transport
+- [x] Process-local adapter DLL with versioned C ABI
+- [x] Independent synthetic keyboard/mouse/cursor/focus state in two controlled processes
+- [x] Bounded per-target writer queues
+- [x] Fail-closed stale-sequence and child lifecycle tests
 
-Exit condition:
-- [ ] Route input to target processes without normal Windows input merging for a documented set of game profiles
-- [ ] Demonstrate clean rollback to ordinary single-user Windows behavior
+### Remaining critical path
 
-Detailed design: [PHASE3_INPUT_ISOLATION_DESIGN.md](PHASE3_INPUT_ISOLATION_DESIGN.md)
+- [ ] Controlled probe records real OS polling/cursor/focus/Raw Input baseline (`P3-API-01`)
+- [ ] Startup-loaded polling shim for HydraSeat-owned probes
+- [ ] Cursor/focus/capture shim for HydraSeat-owned probes
+- [ ] Raw Input registration/data behavior probe and virtualization shim
+- [ ] x86/x64 controlled adapter matrix
+- [ ] XInput and DirectInput controlled/production routing
+- [ ] Input latency, queue, drop, and cross-Seat metrics
+- [ ] Physical Gate A/B/C acceptance with two input sets
+- [ ] Watchdog/crash rollback acceptance
+- [ ] Read-only HidHide probe, then guarded session-cloak experiment
+- [ ] Open-source application profile
+- [ ] First non-anti-cheat game profile
+- [ ] Two different target/game zero-bleed proof
 
-Gate A/B testing: [PHASE3_GATE_A_B_TESTING.md](PHASE3_GATE_A_B_TESTING.md)
+Detailed implementation:
 
-Gate C testing: [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md)
+- [Phase 3 packet roadmap](implementation/PHASE3_INPUT_ISOLATION.md)
+- [Phase 3 design](PHASE3_INPUT_ISOLATION_DESIGN.md)
+- [Gate A/B testing](PHASE3_GATE_A_B_TESTING.md)
+- [Gate C testing](PHASE3_GATE_C_TESTING.md)
 
----
-
-## Phase 4: Display Routing & Virtual Display Management
-- [ ] Implement Seat-local display coordinate spaces
-- [ ] Keep Seat-owned windows inside assigned physical monitor groups
-- [ ] Integrate or build an IDD/IddCx-compatible local virtual-display adapter
-- [ ] Auto-create virtual display outputs for supported secondary devices
-- [ ] Add display-driver installation, signing, recovery and latency tests
+Phase 3 closes only after controlled probes observe Seat-local values through the actual Windows API surfaces required by supported profiles, physical/recovery gates pass, and two different explicit targets produce objective zero-bleed evidence.
 
 ---
 
-## Phase 5: Two-Seat Gaming MVP
-- [ ] Launch two different target games/apps on two Seat display groups
-- [ ] Assign independent keyboard/mouse/controller and audio devices
-- [ ] Verify low latency and zero input bleeding for supported profiles
-- [ ] Verify restart, device reconnect and crash recovery
-- [ ] Publish an explicit compatibility matrix rather than claiming universal support
+## Phase 4 — Production Runtime, Process/Window Ownership, and Display Routing (Planned)
+
+- [ ] Move runtime authority from GUI into `hydra_host.exe`
+- [ ] Add versioned UI/CLI/watchdog host protocol
+- [ ] Track Seat-owned process trees with Job Objects where compatible
+- [ ] Track Seat-owned windows without touching unrelated windows
+- [ ] Build DisplayConfig/DXGI topology and stable output identities
+- [ ] Implement multi-monitor Seat display groups and DPI-aware coordinate transforms
+- [ ] Place/restore owned windows and capability-gate fullscreen modes
+- [ ] Reconcile process/window/display events through one deterministic policy engine
+- [ ] Handle display removal/reconnect and host restart safely
+- [ ] Define optional virtual-display backend contract
+- [ ] Integrate one lawful external virtual-display adapter
+- [ ] Decide custom IddCx/IDD adoption only after measured feasibility
+
+Detailed implementation: [Phase 4 packet roadmap](implementation/PHASE4_RUNTIME_DISPLAY.md)
 
 ---
 
-## Phase 6: Game Launcher & Profile Manager
-- [ ] Steam, Epic, EA, GOG and custom executable profiles
-- [ ] Typed compatibility-profile editor
-- [ ] Backend availability and risk report before launch
-- [ ] Process/child tracking with Windows Job Objects where compatible
-- [ ] Automatic Seat restoration on game launch
-- [ ] Per-application audio endpoint routing
+## Phase 5 — Two-Seat Gaming MVP (Planned)
+
+- [ ] Enumerate and validate stable audio endpoints
+- [ ] Implement capability-gated per-process audio routing
+- [ ] Move controller routing into production host/profile path
+- [ ] Compile one immutable two-Seat activation plan
+- [ ] Apply/verify/rollback all process/window/display/input/controller/audio actions transactionally
+- [ ] Produce integrated latency/drop/bleed/resource report
+- [ ] Validate an end-to-end controlled/open-source two-Seat session
+- [ ] Validate two different non-anti-cheat game profiles
+- [ ] Test target restart and input/display/controller/audio reconnect
+- [ ] Provide truthful start/stop/status/reset UI
+- [ ] Publish machine-readable compatibility/hardware matrix
+
+Detailed implementation: [Phase 5 packet roadmap](implementation/PHASE5_TWO_SEAT_MVP.md)
 
 ---
 
-## Phase 7: Seat Shell & Extensions
-- [ ] Seat-local launcher/taskbar experience
-- [ ] Seat-local cursor rendering and display boundaries
-- [ ] Community SDK for compatibility, controller, audio and display adapters
-- [ ] Versioned adapter protocol and third-party signing/trust policy
+## Phase 6 — Launcher and Profile Manager (Planned)
+
+- [ ] Define versioned Seat/target/compatibility/session profile schemas
+- [ ] Add transactional migration and backup
+- [ ] Build provider-neutral application catalog
+- [ ] Define launcher provider interface
+- [ ] Implement custom executable and Steam path first
+- [ ] Add Epic, EA, and GOG one provider packet at a time
+- [ ] Compile immutable provider-aware launch plans and plan hashes
+- [ ] Show exact preflight risks, mutations, capabilities, and recovery requirements
+- [ ] Provide typed profile editor/manager UI
+- [ ] Provide profile/catalog/plan CLI
+- [ ] Add portable import/export with redaction and hardware identity remapping
+- [ ] Maintain provider/profile regression fixture corpus
+
+Detailed implementation: [Phase 6 packet roadmap](implementation/PHASE6_LAUNCHER_PROFILES.md)
+
+---
+
+## Phase 7 — Seat Shell and Local-PC Experience (Planned)
+
+- [ ] Launch one scoped shell process per Seat
+- [ ] Add Seat launcher and pinned profiles
+- [ ] Add Seat-owned task/window surface
+- [ ] Add per-Seat multi-monitor wallpaper and desktop zones
+- [ ] Render independent software cursors inside Seat display groups
+- [ ] Add Seat-scoped launcher/window/recovery hotkeys
+- [ ] Add Seat-scoped runtime notifications
+- [ ] Define truthful optional clipboard policy
+- [ ] Complete DPI/accessibility/localization readiness
+- [ ] Create internal shell extension boundary
+- [ ] Prove shell crash/restart and Explorer coexistence
+
+Detailed implementation: [Phase 7 packet roadmap](implementation/PHASE7_SEAT_SHELL.md)
+
+---
+
+## Phase 8 — Reliability, Watchdog, Installer, and Updates (Planned; selected prerequisites may start early)
+
+- [ ] Independent watchdog lease and allowlisted rollback protocol
+- [ ] Emergency reset CLI
+- [ ] Crash journal and safe-mode startup marker
+- [ ] Narrow elevated privilege broker
+- [ ] Silent user-approved logon startup/tray lifecycle
+- [ ] Optional component manifest/hash/signature/trust policy
+- [ ] Production code/driver signing pipeline
+- [ ] Reversible installer/repair/uninstaller
+- [ ] Signed staged update with health check and rollback
+- [ ] Redacted diagnostic/support bundle
+- [ ] Long soak, reboot, and fault-injection campaign
+
+Detailed implementation: [Phase 8 packet roadmap](implementation/PHASE8_RELIABILITY_DISTRIBUTION.md)
+
+---
+
+## Phase 9 — Compatibility SDK and Extension Ecosystem (Planned)
+
+- [ ] Freeze public C/schema/IPC SDK boundary and compatibility policy
+- [ ] Add capability/permission negotiation
+- [ ] Add signed/hash-verified extension packages
+- [ ] Run normal extensions out of process with bounded IPC/resources
+- [ ] Publish backend/provider/profile/shell/diagnostic extension contracts
+- [ ] Add local extension registry and optional signed catalog contract
+- [ ] Build extension conformance kit and samples
+- [ ] Complete extension threat model and security review
+- [ ] Keep core fully functional offline with all extensions disabled
+
+Detailed implementation: [Phase 9 packet roadmap](implementation/PHASE9_COMPATIBILITY_SDK.md)
+
+---
+
+## Phase 10 — Release Hardening and 1.0 Readiness (Planned)
+
+- [ ] Freeze exact supported platform/hardware/profile scope
+- [ ] Qualify latency, CPU, memory, queue, rollback, and scalability budgets
+- [ ] Run complete compatibility regression matrix
+- [ ] Complete product threat model, hardening, privacy, and dependency review
+- [ ] Run long-duration release soak/fault/reboot/update campaign
+- [ ] Complete clean-machine onboarding, accessibility, help, and recovery docs
+- [ ] Resolve project license/contribution terms and third-party notices
+- [ ] Produce signed reproducible artifacts, checksums, SBOM, and provenance
+- [ ] Establish support/regression/security intake policy
+- [ ] Pass release-candidate stabilization gate
+- [ ] Publish and immediately revalidate 1.0 artifacts
+- [ ] Publish maintenance/EOL/retest policy
+
+Detailed implementation: [Phase 10 packet roadmap](implementation/PHASE10_RELEASE_HARDENING.md)
+
+---
+
+## Product-defining traceability
+
+The original Seat-first requirements and the packets/evidence that prove them are mapped in [Product Requirement Traceability](implementation/TRACEABILITY.md).
+
+The complete execution rules are in:
+
+- [Master implementation roadmap](implementation/README.md)
+- [Non-negotiable decisions](implementation/DECISIONS.md)
+- [Codex implementation playbook](implementation/CODEX_PLAYBOOK.md)
+- [Current packet status](implementation/STATUS.md)
