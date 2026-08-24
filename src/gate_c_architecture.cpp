@@ -222,16 +222,16 @@ ArchitectureDetectionResult detectProcessArchitecture(HANDLE process) noexcept {
         }
 
         auto resolved = resolveProcessArchitecture(observation);
-        if (resolved || processMachine != kImageFileMachineUnknown ||
+        if (resolved ||
             resolved.status != ArchitectureDetectionStatus::Unsupported) {
             return resolved;
         }
 
-        // A non-WOW64 process reports IMAGE_FILE_MACHINE_UNKNOWN for the
-        // process machine. On an ARM64 host an emulated x64 process can then
-        // have nativeMachine=ARM64, which identifies the host rather than the
-        // executable image. Read the target image's PE machine before deciding
-        // that the controlled x86/x64 process is unsupported.
+        // Modern Windows can report a host-relative machine value such as
+        // IMAGE_FILE_MACHINE_UNKNOWN or IMAGE_FILE_MACHINE_TARGET_HOST rather
+        // than the actual x86/x64 executable machine. When the API call itself
+        // succeeded but its machine values cannot identify a supported target,
+        // inspect the process image PE header before declaring it unsupported.
         std::array<wchar_t, 32768> imagePath{};
         DWORD imagePathLength = static_cast<DWORD>(imagePath.size());
         if (QueryFullProcessImageNameW(
