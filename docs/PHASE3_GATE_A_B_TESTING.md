@@ -31,6 +31,11 @@ isolation_guarantee = diagnostic_route_only_native_os_input_not_suppressed
 
 This prevents Gate B evidence from being confused with Gate C/D/E isolation evidence.
 
+Virtual-key identifiers are redacted from JSONL traces by default (`vkey=null`,
+`key_code_redacted=true`). Exact key IDs require the explicit
+`--trace-sensitive-keys` diagnostic switch, which may reveal typed key codes and
+must not be used silently.
+
 ## Build targets
 
 ```text
@@ -44,6 +49,22 @@ Automated CTest entries:
 InputObservationTests
 InputLabSelfTest
 ```
+
+For the real P3-HW-01 hardware gate, prefer the guided runner instead of assembling
+Gate A/B evidence by hand:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File tools\run_phase3_hardware_acceptance.ps1 `
+  -ProfilePath .\workspace_config.json `
+  -BuildRoot .\build-x64 `
+  -Stage All
+```
+
+It pins the profile SHA-256, preserves a resumable manifest, creates the shared/
+ambiguous negative-test profile only inside the ignored session directory, and
+requires explicit human checks before any physical PASS. See
+[`hardware/PHASE3_ACCEPTANCE_TEMPLATE.md`](hardware/PHASE3_ACCEPTANCE_TEMPLATE.md).
 
 ## Usage
 

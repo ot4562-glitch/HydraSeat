@@ -505,7 +505,15 @@ bool InputTraceWriter::writeInput(const RawInputEvent& event,
            << "\"device_id\":" << jsonQuote(event.deviceId) << ','
            << "\"device_path\":" << jsonQuote(event.devicePath) << ','
            << "\"raw_type\":" << event.rawDevType << ','
-           << "\"vkey\":" << event.vkey << ','
+           << "\"vkey\":";
+    if (m_privacyMode == InputTracePrivacyMode::DiagnosticKeyIds) {
+        output << event.vkey;
+    } else {
+        output << "null";
+    }
+    output << ",\"key_code_redacted\":"
+           << (m_privacyMode == InputTracePrivacyMode::Redacted ? "true" : "false")
+           << ','
            << "\"key_transition\":\""
            << rawKeyTransitionName(event.keyTransition) << "\","
            << "\"delta_x\":" << event.deltaX << ','

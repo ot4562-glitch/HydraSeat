@@ -166,14 +166,28 @@ private:
     std::uint64_t m_missingTargetEvents{0};
 };
 
+enum class InputTracePrivacyMode {
+    Redacted,
+    DiagnosticKeyIds
+};
+
 class InputTraceWriter {
 public:
     InputTraceWriter() = default;
-    explicit InputTraceWriter(const std::string& filePath) { open(filePath); }
+    explicit InputTraceWriter(
+        const std::string& filePath,
+        InputTracePrivacyMode privacyMode = InputTracePrivacyMode::Redacted)
+        : m_privacyMode(privacyMode) {
+        open(filePath);
+    }
 
     bool open(const std::string& filePath);
     bool isOpen() const noexcept { return m_stream.is_open(); }
     const std::string& lastError() const noexcept { return m_lastError; }
+    void setPrivacyMode(InputTracePrivacyMode privacyMode) noexcept {
+        m_privacyMode = privacyMode;
+    }
+    InputTracePrivacyMode privacyMode() const noexcept { return m_privacyMode; }
 
     bool writeInput(const RawInputEvent& event,
                     const InputRouteRecord& route);
@@ -185,6 +199,7 @@ private:
 
     std::ofstream m_stream;
     std::string m_lastError;
+    InputTracePrivacyMode m_privacyMode{InputTracePrivacyMode::Redacted};
 };
 
 std::string_view inputRouteDispositionName(InputRouteDisposition disposition) noexcept;

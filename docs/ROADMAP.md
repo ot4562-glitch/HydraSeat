@@ -104,7 +104,7 @@ Research:
 - [x] Controlled DirectInput enumeration/order/visibility adapter (`P3-CTRL-02`; fork PR #16 run `32840474306` validates native x64/x86 controlled policy/probes and read-only DirectInput 8 observation)
 - [ ] Production controller polling/routing and physical vibration evidence (later profile/runtime work)
 - [x] Input latency, queue, drop, and receiver-evidence-aware cross-Seat metrics (`P3-MET-01`; fork PR #18 run `32857666855` validates native x64/x86 43/43 CTest; physical zero-bleed/latency remains manual)
-- [ ] Physical Gate A/B/C acceptance with two input sets
+- [ ] Physical Gate A/B/C acceptance with two input sets (`P3-HW-01` tooling `CODE_COMPLETE`; real hardware manifest/report still pending)
 - [ ] Watchdog/crash rollback acceptance
 - [ ] Read-only HidHide probe, then guarded session-cloak experiment
 - [ ] Open-source application profile

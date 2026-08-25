@@ -4,7 +4,7 @@
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
 - Current default packet: **P3-HW-01 — Gate A/B/C physical acceptance runner**
-- Current validated fork-main baseline before active P3-MET-01 PR #18: `29fc68cfb0669536c1045da7fc92d7e61576eaca` (merged P3-CTRL-02)
+- Current validated fork-main baseline: `f73634600dfdfcdcd65185d84b275db47258d30b` (merged P3-MET-01 via fork PR #18)
 - Current validated Windows CI evidence: fork-side PR #18 run `32857666855` validates P3-MET-01 head `55953b2205d0bb1f9f929c542fcb837a543e0824` against fork `main` via merge ref `13dc288b47ea271aec7cd50620fee0fc8fc71116`: native x64 and Win32/x86 each passed 43/43 CTest, including `InputMetricsTests`, `InputMetricsCliSelfTest`, and `InputMetricsFixtureReport`; both architectures built the instrumented `hydra_gate_c_host`, and the Gate C cross-architecture regression job also passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
@@ -42,7 +42,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-RAW-02 Raw Input virtualization shim | VALIDATED | P3-RAW-01, P3-API-02 | Windows run `32806163164`: native x64/x86 and x64-host-to-x64/x86 ordinary Raw Input API/two-process acceptance passed with zero cross-Seat/API/stale-token/queue-overflow counters |
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
 | P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
-| P3-HW-01 Gate A/B/C physical acceptance runner | READY | P3-QUEUE-01 | User-run two-keyboard/two-pointing-device traces and report |
+| P3-HW-01 Gate A/B/C physical acceptance runner | CODE_COMPLETE | P3-QUEUE-01 | Guided/resumable runner, bounded manifest/parser, shared/unassigned negative cases, P3-MET report review, and default trace key-ID redaction implemented; CI/tooling validation pending, real two-keyboard/two-pointing-device Gate A/B/C evidence remains manual |
 | P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Remediation head `b351afdd` validated by fork PR #15 run `32832036967`: native x64/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance |
 | P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | VALIDATED | P3-CTRL-01, P3-ARCH-01 | Fork PR #16 run `32840474306`: native x64 and Win32/x86 full CTest passed with controlled DirectInput policy/probes plus read-only `DirectInputNativeObservationSelfTest`; Gate C cross-architecture regressions stayed green |
 | P3-D-01 HidHide read-only availability/capability probe | READY | P3-PLAN-01 | No mutation; exact installed/version/control-interface report |
@@ -65,9 +65,9 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 
 | Gate | State | Required evidence |
 | --- | --- | --- |
-| Gate A physical device observation | PENDING | Two keyboards, two pointing devices, composite HID, repeated hot-plug trace |
-| Gate B physical Seat routing | PENDING | Saved profile, per-Seat route counters/target notifications, shared/unassigned failure |
-| Gate C physical controlled-process routing | PENDING | Two physical input sets driving two controlled target adapter states |
+| Gate A physical device observation | PENDING | Run P3-HW-01: two keyboards, two pointing devices, composite HID when available, repeated hot-plug + >=10-minute trace; no real manifest/report recorded yet |
+| Gate B physical Seat routing | PENDING | Run P3-HW-01 source-profile + derived shared-case sessions; per-Seat route/target, unassigned, ambiguous, and missing-target evidence; no real manifest/report recorded yet |
+| Gate C physical controlled-process routing | PENDING | Run P3-HW-01 with two physical input sets driving two HydraSeat-owned controlled targets plus P3-MET report/manual target-state review; no real manifest/report recorded yet |
 | Gate C polling API interposition | VALIDATED (CONTROLLED CI) | HydraSeat-owned x64/x86 probes call the three ordinary polling APIs through the opt-in shim; physical/game acceptance is still separate |
 | Gate C Raw Input API behavior baseline | VALIDATED (CONTROLLED CI) | Run `32800513365` retained native x64/x86 registration traces and validated replacement/remove/destroyed-HWND/process teardown; physical `WM_INPUT` and hot-plug remain P3-HW-01 |
 | Gate C Raw Input API virtualization | VALIDATED (CONTROLLED CI) | Run `32806163164` passed native x64/x86 plus x64-host-to-x64/x86 ordinary registration/data/buffer APIs, two-process zero-cross counters, rollback, and existing polling/cursor regressions; physical evidence remains P3-HW-01 |
@@ -235,19 +235,36 @@ Portable whole-project note: `cmake --build build-p3met --parallel` still reache
 Rollback/privacy: metrics owns no persistent OS/device state; default redacted mode zeros key/button detail IDs before storage, `--metrics-diagnostic` is explicit, and generated Gate C metrics reports are ignored by Git.
 Next packet: P3-HW-01 is READY and becomes the default packet. Implement only the guided/resumable physical acceptance runner and report tooling; real hardware pass/fail remains manual and must not be inferred from CI.
 
+### 2026-08-26 — P3-HW-01
+
+State: CODE_COMPLETE
+Branch/commit: `test/p3-hw-01-hardware-acceptance`; implementation commit `fadea30` (`test: implement P3-HW-01 hardware acceptance runner`); PowerShell 5 portability fix `3253f61` (`fix: make P3-HW-01 hashing PowerShell 5 compatible`)
+Windows CI: fork PR #19 run `32911603828` validates head `3253f617b15da31aa81155875c836eb99e6dcb3c`: native x64 and Win32/x86 full 45-test CTest jobs pass, including `Phase3HardwareAcceptanceParserTests` and `Phase3HardwareAcceptanceRunnerSelfTest`, and the dedicated Gate C cross-architecture job passes. The earlier run `32911051198` failed only the new runner self-test because `Get-FileHash` was unavailable in the runner's Windows PowerShell context; `3253f61` replaced that module dependency with bounded .NET SHA-256 hashing. CI validates tooling only and does not supply physical Gate A/B/C evidence.
+Automated/local evidence:
+- PowerShell 5 runner self-test passes and exercises schema parsing, a two-Seat schema-v2 fixture, four exclusive keyboard/mouse identities, source-profile SHA immutability, and derived shared/ambiguous profile creation;
+- Python evidence parser self-test passes PENDING-without-human-evidence, explicit clean manual PASS, sensitive-key privacy failure, exact shared-device `AmbiguousSharedDevice`/no-route behavior, and verified cross-Seat metrics failure;
+- strict GCC 15 `-Werror` input-observation build passes after default JSONL key-ID redaction; `InputObservationTests` verifies redacted-by-default and explicit diagnostic-key behavior;
+- affected CMake targets (`hydra_input_lab`, `hydra_gate_c_host`, `hydra_gate_c_target`, input observation, and P3-MET) build successfully; focused acceptance/observation/metrics CTest passes 7/7 and the broader selected Phase 3 regression set passes 26/26 across planner, Raw Input, XInput, DirectInput, Gate C protocol/ABI/shims, metrics, and target self-test;
+- the runner captures source profile SHA-256 and expected Seat ownership before execution, never edits the source profile, preserves failed traces, supports stage-by-stage resume, and permits report-only re-analysis without build binaries or the original profile;
+- Gate A machine evidence requires at least four distinct physical input identities plus removal/arrival records; Gate B verifies both expected Seats in the exclusive trace and the exact derived shared-case device is ambiguous and never routed; Gate C rejects nonzero verified cross-Seat/process counters and queue/recorder loss while preserving missing-receiver-evidence warnings;
+- `InputTraceWriter`, `hydra_input_lab`, and `hydra_gate_c_host` now redact virtual-key IDs by default; exact key IDs require the visibly warned `--trace-sensitive-keys` opt-in. P3-MET diagnostic detail remains a separate opt-in.
+Manual evidence: PENDING. No claim is made yet for the user's two keyboards, two pointing devices, composite HID behavior, repeated hot-plug, 10-minute soak, physical controlled-target routing, physical latency, or zero bleed.
+Rollback/cleanup: the runner mutates no persistent/device state and derives shared-case data only in ignored session output; it tracks only processes it starts and attempts tree cleanup in `finally`, while failed evidence remains on disk for review/resume.
+Next packet after tooling CI/merge: P3-D-01 may proceed independently as the read-only HidHide availability probe, but P3-HW-01 remains `CODE_COMPLETE` until real physical evidence is recorded and must not be treated as a completed Phase 3 gate.
+
 ## Next Codex task
 
 Use:
 
 ```text
-Implement P3-HW-01 exactly as specified in
+After P3-HW-01 tooling integration, implement P3-D-01 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Build only the guided/resumable Gate A/B/C physical acceptance runner, bounded
-report/manifest tooling, parser tests, and hardware acceptance template. Reuse
-P3-MET-01 metrics without weakening receiver-evidence semantics. Do not mark any
-physical keyboard/mouse/controller/hot-plug/zero-bleed gate passed from synthetic
-or CI evidence; leave the packet CODE_COMPLETE until the user records real hardware evidence.
+Build only the read-only HidHide availability/capability probe and planner/backend
+availability integration. Do not install HidHide, mutate driver state, enumerate
+private allow/deny-list contents, enable cloaking, or start P3-D-02. Unknown or
+unsupported versions fail closed. Keep P3-HW-01 CODE_COMPLETE and all physical
+Gate A/B/C rows PENDING until real hardware evidence is recorded.
 
 
 ```

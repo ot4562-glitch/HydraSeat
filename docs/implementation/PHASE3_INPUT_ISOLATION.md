@@ -723,7 +723,7 @@ No physical latency, zero-bleed, CPU/memory overhead, game, device-cloaking, or 
 
 ## P3-HW-01 — Gate A/B/C physical acceptance runner
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -761,6 +761,19 @@ Required. The user records hardware model, Windows build, topology, duration, tr
 **Done when**
 
 Gate A/B/C physical rows in `STATUS.md` have real evidence and compatibility/hardware matrix entries.
+
+**Implementation evidence (2026-08-26)**
+
+- `run_phase3_hardware_acceptance.ps1` creates a resumable ignored session, pins the source schema-v2 Seat profile by SHA-256, records Windows/build/hardware context, and refuses to mix execution evidence after the source profile changes;
+- the runner never edits the source profile. Its Gate B ambiguity check derives a session-local shared-case profile, records that copy's own SHA-256, and runs the exact selected input identity against both Seats;
+- Gate A records observer-only hot-plug evidence and enforces the configured soak duration; Gate B preserves exclusive and shared/ambiguous traces; Gate C launches only the HydraSeat-owned host/target pair and preserves the P3-MET-01 report;
+- `phase3_hardware_acceptance_manifest_v1.schema.json` bounds ownership, stage, auxiliary-trace, privacy, and explicit manual-verdict fields;
+- `summarize_phase3_trace.py` bounds JSONL input, verifies profile-to-Seat routed evidence, requires Gate A arrival/removal and at least four physical identities, proves the selected Gate B shared-case device is ambiguous and never routed, rejects verified Gate C cross-Seat/process events and queue/recorder loss, and keeps missing receiver evidence visible rather than converting it to zero-bleed;
+- final `PASS` is impossible without clean machine-readable evidence, every required manual check, and an explicit human `manual_verdict=PASS`;
+- JSONL virtual-key identifiers are redacted by default in `InputTraceWriter`. `hydra_input_lab` and `hydra_gate_c_host` require the separate visibly warned `--trace-sensitive-keys` opt-in before exact key IDs are retained;
+- PowerShell 5 runner self-test covers source-profile immutability and derived shared-case creation; the Python parser self-test covers PENDING/PASS, privacy failure, ambiguous routing, and verified cross-Seat failure. Focused acceptance tests pass and the broader selected Phase 3 portable regression set passes 26/26; strict input-observation compilation also passes locally.
+
+Physical Gate A/B/C results remain pending. CI/self-test evidence validates only the acceptance tooling and must not change this packet to `VALIDATED`.
 
 **Suggested commit**
 

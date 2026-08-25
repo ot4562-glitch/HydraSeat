@@ -819,6 +819,20 @@ Policy:
 
 A later implementation may coalesce relative mouse movement while preserving key/button transitions. The current version prioritizes correctness and visible failure over silent state loss.
 
+## P3-HW-01 physical runner
+
+The canonical physical Gate C procedure is now driven by
+[`hardware/PHASE3_ACCEPTANCE_TEMPLATE.md`](hardware/PHASE3_ACCEPTANCE_TEMPLATE.md)
+and `tools/run_phase3_hardware_acceptance.ps1`. The runner launches only the
+HydraSeat-owned host/target pair, pins the source profile by SHA-256, records the
+P3-MET-01 report, preserves failed evidence, and requires explicit human target
+observations before a final PASS. CI/self-tests validate the tooling only; they do
+not satisfy the physical gate.
+
+Gate C JSONL key identifiers are redacted by default. The separate
+`--trace-sensitive-keys` flag is required to retain exact virtual-key IDs and is
+visibly warned because those IDs may reveal typed input.
+
 ## Gate C acceptance status
 
 ### Completed
@@ -850,7 +864,7 @@ A later implementation may coalesce relative mouse movement while preserving key
 
 ### Pending
 
-- [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
+- [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile (`P3-HW-01` runner/report tooling is CODE_COMPLETE; real hardware evidence remains pending)
 - [ ] Physical keyboard/mouse `WM_INPUT` and actual device-change trace (P3-HW-01)
 - [x] P3-CTRL-02 controlled DirectInput enumeration/order/visibility acceptance: fork PR #16 run `32840474306` passed native Windows x64/x86 full CTest, including both controlled views and read-only `DirectInput8Create`/`EnumDevices` observation
 - [ ] Physical controller polling/routing/vibration evidence

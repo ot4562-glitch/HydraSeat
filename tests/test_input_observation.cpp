@@ -341,6 +341,9 @@ void testTraceWriterProducesJsonLines() {
           "input trace line exposes route disposition");
     check(firstLine.find("native_os_input_not_suppressed") != std::string::npos,
           "trace never implies that Gate B is real OS isolation");
+    check(firstLine.find("\"vkey\":null") != std::string::npos &&
+              firstLine.find("\"key_code_redacted\":true") != std::string::npos,
+          "trace redacts key identifiers by default");
     check(secondLine.find("\"record\":\"device_change\"") !=
               std::string::npos &&
               secondLine.find("\"change\":\"Removal\"") !=
@@ -351,6 +354,23 @@ void testTraceWriterProducesJsonLines() {
           "each diagnostic record remains one JSONL line");
 
     std::remove(tracePath.c_str());
+
+    const std::string diagnosticPath =
+        "hydra_input_observation_diagnostic_test.jsonl";
+    hydra::InputTraceWriter diagnostic(
+        diagnosticPath, hydra::InputTracePrivacyMode::DiagnosticKeyIds);
+    check(diagnostic.isOpen() && diagnostic.writeInput(event, route),
+          "diagnostic trace writes with explicit key-ID opt-in");
+    diagnostic.flush();
+    std::ifstream diagnosticInput(diagnosticPath, std::ios::binary);
+    std::string diagnosticLine;
+    std::getline(diagnosticInput, diagnosticLine);
+    check(diagnosticLine.find("\"vkey\":65") != std::string::npos &&
+              diagnosticLine.find("\"key_code_redacted\":false") !=
+                  std::string::npos,
+          "diagnostic trace exposes key identifier only after explicit opt-in");
+    diagnosticInput.close();
+    std::remove(diagnosticPath.c_str());
 }
 
 } // namespace

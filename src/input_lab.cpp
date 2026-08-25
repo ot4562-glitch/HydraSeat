@@ -34,6 +34,7 @@ struct LabOptions {
     bool profileDisabled{false};
     bool selfTest{false};
     bool showHelp{false};
+    bool traceSensitiveKeyIds{false};
 };
 
 void printUsage(std::ostream& output) {
@@ -41,11 +42,14 @@ void printUsage(std::ostream& output) {
         << "HydraSeat Phase 3 Gate A/B Input Lab\n\n"
         << "Usage:\n"
         << "  hydra_input_lab [--profile <workspace_config.json>] [--trace <trace.jsonl>]\n"
+        << "                  [--trace-sensitive-keys]\n"
         << "  hydra_input_lab --no-profile\n"
         << "  hydra_input_lab --self-test\n\n"
         << "This lab observes physical Raw Input and routes owned-device diagnostics\n"
         << "to two HydraSeat-owned windows. It does NOT suppress normal Windows input\n"
-        << "and is not a zero-bleed isolation backend.\n";
+        << "and is not a zero-bleed isolation backend.\n"
+        << "Trace key identifiers are redacted by default. --trace-sensitive-keys\n"
+        << "is an explicit diagnostic opt-in and may reveal typed key codes.\n";
 }
 
 #ifndef _WIN32
@@ -59,6 +63,8 @@ LabOptions parseArguments(int argc, char** argv, bool& valid) {
             options.profilePath = argv[++index];
         } else if (argument == "--trace" && index + 1 < argc) {
             options.tracePath = argv[++index];
+        } else if (argument == "--trace-sensitive-keys") {
+            options.traceSensitiveKeyIds = true;
         } else if (argument == "--no-profile") {
             options.profileDisabled = true;
         } else if (argument == "--self-test") {
@@ -122,6 +128,8 @@ LabOptions parseArguments(int argc, wchar_t** argv, bool& valid) {
             options.profilePath = wideToUtf8(argv[++index]);
         } else if (argument == L"--trace" && index + 1 < argc) {
             options.tracePath = wideToUtf8(argv[++index]);
+        } else if (argument == L"--trace-sensitive-keys") {
+            options.traceSensitiveKeyIds = true;
         } else if (argument == L"--no-profile") {
             options.profileDisabled = true;
         } else if (argument == L"--self-test") {
@@ -226,6 +234,17 @@ public:
             return 22;
         }
 
+        m_trace.setPrivacyMode(
+            m_options.traceSensitiveKeyIds
+                ? hydra::InputTracePrivacyMode::DiagnosticKeyIds
+                : hydra::InputTracePrivacyMode::Redacted);
+        if (m_options.traceSensitiveKeyIds) {
+            MessageBoxW(
+                nullptr,
+                L"Sensitive trace mode is enabled. Virtual-key identifiers may reveal typed key codes in the JSONL trace. Disable --trace-sensitive-keys for the default redacted trace.",
+                L"HydraSeat Input Lab - Sensitive Logging Enabled",
+                MB_OK | MB_ICONWARNING);
+        }
         if (!m_trace.open(m_options.tracePath)) {
             MessageBoxW(nullptr,
                         L"The JSONL trace file could not be opened. The lab will continue without file logging.",

@@ -449,6 +449,10 @@ endif()
 
 # Test Suite Executable Target
 enable_testing()
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(WIN32)
+    find_program(HYDRA_POWERSHELL_EXECUTABLE NAMES powershell.exe powershell)
+endif()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(hydra_tests PRIVATE hydra_hardware)
 if(WIN32)
@@ -616,6 +620,23 @@ add_test(NAME InputMetricsCliSelfTest
          COMMAND hydra_input_metrics_cli --self-test)
 add_test(NAME InputMetricsFixtureReport
          COMMAND hydra_input_metrics_cli --fixture-report)
+
+# P3-HW-01 acceptance tooling is CI-tested without claiming physical acceptance.
+# Python parses bounded synthetic evidence; Windows additionally checks that the
+# guided/resumable PowerShell 5 runner and its manifest schema load successfully.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME Phase3HardwareAcceptanceParserTests
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/tools/summarize_phase3_trace.py"
+                     --self-test)
+endif()
+if(WIN32 AND HYDRA_POWERSHELL_EXECUTABLE)
+    add_test(NAME Phase3HardwareAcceptanceRunnerSelfTest
+             COMMAND "${HYDRA_POWERSHELL_EXECUTABLE}"
+                     -NoProfile -ExecutionPolicy Bypass
+                     -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/run_phase3_hardware_acceptance.ps1"
+                     -SelfTest)
+endif()
 
 # C ABI adapter tests exercise independent process-local contexts and
 # GetAsyncKeyState/GetKeyboardState-style semantics without installing hooks.
