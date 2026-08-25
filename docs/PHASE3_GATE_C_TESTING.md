@@ -49,14 +49,14 @@ packet, queue, and token state. Native x64, Win32/x86, and x64-host-to-x64/x86
 controlled acceptance pass with expected keyboard/mouse events, zero cross-Seat
 events, and zero API/stale-token/queue-overflow failures.
 
-P3-CTRL-01 correctness remediation is `CODE_COMPLETE`. Windows run
-`32816241577` validated the pre-remediation adapter ABI v4/controller slice,
-with native x64, Win32/x86, and x64-host-to-x64/x86 expected counters of 2,
-every cross counter zero, `api_failures=0`, and `stale_accepted=0`. That run does
-not validate the repaired same-source remap and snapshot-canonicalization
-semantics. The fix passes the strict portable 20/20 suite; fresh native/cross
-x64/x86 Windows acceptance is required. Physical-controller routing is not
-implied.
+P3-CTRL-01 correctness remediation is `VALIDATED`. Fork PR #15 run
+`32832036967` reports remediation head `b351afdd`; native x64 and Win32/x86 each
+pass 36/36 CTest, while x64-host-to-x64/x86 controlled XInput acceptance reports
+Seat 1/Seat 2 state/capability/battery/vibration expected=2, every cross counter
+zero, `api_failures=0`, and `stale_accepted=0`. The host self-test performs two
+cycles and requires successful cleanup with no controlled child process still
+running. Historical run `32816241577` remains pre-remediation evidence only.
+Physical-controller routing is not implied.
 
 This is not a general game hook or a completed Gate C implementation. The
 controlled targets still call HydraSeat's adapter API directly; only the
@@ -846,7 +846,7 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] P3-API-03 cursor/clip/logical-focus/capture shim, adapter ABI v2, native x64/x86 24/24 CTest, cross-architecture two-probe isolation, and host-native global-state preservation (`32792381573`)
 - [x] P3-RAW-01 standalone probe, bounded trace/parser contract, explicit synthetic fixture, native x64/x86 28/28 CTest, retained/reviewed observed registration traces, and process teardown evidence (`32800513365`)
 - [x] P3-RAW-02 controlled Raw Input virtualization, native x64/x86 ordinary-API tests, x64-host-to-x64/x86 two-process no-cross-Seat acceptance, rollback, and existing polling/cursor regressions (`32806163164`)
-- [ ] P3-CTRL-01 generation/snapshot correctness remediation: strict portable 20/20 passes; fresh native x64/x86 and x64-host-to-x64/x86 zero-cross acceptance pending (old `32816241577` is pre-fix only)
+- [x] P3-CTRL-01 generation/snapshot correctness remediation: strict portable 20/20 plus native x64/x86 36/36 and x64-host-to-x64/x86 zero-cross acceptance (`32832036967`, remediation head `b351afdd`); old `32816241577` remains pre-fix only
 
 ### Pending
 
@@ -867,11 +867,11 @@ last-registration-wins per usage, usage-local removal, accepted-but-not-echoed
 `RIDEV_DEVNOTIFY`, retained destroyed-HWND runtime values until replacement,
 and the architecture-specific structure sizes with 8-byte raw-buffer alignment.
 Physical `WM_INPUT` and device-change evidence remains P3-HW-01. P3-CTRL-01 is
-`CODE_COMPLETE` after the generation/snapshot remediation; run `32816241577`
-is pre-fix evidence only, and fresh native/cross x64/x86 validation is pending.
-Physical controller polling/routing/vibration remains a separate manual/
-production concern. P3-CTRL-02 remains BLOCKED and no DirectInput work starts
-from this packet.
+`VALIDATED` after the generation/snapshot remediation by fork PR #15 run
+`32832036967`; run `32816241577` remains pre-fix evidence only. Physical
+controller polling/routing/vibration remains a separate manual/production
+concern. P3-CTRL-02 is now READY as a separate packet; this testing document does
+not itself start DirectInput work.
 
 The two-probe process test releases Probe B's virtual capture while asserting
 that Probe A retains its own capture, then shuts down Probe A and re-queries

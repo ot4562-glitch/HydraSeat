@@ -286,15 +286,15 @@ capability/battery failures carry empty mapping/default metadata; vibration
 failure carries no route; and every metadata success requires the same mapping
 as a connected successful state. The
 controlled host test launches two HydraSeat-owned probes whose logical slot 0
-maps to distinct synthetic sources and records expected/cross counters. Windows
-run `32816241577` validated the pre-remediation native x64/x86 and
-x64-host-to-x64/x86 execution;
-both architecture legs report state/capability/battery/vibration expected=2,
-every cross counter=0, `api_failures=0`, and `stale_accepted=0`. Source ownership
-uses the opaque source key rather than the optional runtime slot hint. The
-generation/snapshot remediation passes the strict portable 20/20 suite, but
-fresh native/cross x64/x86 Windows validation is required before it returns to
-`VALIDATED`. No
+maps to distinct synthetic sources and records expected/cross counters. The
+generation/snapshot remediation is Windows-validated by fork PR #15 run
+`32832036967` for head `b351afdd`: native x64 and Win32/x86 pass 36/36 CTest,
+and both x64-host-to-x64/x86 controller legs report Seat 1/Seat 2
+state/capability/battery/vibration expected=2, every cross counter=0,
+`api_failures=0`, and `stale_accepted=0`, with repeated child cleanup required
+for success. Source ownership uses the opaque source key rather than the
+optional runtime slot hint. Historical run `32816241577` is pre-remediation
+evidence only. No
 ordinary XInput API hook, DLL proxy, DirectInput, Raw HID/SDL virtualization, or
 physical polling worker is part of this slice. A future polling worker must
 remain outside the Raw Input window procedure and feed normalized source state

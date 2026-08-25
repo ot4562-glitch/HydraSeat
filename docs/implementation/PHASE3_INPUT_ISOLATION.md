@@ -505,7 +505,7 @@ The compatibility planner may truthfully advertise x86 controlled adapter availa
 
 ## P3-CTRL-01 — XInput controlled state and slot remapping
 
-**State:** CODE_COMPLETE
+**State:** VALIDATED
 
 **Goal**
 
@@ -577,8 +577,15 @@ Controlled targets have independent, queryable XInput-style state and the planne
   routing-hint remaps and canonical failure metadata in controller snapshots;
 - strict GCC 15 `-Werror` builds and 20/20 selected portable CTest regressions
   pass after first reproducing both defects with failing tests;
-- Windows run `32816241577` is historical pre-remediation evidence only. Fresh
-  native x64/x86 and x64-host-to-x64/x86 validation is still required.
+- fork PR #15 run `32832036967` validates remediation head
+  `b351afdd60236b953d913b8488a5e350f705faec` against fork `main`: native x64
+  and Win32/x86 each pass 36/36 CTest, including `GateCProtocolTests`,
+  `VirtualXInputStateTests`, `GateCXInputAdapterTests`, the C ABI smoke test,
+  and controlled XInput probe/process tests;
+- the x64-host-to-x64 and x64-host-to-x86 XInput legs each report Seat 1/Seat 2
+  state/capability/battery/vibration expected=2, every cross counter=0,
+  `api_failures=0`, and `stale_accepted=0`; repeated session cleanup leaves no
+  controlled child running. Historical run `32816241577` remains pre-fix only.
 
 **Suggested commit**
 
@@ -588,7 +595,7 @@ Controlled targets have independent, queryable XInput-style state and the planne
 
 ## P3-CTRL-02 — DirectInput enumeration and visibility adapter
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 
@@ -599,8 +606,8 @@ Provide a clean-room, process-local controlled DirectInput enumeration/order/vis
 - P3-CTRL-01
 - P3-ARCH-01
 
-Blocked while the reopened P3-CTRL-01 correctness remediation is active. Do not
-start DirectInput work until P3-CTRL-01 returns to a truthful completed state.
+P3-CTRL-01 remediation is freshly Windows-validated by run `32832036967`, and
+P3-ARCH-01 is already validated. DirectInput work may now start only as this separate packet.
 
 **Create/modify**
 

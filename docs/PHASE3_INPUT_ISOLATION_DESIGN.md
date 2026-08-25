@@ -517,7 +517,7 @@ Only after Gate E may Phase 3 be marked complete.
 | Bounded per-target writer queues | Partial | Yes | Gate C physical acceptance pending | Controlled process only |
 | Raw Input behavior trace/parser | Yes | Windows x64/x86 validated (`32800513365`) | P3-HW-01 physical trace pending | Controlled probe only |
 | Raw Input API virtualization | Yes | Windows x64/x86 + cross-architecture validated (`32806163164`) | P3-HW-01 physical trace pending | HydraSeat-owned controlled probe only |
-| Controlled normalized XInput state/remapping | Yes | Pre-remediation Windows x64/x86 + cross-architecture validated (`32816241577`); correctness fix passes portable 20/20 and needs fresh Windows validation | Physical controller evidence pending | Direct adapter facade; no ordinary XInput hook |
+| Controlled normalized XInput state/remapping | Yes | Remediation Windows x64/x86 36/36 + cross-architecture validated (`32832036967`, head `b351afdd`); old `32816241577` is pre-fix only | Physical controller evidence pending | Direct adapter facade; no ordinary XInput hook |
 | Polling API interposition | Yes | CI pending | No | Controlled probe only |
 | Cursor/focus API interposition | No | Pending | Pending | Controlled probe only |
 | HidHide session lifecycle | No | Yes | Yes | No |
@@ -685,12 +685,13 @@ anti-cheat targets remain out of scope. See
    one Seat without changing the other, repeats teardown twice, and emits
    machine-readable expected/cross/API/stale counters.
 7. Strict portable component and Gate C regressions pass, including 20/20 after
-   the generation/snapshot remediation. Windows run `32816241577` validated the
-   pre-remediation native x64/x86 and x64-host-to-x64/x86 synthetic
-   acceptance with all state/capability/battery/vibration cross counters zero;
-   opaque source ownership remains independent from the runtime XInput slot hint,
-   while a changed routing hint requires explicit remap/generation advance.
-   Fresh native/cross Windows evidence is required for the repaired semantics.
+   the generation/snapshot remediation. Fork PR #15 run `32832036967` validates
+   remediation head `b351afdd` with native x64/x86 36/36 and x64-host-to-x64/x86
+   synthetic acceptance: Seat 1/Seat 2 state/capability/battery/vibration
+   expected=2, every cross counter zero, `api_failures=0`, `stale_accepted=0`,
+   and repeated child cleanup. Opaque source ownership remains independent from
+   the runtime XInput slot hint, while a changed routing hint requires explicit
+   remap/generation advance. Historical run `32816241577` is pre-fix only.
 8. Detection through `XInputGetState(index)` is only a runtime availability
    hint. It does not prove stable identity, physical routing, or isolation.
    Ordinary XInput interposition, DirectInput, Raw HID/SDL, physical polling,

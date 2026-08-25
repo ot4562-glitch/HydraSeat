@@ -409,10 +409,10 @@ Important boundary:
   x64/x86 and the x64-host-to-x64/x86 controlled matrix;
 - adapter ABI v4 has bounded four-slot normalized XInput-style state,
   logical-slot/source mapping, capabilities, battery, disconnect/reconnect
-  generations, and source-only vibration routing. Historical native/cross
-  x64/x86 run `32816241577` validated the original slice, but a subsequent
-  generation/snapshot correctness remediation is now `CODE_COMPLETE` on the
-  strict 20/20 portable suite and needs fresh Windows validation;
+  generations, and source-only vibration routing. The generation/snapshot
+  remediation is `VALIDATED`: fork PR #15 run `32832036967` passed native x64
+  and Win32/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance
+  for remediation head `b351afdd`; historical run `32816241577` is pre-fix only;
 - the standalone Raw Input behavior probe and bounded trace/parser are
   Windows-validated on x64/x86 run `32800513365`;
 - no detour, remote injection, driver control, physical suppression, or
@@ -440,7 +440,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-CTRL-01 — XInput generation and snapshot correctness remediation
+P3-CTRL-02 — DirectInput enumeration and visibility adapter
 ```
 
 Start every coding task by reading:
