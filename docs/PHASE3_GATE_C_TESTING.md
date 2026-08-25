@@ -41,12 +41,13 @@ teardown passed, and the existing Gate C cross-architecture job stayed green.
 The traces agree on last-registration-wins replacement, usage-local removal,
 `RIDEV_INPUTSINK` echo, accepted-but-not-echoed `RIDEV_DEVNOTIFY`, and a
 registered destroyed HWND remaining as a runtime value until valid replacement.
-P3-RAW-02 is `CODE_COMPLETE` on
+P3-RAW-02 is `VALIDATED` by Windows run `32806163164` on
 `feat/p3-raw-02-virtualization-shim`. Portable strict builds and 20/20 CTest
 targets pass. The existing startup-loaded shim now has an explicit Raw Input
 capability for exactly four APIs, backed by adapter-owned bounded registration,
-packet, queue, and token state. Native Windows x64/x86 and cross-architecture
-process acceptance remains pending, so this is not yet `VALIDATED`.
+packet, queue, and token state. Native x64, Win32/x86, and x64-host-to-x64/x86
+controlled acceptance pass with expected keyboard/mouse events, zero cross-Seat
+events, and zero API/stale-token/queue-overflow failures.
 
 This is not a general game hook or a completed Gate C implementation. The
 controlled targets still call HydraSeat's adapter API directly; only the
@@ -759,26 +760,26 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] P3-API-02 polling shim source, fixed C ABI, transactional IAT engine, architecture manifest, native x64/x86 tests, and cross-architecture ordinary-polling proof (`32780563364`)
 - [x] P3-API-03 cursor/clip/logical-focus/capture shim, adapter ABI v2, native x64/x86 24/24 CTest, cross-architecture two-probe isolation, and host-native global-state preservation (`32792381573`)
 - [x] P3-RAW-01 standalone probe, bounded trace/parser contract, explicit synthetic fixture, native x64/x86 28/28 CTest, retained/reviewed observed registration traces, and process teardown evidence (`32800513365`)
-- [x] P3-RAW-02 controlled Raw Input virtualization source, portable component/ABI/transaction tests, probe/host acceptance declarations, and x86/x64 packet/alignment model (Windows execution pending)
+- [x] P3-RAW-02 controlled Raw Input virtualization, native x64/x86 ordinary-API tests, x64-host-to-x64/x86 two-process no-cross-Seat acceptance, rollback, and existing polling/cursor regressions (`32806163164`)
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Physical keyboard/mouse `WM_INPUT` and actual device-change trace (P3-HW-01)
-- [ ] Native x64/x86 and x64-host-to-x86 P3-RAW-02 ordinary-API/two-process validation
+
 - [ ] Adapter crash/watchdog recovery acceptance
 - [ ] Commercial non-anti-cheat game profile experiment
 - [ ] Physical device cloaking/suppression
 
 ## Next implementation step
 
-P3-RAW-01 is `VALIDATED` by Windows run `32800513365`. P3-RAW-02 is
-`CODE_COMPLETE` and uses the retained x64/x86 observed behavior as its contract:
+P3-RAW-01 is `VALIDATED` by Windows run `32800513365` and P3-RAW-02 is
+`VALIDATED` by run `32806163164`. The virtualized path preserves the observed
 last-registration-wins per usage, usage-local removal, accepted-but-not-echoed
 `RIDEV_DEVNOTIFY`, retained destroyed-HWND runtime values until replacement,
 and the architecture-specific structure sizes with 8-byte raw-buffer alignment.
-Native P3-RAW-02 x64/x86 process execution is still required before
-`VALIDATED`. Physical `WM_INPUT` and device-change evidence remains P3-HW-01.
+Physical `WM_INPUT` and device-change evidence remains P3-HW-01. The next
+controlled compatibility packet is P3-CTRL-01 XInput state and slot remapping.
 
 The two-probe process test releases Probe B's virtual capture while asserting
 that Probe A retains its own capture, then shuts down Probe A and re-queries

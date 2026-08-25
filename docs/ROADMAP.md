@@ -74,7 +74,7 @@ Research:
 - [x] Startup-loaded polling shim for HydraSeat-owned probes
 - [x] Cursor/focus/capture shim for HydraSeat-owned probes
 - [x] Raw Input registration/data behavior probe (`P3-RAW-01`)
-- [ ] Raw Input virtualization shim (`P3-RAW-02`)
+- [x] Raw Input virtualization shim (`P3-RAW-02`)
 - [x] x86/x64 controlled adapter matrix
 - [ ] XInput and DirectInput controlled/production routing
 - [ ] Input latency, queue, drop, and cross-Seat metrics

@@ -353,7 +353,7 @@ Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe
 当前默认 packet：
 
 ```text
-P3-RAW-02 — Controlled Raw Input virtualization shim
+P3-CTRL-01 — XInput controlled state and slot remapping
 ```
 
 开始编码前阅读：

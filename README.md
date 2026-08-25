@@ -434,7 +434,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-RAW-02 — Controlled Raw Input virtualization shim
+P3-CTRL-01 — XInput controlled state and slot remapping
 ```
 
 Start every coding task by reading:

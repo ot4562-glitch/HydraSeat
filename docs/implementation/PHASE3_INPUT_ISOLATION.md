@@ -378,7 +378,7 @@ P3-RAW-02 has a stable behavior specification and fixtures rather than assumptio
 
 ## P3-RAW-02 — Controlled Raw Input virtualization shim
 
-**State:** CODE_COMPLETE
+**State:** VALIDATED
 
 **Goal**
 
@@ -442,14 +442,17 @@ Two controlled probes consume separate Raw Input streams through the ordinary AP
 
 **Implementation status (2026-08-25)**
 
-The controlled implementation is code-complete on
+The controlled implementation is validated on
 `feat/p3-raw-02-virtualization-shim`. The adapter owns a bounded per-context
 registration table, immutable packet queue, and generation-checked opaque
 handle table. The startup-loaded shim adds an explicit Raw Input capability
 for the four allowlisted APIs, posts only to a revalidated same-process HWND,
 and restores Raw Input, cursor/focus, then polling IAT entries on uninstall.
-Portable strict builds and 20/20 CTest targets pass. Native Windows x64/x86
-ordinary-API and two-process acceptance remain required before `VALIDATED`.
+Portable strict builds and 20/20 CTest targets pass. Windows run `32806163164`
+passes native x64, Win32/x86, and the dedicated x64-host cross-architecture
+matrix. The x64 and x86 controlled probes use ordinary Raw Input APIs while
+their expected keyboard/mouse counters are nonzero, every cross-Seat counter
+is zero, and API/stale-token/queue-overflow failure counters remain zero.
 P3-HW-01 physical evidence remains pending.
 
 **Suggested commit**

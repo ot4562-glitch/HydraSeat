@@ -203,9 +203,8 @@ is deferred.
 - synthetic Windows CI starts two processes and proves different A/B key edges, mouse state, cursor state and virtual foreground state do not cross between them;
 - the target displays virtual state beside actual OS foreground state to make the current limitation visible.
 
-The current target calls the adapter C ABI directly. Polling and cursor/focus
-interposition are Windows-validated. Raw Input interposition is CODE_COMPLETE
-for controlled probes but awaits native x64/x86 validation. Gate C remains
+The current target calls the adapter C ABI directly. Polling, cursor/focus, and
+Raw Input interposition are Windows-validated for controlled probes. Gate C remains
 incomplete until recovery, physical acceptance, and later declared
 compatibility gates pass. No commercial-process injection, physical
 suppression, or anti-cheat interaction is implemented.
@@ -252,8 +251,9 @@ bytes on x86, with eight-byte buffer traversal on both architectures.
 Install order is polling, optional cursor/focus, optional Raw Input. Uninstall
 stops acceptance, drains calls, resets registrations/queue/tokens, and restores
 Raw Input, cursor/focus, then polling. Portable tests cover the model and
-transaction; native Windows x64/x86 and x64-host-to-x86 controlled-process
-acceptance remain required before validation.
+transaction; Windows run `32806163164` validates native x64/x86 and
+x64-host-to-x64/x86 ordinary-API/two-process acceptance with zero controlled
+cross-Seat and Raw Input failure counters.
 
 See [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
 
