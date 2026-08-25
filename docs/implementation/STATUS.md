@@ -238,8 +238,8 @@ Next packet: P3-HW-01 is READY and becomes the default packet. Implement only th
 ### 2026-08-26 — P3-HW-01
 
 State: CODE_COMPLETE
-Branch/commit: `test/p3-hw-01-hardware-acceptance`; implementation commit `fadea30` (`test: implement P3-HW-01 hardware acceptance runner`)
-Windows CI: pending. CI must prove the x64/x86 build/regression suite plus `Phase3HardwareAcceptanceParserTests` and Windows PowerShell 5 `Phase3HardwareAcceptanceRunnerSelfTest`; CI cannot supply physical Gate A/B/C evidence.
+Branch/commit: `test/p3-hw-01-hardware-acceptance`; implementation commit `fadea30` (`test: implement P3-HW-01 hardware acceptance runner`); PowerShell 5 portability fix `3253f61` (`fix: make P3-HW-01 hashing PowerShell 5 compatible`)
+Windows CI: fork PR #19 run `32911603828` validates head `3253f617b15da31aa81155875c836eb99e6dcb3c`: native x64 and Win32/x86 full 45-test CTest jobs pass, including `Phase3HardwareAcceptanceParserTests` and `Phase3HardwareAcceptanceRunnerSelfTest`, and the dedicated Gate C cross-architecture job passes. The earlier run `32911051198` failed only the new runner self-test because `Get-FileHash` was unavailable in the runner's Windows PowerShell context; `3253f61` replaced that module dependency with bounded .NET SHA-256 hashing. CI validates tooling only and does not supply physical Gate A/B/C evidence.
 Automated/local evidence:
 - PowerShell 5 runner self-test passes and exercises schema parsing, a two-Seat schema-v2 fixture, four exclusive keyboard/mouse identities, source-profile SHA immutability, and derived shared/ambiguous profile creation;
 - Python evidence parser self-test passes PENDING-without-human-evidence, explicit clean manual PASS, sensitive-key privacy failure, exact shared-device `AmbiguousSharedDevice`/no-route behavior, and verified cross-Seat metrics failure;
@@ -257,14 +257,14 @@ Next packet after tooling CI/merge: P3-D-01 may proceed independently as the rea
 Use:
 
 ```text
-Implement P3-HW-01 exactly as specified in
+After P3-HW-01 tooling integration, implement P3-D-01 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Build only the guided/resumable Gate A/B/C physical acceptance runner, bounded
-report/manifest tooling, parser tests, and hardware acceptance template. Reuse
-P3-MET-01 metrics without weakening receiver-evidence semantics. Do not mark any
-physical keyboard/mouse/controller/hot-plug/zero-bleed gate passed from synthetic
-or CI evidence; leave the packet CODE_COMPLETE until the user records real hardware evidence.
+Build only the read-only HidHide availability/capability probe and planner/backend
+availability integration. Do not install HidHide, mutate driver state, enumerate
+private allow/deny-list contents, enable cloaking, or start P3-D-02. Unknown or
+unsupported versions fail closed. Keep P3-HW-01 CODE_COMPLETE and all physical
+Gate A/B/C rows PENDING until real hardware evidence is recorded.
 
 
 ```
