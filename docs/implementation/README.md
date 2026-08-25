@@ -84,6 +84,8 @@ The control plane is intentionally separate from the runtime. Closing `HydraSeat
 
 Phase numbers group product capability. They are mostly sequential, but reliability, security, diagnostics, and schema work are cross-cutting. A later-phase work packet may be pulled forward only when an earlier packet declares it as a prerequisite.
 
+Every numbered phase also has a mandatory **Phase-close verification** gate. Once the phase's implementation and declared acceptance packets are complete, a separate review pass recalculates the phase from the code outward: it inspects the whole phase-owned implementation and cross-packet interactions, reruns the applicable regression/Windows/manual matrix, verifies rollback/teardown and no-cross-Seat invariants, and reconciles code, tests, architecture, status, and user-facing claims. Only a passing closeout permits the phase state to become `Complete`. A finding reopens the owning packet or creates a focused repair task, after which the phase-close verification is repeated.
+
 | Phase | Capability | Current state | Exit summary |
 | --- | --- | --- | --- |
 | 0 | Research and foundation | Complete | Architectural research and clean-room policy recorded |
@@ -159,6 +161,7 @@ Rules:
 3. `CODE_COMPLETE` is not equivalent to `VALIDATED`.
 4. A packet that changes a public schema, ABI, protocol, installation state, or driver policy needs explicit migration/rollback tests.
 5. A packet remains incomplete when a required Windows CI job is absent, skipped, or allowed to fail.
+6. Completing the final packet in a numbered phase does not complete the phase; the Phase-close verification defined by D-038 must also pass.
 
 ## 7. Definition of done for a work packet
 

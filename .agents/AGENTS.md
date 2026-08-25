@@ -43,6 +43,23 @@ Required behavior:
 
 Use `docs/implementation/CODEX_PLAYBOOK.md` as the standard workflow and prompt contract.
 
+### Phase-close verification exception
+
+The roadmap **phase** is the numbered product phase in `docs/ROADMAP.md` and `docs/implementation/README.md`, not a conversation turn or one coding packet.
+
+Before a numbered phase may change to `Complete`, run one dedicated **Phase-close verification** task across the entire phase. This is a review and verification gate, not permission to implement multiple feature packets at once.
+
+The phase-close task must:
+
+- re-read every packet, decision, architecture contract, test plan, and status entry that defines or was changed by that phase;
+- inspect the complete phase-owned code and tests, including interactions between packets rather than reviewing only the final packet diff;
+- re-run the broadest applicable phase regression matrix, including required Windows x64/x86, process/ABI, recovery, performance, and physical/manual gates;
+- verify error paths, stale/duplicate input, resource ownership, rollback, teardown, no-cross-Seat behavior, compatibility claims, and documentation;
+- identify temporary shortcuts, dead/unused paths, warning suppressions, TODOs, false capability claims, or assumptions that accumulated across the phase;
+- record a phase-close evidence summary in `docs/implementation/STATUS.md`.
+
+If the audit finds a defect, do not repair unrelated defects inside the audit. Reopen the owning packet or create one narrowly scoped repair packet/task, fix and validate it, then rerun the phase-close verification. The next numbered phase may start only after the prior phase's close verification passes, except for an already-declared cross-phase prerequisite explicitly permitted by the roadmap.
+
 ## 4. Current status and next task
 
 `docs/implementation/STATUS.md` is dynamic and authoritative. Read it every time; do not rely on a remembered phase or packet.

@@ -362,3 +362,17 @@ That intent does not change the repository's current legal state. Until a tracke
 - P10-LIC-01 remains the formal release gate for project license, contribution policy, notices, and provenance.
 
 After that gate is satisfied, package, SDK, compatibility-profile, documentation, and contribution workflows should minimize friction for lawful community adoption without weakening security, provenance, compatibility, or recovery requirements.
+
+## D-038 — Every numbered roadmap phase ends with a phase-wide code verification gate
+
+A numbered roadmap phase is not complete merely because its final packet passes. Before Phase N is marked `Complete` and the default implementation flow advances to Phase N+1, HydraSeat performs a dedicated **Phase-close verification** across the whole phase.
+
+The verification is intentionally broader than packet review. It rechecks all phase-owned code, cross-packet integration, tests, contracts, documentation, and declared evidence as one system. At minimum it reviews normal and failure paths, resource ownership/teardown, rollback, stale/duplicate handling, no-cross-Seat invariants, ABI/protocol/schema compatibility, Windows x64/x86 behavior when applicable, manual/physical evidence, and performance/recovery claims required by that phase.
+
+Rules:
+
+- Phase-close verification is a review gate, not a multi-feature implementation packet and not an exception for opportunistic feature work.
+- Defects found during the audit reopen the owning packet or create a narrowly scoped repair task; the audit is rerun after the repair is validated.
+- A phase with unresolved required evidence remains `Current`/incomplete even if every implementation packet is individually `VALIDATED`.
+- `docs/implementation/STATUS.md` records the exact phase-close scope, reviewed commits, test/CI/manual evidence, findings, repairs, and final pass/fail result.
+- Cross-phase prerequisite work explicitly declared by the roadmap may still be pulled forward, but it does not waive the prior phase's close gate.

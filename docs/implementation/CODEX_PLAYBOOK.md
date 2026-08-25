@@ -207,6 +207,22 @@ Required by the packet's checklist.
 
 Required for host/watchdog/driver/update/game support packets.
 
+### Phase-close verification — whole-phase recalculation
+
+This task runs once when a numbered roadmap phase appears ready to close. It is not a normal one-packet implementation task. Its purpose is to independently recalculate whether the phase's combined code actually satisfies the phase exit gate.
+
+Required workflow:
+
+1. enumerate every packet and commit that materially contributed to the phase;
+2. map phase requirements/decisions to the final source and test surfaces;
+3. review the complete relevant code, not only the last packet diff;
+4. rerun the broad applicable regression set and required Windows x64/x86, process, ABI/protocol/schema, recovery/soak, performance, and manual gates;
+5. inspect cross-packet interactions, failure/rollback/teardown paths, stale/duplicate handling, no-cross-Seat invariants, resource leaks, and unsupported/fail-closed behavior;
+6. search for accumulated TODOs, temporary branches, warnings, dead code, stale documentation, and capability/support claims not backed by evidence;
+7. write a phase-close evidence record to `STATUS.md` with reviewed SHAs, test and CI identifiers, manual evidence, findings, and the final result.
+
+If a defect is found, stop the closeout as failed/incomplete. Fix it in the owning packet or a separate focused repair task, validate the repair, and rerun the whole phase-close verification. Do not bury feature implementation inside the audit itself.
+
 ## 9. Documentation update rules
 
 Update only the documents affected by behavior:

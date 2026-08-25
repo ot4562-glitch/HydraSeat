@@ -16,6 +16,12 @@ python tools/validate_implementation_roadmap.py
 
 ---
 
+### Phase completion rule
+
+A **phase** means a numbered roadmap phase in this file, not one chat turn or one implementation packet. After the phase's required packets and acceptance gates appear complete, HydraSeat performs a separate **Phase-close verification** across the entire phase-owned codebase and cross-packet integration. The phase is not marked `Complete`, and ordinary progression to the next numbered phase does not begin, until that verification passes. Findings reopen the owning packet or create a focused repair task, after which the phase-close verification is rerun. Explicitly declared cross-phase prerequisites remain allowed.
+
+---
+
 ## Product north star
 
 HydraSeat is being built toward a practical shared-PC gaming product: when one Windows gaming PC has enough hardware headroom, a household or group of friends should be able to use separate monitors and input/audio devices as two or more local gaming Seats instead of requiring a second PC for every player.
