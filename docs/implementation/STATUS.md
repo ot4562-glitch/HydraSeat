@@ -4,8 +4,8 @@
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
 - Current default packet: **P3-RAW-01 — Controlled Raw Input behavior probe**
-- Current validated implementation head: `aa64fa9` (P3-API-03 branch; final merge SHA pending)
-- Current validated Windows CI evidence: run `32792381573`; x64/x86 24/24 CTest and dedicated x64-host-to-x64/x86 polling + cursor/focus cross-architecture jobs passed
+- Current validated fork-main baseline: `954d1f68548d3c4071c8a1983abcdc660509570f` (merged P3-API-03)
+- Current validated Windows CI evidence: fork-main run `32793510907`; x64/x86 24/24 CTest, roadmap/current-packet validation, and dedicated x64-host-to-x64/x86 polling + cursor/focus cross-architecture jobs passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
