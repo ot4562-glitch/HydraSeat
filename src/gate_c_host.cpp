@@ -1208,6 +1208,11 @@ private:
             bool releaseAndDestructionIsolated = true;
             if (cursorFocusShim) {
                 auto releasedSecondControl = secondControl;
+                // ControlState is a full-state message. Preserve the cursor
+                // position reached by the earlier mouse delta while changing
+                // only the virtual-capture intent for this acceptance step.
+                releasedSecondControl.cursorX = 492;
+                releasedSecondControl.cursorY = 591;
                 releasedSecondControl.virtualCapture = false;
                 if (!sendControl(sessions[1], releasedSecondControl)) {
                     cleanupSessions(sessions, true);
