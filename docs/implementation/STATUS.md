@@ -222,7 +222,7 @@ Next packet: P3-MET-01 is READY and becomes the default packet. Keep production 
 ### 2026-08-25 — P3-MET-01
 
 State: CODE_COMPLETE
-Branch/commit: `feat/p3-met-01-input-metrics`; implementation commit pending at this evidence-writing point
+Branch/commit: `feat/p3-met-01-input-metrics`; implementation commit `97c6ceb` (`feat: implement P3-MET-01 input metrics harness`)
 Windows CI: pending. Fresh native x64 and Win32/x86 full CTest must build the new metrics library/CLI, compile the instrumented Gate C host, and run `InputMetricsTests`, `InputMetricsCliSelfTest`, and `InputMetricsFixtureReport` before the packet may become `VALIDATED`.
 Automated evidence:
 - strict GCC 15 `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror` build and focused metrics tests pass;
