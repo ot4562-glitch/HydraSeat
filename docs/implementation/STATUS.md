@@ -205,7 +205,7 @@ Next packet: P3-CTRL-02 is READY for a separate DirectInput enumeration/visibili
 ### 2026-08-25 — P3-CTRL-02
 
 State: CODE_COMPLETE
-Branch/commit: `feat/p3-ctrl-02-directinput-visibility`; local commit pending at this evidence-writing point
+Branch/commit: `feat/p3-ctrl-02-directinput-visibility`; implementation commit `084043b` (`feat: implement P3-CTRL-02 DirectInput visibility policy`)
 Windows CI: pending. Native x64 and Win32/x86 MSVC full CTest must execute `DirectInputNativeObservationSelfTest` before this packet may become `VALIDATED`.
 Automated tests:
 - new portable `hydra_directinput_policy` and `hydra_directinput_probe` build under GCC 15 with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror`;
