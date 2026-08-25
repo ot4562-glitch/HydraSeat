@@ -352,7 +352,7 @@ An optional installed-driver adapter may use HidHide's documented control API. I
 
 #### Controller visibility adapters
 
-Separate XInput slot-remapping and DirectInput order/visibility components are selected according to the target game's actual input API.
+Separate XInput slot-remapping and DirectInput order/visibility components are selected according to the target game's actual input API. The P3-CTRL-02 controlled DirectInput component represents `guidInstance` as fixed-width fields, validates a bounded ordered allowlist, and derives the visible enumeration strictly from profile order. Native/friendly enumeration order, product GUID, and friendly names are metadata only. Missing/duplicate/invalid instance IDs fail closed with an empty visible set. A HydraSeat-owned Windows probe creates `IDirectInput8W` and observes attached game-controller enumeration only; it never creates/acquires a device, changes cooperative level, sends force feedback, hides a physical device, replaces `dinput8.dll`, or claims SDL/Raw-HID coverage. Production per-game interposition remains a later deployment boundary.
 
 ### 8. Process and Window Manager
 

@@ -99,6 +99,7 @@ set(HYDRA_HARDWARE_HEADERS
 )
 
 set(HYDRA_HEADERS
+    include/hydra/directinput_policy.hpp
     include/hydra/input_router.hpp
     include/hydra/input_isolation.hpp
     include/hydra/input_observation.hpp
@@ -134,6 +135,22 @@ if(MSVC)
     target_compile_options(hydra_virtual_xinput PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_virtual_xinput PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P3-CTRL-02 bounded, process-local DirectInput enumeration/visibility policy.
+# The core is portable and owns no DirectInput COM object or physical device.
+add_library(hydra_directinput_policy STATIC
+    src/directinput_policy.cpp
+    include/hydra/directinput_policy.hpp
+)
+set_target_properties(hydra_directinput_policy PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+if(MSVC)
+    target_compile_options(hydra_directinput_policy PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_directinput_policy PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
@@ -356,6 +373,24 @@ if(MSVC)
     target_compile_options(hydra_gate_c_api_probe PRIVATE /W4 /permissive-)
 endif()
 
+# P3-CTRL-02 HydraSeat-owned DirectInput probe. Controlled fixture modes are
+# portable. Windows additionally performs read-only DirectInput 8 enumeration;
+# it never acquires a device, changes cooperative level, sends force feedback,
+# or replaces a system DLL.
+add_executable(hydra_directinput_probe
+    src/directinput_probe.cpp
+)
+target_link_libraries(hydra_directinput_probe PRIVATE hydra_directinput_policy)
+if(WIN32)
+    target_link_libraries(hydra_directinput_probe PRIVATE Dinput8.lib Dxguid.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_directinput_probe PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_directinput_probe PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # Phase 3 Gate C host: launches only the controlled target executable and
 # routes Seat-owned Raw Input observations over the versioned named-pipe protocol.
 add_executable(hydra_gate_c_host
@@ -509,6 +544,27 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 add_test(NAME VirtualXInputStateTests COMMAND virtual_xinput_state_tests)
+
+# P3-CTRL-02 stable instance-ID allowlist/order policy and controlled probe tests.
+add_executable(directinput_policy_tests
+    tests/test_directinput_policy.cpp
+)
+target_link_libraries(directinput_policy_tests PRIVATE hydra_directinput_policy)
+if(MSVC)
+    target_compile_options(directinput_policy_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(directinput_policy_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME DirectInputPolicyTests COMMAND directinput_policy_tests)
+add_test(NAME DirectInputControlledSeatA
+         COMMAND hydra_directinput_probe --controlled-self-test seat-a)
+add_test(NAME DirectInputControlledSeatB
+         COMMAND hydra_directinput_probe --controlled-self-test seat-b)
+if(WIN32)
+    add_test(NAME DirectInputNativeObservationSelfTest
+             COMMAND hydra_directinput_probe --native-observation-self-test)
+endif()
 
 # C ABI adapter tests exercise independent process-local contexts and
 # GetAsyncKeyState/GetKeyboardState-style semantics without installing hooks.

@@ -595,7 +595,7 @@ Controlled targets have independent, queryable XInput-style state and the planne
 
 ## P3-CTRL-02 — DirectInput enumeration and visibility adapter
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -629,6 +629,21 @@ P3-ARCH-01 is already validated. DirectInput work may now start only as this sep
 **Done when**
 
 Two controlled probes enumerate only their declared DirectInput devices in deterministic order.
+
+**Implementation evidence (2026-08-25)**
+
+- `DirectInputInstanceId` normalizes the 128-bit DirectInput instance GUID into fixed-width fields without serializing the Windows `GUID` memory layout;
+- `DirectInputVisibilityPolicy` is a bounded ordered allowlist (32 entries) over a bounded native inventory (64 entries); native enumeration order, product GUID, and friendly names never select identity or order;
+- invalid/zero IDs, duplicate policy/native instance IDs, an oversized inventory, and a missing required instance fail closed with an empty visible result;
+- two HydraSeat-owned controlled probe invocations expose `C,A` versus `B` from the same synthetic `A,B,C` inventory and calculate `cross_visible=0`;
+- the Windows-only observation mode uses `DirectInput8Create` and `IDirectInput8W::EnumDevices(DI8DEVCLASS_GAMECTRL, ..., DIEDFL_ATTACHEDONLY)` read-only; it does not create/acquire devices, change cooperative level, send force feedback, hide devices, replace `dinput8.dll`, or touch SDL/Raw HID;
+- `GameCompatibilityProfile` now carries ordered DirectInput instance IDs, while planner tests prove controlled visibility/order still does not satisfy `PhysicalInputSuppression` or production zero-bleed requirements;
+- strict GCC 15 `-Werror` component/probe/planner builds pass, focused DirectInput CTest passes 3/3, and the selected Phase 3 portable regression set passes 21/21 including plan CLI observation, XInput, Raw Input, Gate C protocol/ABI/shims, and target tests;
+- native Windows x64/x86 MSVC/CTest execution is still required, so this packet is `CODE_COMPLETE`, not `VALIDATED`.
+
+**Clean-room evidence**
+
+Implemented independently from the packet specification and official Microsoft DirectInput 8 documentation for `IDirectInput8::EnumDevices`, `DIDEVICEINSTANCE`, and `DIEnumDevicesCallback`. No unlicensed devreorder/Duo implementation source was copied, translated, or consulted while writing this component.
 
 **Suggested commit**
 

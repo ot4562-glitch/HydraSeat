@@ -389,6 +389,12 @@ remain outside this adapter and outside the Raw Input callback.
 
 A separate adapter controls enumeration and visibility. Ordering by friendly name is insufficient; use stable instance identity where possible. DirectInput wrapper deployment is per process/profile and must not modify system DLLs.
 
+P3-CTRL-02 defines the controlled boundary independently from any third-party wrapper source. `DIDEVICEINSTANCE::guidInstance` is normalized field-by-field into a fixed-width HydraSeat `DirectInputInstanceId`; `guidProduct`, instance/product names, device type, and HID usage remain metadata. A bounded profile allowlist (`32` IDs) defines both visibility and deterministic enumeration order over a bounded native inventory (`64` devices). Native enumeration order never determines policy. Zero/duplicate native or policy IDs and missing required IDs fail closed with an empty result, so a partial controller view is never returned. Two HydraSeat-owned controlled probe invocations use different allowlists and require zero cross-policy visibility.
+
+The Windows observation probe uses documented DirectInput 8 creation and attached-game-controller enumeration only. It does not call `CreateDevice`, `Acquire`, `SetCooperativeLevel`, force-feedback APIs, physical hiding, or system DLL replacement. Native x64/x86 execution remains required before P3-CTRL-02 may become `VALIDATED`. XInput, Raw HID, SDL, and vendor APIs remain separate capabilities.
+
+Clean-room implementation record (2026-08-25): the implementation was written from the packet/design specification and official Microsoft DirectInput 8 documentation for `IDirectInput8::EnumDevices`, `DIDEVICEINSTANCE`, and `DIEnumDevicesCallback`. No devreorder/Duo/other unlicensed wrapper implementation source was copied, translated, or consulted while writing this component; those projects remain behavior/documentation references only under `CLEAN_ROOM_POLICY.md`.
+
 ### Raw HID and SDL
 
 These may bypass XInput/DirectInput adapters. Profiles must report them explicitly as unsupported until a tested backend exists.
@@ -518,6 +524,7 @@ Only after Gate E may Phase 3 be marked complete.
 | Raw Input behavior trace/parser | Yes | Windows x64/x86 validated (`32800513365`) | P3-HW-01 physical trace pending | Controlled probe only |
 | Raw Input API virtualization | Yes | Windows x64/x86 + cross-architecture validated (`32806163164`) | P3-HW-01 physical trace pending | HydraSeat-owned controlled probe only |
 | Controlled normalized XInput state/remapping | Yes | Remediation Windows x64/x86 36/36 + cross-architecture validated (`32832036967`, head `b351afdd`); old `32816241577` is pre-fix only | Physical controller evidence pending | Direct adapter facade; no ordinary XInput hook |
+| Controlled DirectInput visibility/order policy | Yes | Portable strict-GCC policy/planner/two-probe tests pass; native x64/x86 DirectInput 8 observation pending | Physical controller/game evidence pending | HydraSeat-owned policy/probe only; no system DLL replacement or production interposition |
 | Polling API interposition | Yes | CI pending | No | Controlled probe only |
 | Cursor/focus API interposition | No | Pending | Pending | Controlled probe only |
 | HidHide session lifecycle | No | Yes | Yes | No |

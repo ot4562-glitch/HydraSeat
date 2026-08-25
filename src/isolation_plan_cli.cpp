@@ -15,7 +15,7 @@ void printUsage(std::ostream& out) {
         << "Options only describe an environment; this tool never activates a backend.\n"
         << "  --protoinput          Mark a configured external ProtoInput adapter available\n"
         << "  --hidhide             Mark installed HidHide session control available\n"
-        << "  --directinput         Mark the future DirectInput adapter available\n"
+        << "  --directinput         Mark the controlled DirectInput visibility/order adapter available\n"
         << "  --allow-injection     Record approval; does not override a profile prohibition\n"
         << "  --admin               Record administrator access as available\n"
         << "  --allow-driver-install Record approval; does not override a profile prohibition\n"

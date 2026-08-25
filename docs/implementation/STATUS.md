@@ -44,7 +44,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
 | P3-HW-01 Gate A/B/C physical acceptance runner | READY | P3-QUEUE-01 | User-run two-keyboard/two-pointing-device traces and report |
 | P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Remediation head `b351afdd` validated by fork PR #15 run `32832036967`: native x64/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance |
-| P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | READY | P3-CTRL-01, P3-ARCH-01 | P3-CTRL-01 remediation and x86/x64 controlled architecture prerequisites are validated; no DirectInput implementation exists yet |
+| P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | CODE_COMPLETE | P3-CTRL-01, P3-ARCH-01 | Bounded instance-GUID policy, ordered allowlist, two controlled probes, profile field, and read-only Windows DirectInput 8 observation probe implemented; strict portable regressions pass, native x64/x86 MSVC/CTest pending |
 | P3-D-01 HidHide read-only availability/capability probe | READY | P3-PLAN-01 | No mutation; exact installed/version/control-interface report |
 | P3-D-02 Guarded HidHide session-cloak lab | BLOCKED | P3-REC-01, P3-D-01 | Spare input/watchdog/timeout/crash rollback and physical evidence |
 | P3-E-01 Open-source non-protected application profile | BLOCKED | P3-RAW-02, P3-API-03 | Reproducible profile and measured no-cross-state result |
@@ -195,24 +195,42 @@ Automated tests:
 - deterministic component tests cover logical slots 0..3, invalid slot 4, independent contexts, duplicate-source rejection including runtime-hint changes on the same opaque source, packet change/wrap, capabilities/battery consistency, vibration routing, disconnect clearing, reconnect generation, stale state/vibration rejection, and reset
 - fresh Windows cross-architecture acceptance in run `32832036967` runs two complete cycles for both x64 and x86 targets; each architecture reports Seat 1/Seat 2 state/capability/battery/vibration expected=2, every cross counter=0, `api_failures=0`, and `stale_accepted=0`; `runXInputSelfTest` requires cleanup success and both child processes not running after each cycle
 Manual evidence: none claimed; physical XInput discovery/routing, physical vibration, physical suppression, and commercial-game behavior remain pending and separate from the synthetic controlled acceptance
-Known limitations: no ordinary XInput API interposition, XInput DLL proxy, DirectInput, Raw HID/SDL, physical polling worker, physical controller mutation/hiding, third-party injection, or game support is implemented
+Known limitations of the P3-CTRL-01 slice: no ordinary XInput API interposition, XInput DLL proxy, Raw HID/SDL, physical polling worker, physical controller mutation/hiding, third-party injection, or game support is implemented; DirectInput visibility/order is tracked separately by P3-CTRL-02
 Rollback result: adapter reset deterministically clears all four controller slots; disconnect clears state/metadata/vibration and requires a newer source generation; controlled process acceptance runs two complete start/stop cycles and requires no surviving child
 Remediation scope: reject stale/same-generation resurrection through explicit routing-hint remaps, preserve independent generation namespaces for genuinely different stable sources, and require canonical empty metadata for failed controller snapshot fields. Historical run `32816241577` predates this fix and cannot validate the repaired semantics.
 Remediation evidence: strict GCC 15 CMake build with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror` passed all selected portable targets; 20/20 portable CTest cases passed across planner/observation, protocol, architecture, probe snapshot, Raw Input, virtual XInput, C++/C11 adapter ABI, polling/cursor/Raw Input shims, and target/host self-tests. Focused tests reproduced both defects before the production fix and then passed after it.
 Post-remediation Windows evidence: run `32832036967` satisfies the required native x64, native Win32/x86, and x64-host-to-x64/x86 controlled matrix on Windows Server 2025 / MSVC. Historical run `32816241577` remains pre-remediation evidence only and is not used to validate the repaired semantics.
 Next packet: P3-CTRL-02 is READY for a separate DirectInput enumeration/visibility packet. This validation task does not implement it.
 
+### 2026-08-25 — P3-CTRL-02
+
+State: CODE_COMPLETE
+Branch/commit: `feat/p3-ctrl-02-directinput-visibility`; local commit pending at this evidence-writing point
+Windows CI: pending. Native x64 and Win32/x86 MSVC full CTest must execute `DirectInputNativeObservationSelfTest` before this packet may become `VALIDATED`.
+Automated tests:
+- new portable `hydra_directinput_policy` and `hydra_directinput_probe` build under GCC 15 with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror`;
+- focused DirectInput CTest passes 3/3: policy, controlled Seat A (`C,A`), controlled Seat B (`B`), with calculated `cross_visible=0`;
+- selected Phase 3 portable regression set passes 21/21 including planner/plan CLI observation/observation routing, Gate C protocol/architecture/snapshot, Raw Input, XInput, adapter C++/C11 ABI, polling/cursor/Raw Input shims, and target self-test;
+- policy tests cover native-order reversal, duplicate friendly/product metadata, stable instance identity, two independent views, zero/duplicate/missing IDs, no partial output on failure, empty inventory, and 64-native/32-policy bounds;
+- planner test proves enabling the controlled DirectInput visibility/order backend still leaves `PhysicalInputSuppression` missing and the production game plan unsupported.
+Manual evidence: none claimed. Real physical DirectInput controller behavior, physical hiding/suppression, third-party/commercial games, SDL/Raw HID/vendor APIs, and production process deployment remain separate future evidence.
+Known limitations: the Windows probe is read-only and calls only `DirectInput8Create` plus attached-game-controller `EnumDevices`; it does not implement a `dinput8.dll` proxy, COM API interposition, `CreateDevice`, device acquire/state, cooperative level, force feedback, or physical mutation.
+Clean-room evidence: implementation used the packet/design specification and official Microsoft DirectInput 8 documentation for `IDirectInput8::EnumDevices`, `DIDEVICEINSTANCE`, and `DIEnumDevicesCallback`; no unlicensed devreorder/Duo implementation source was copied, translated, or consulted while writing the component.
+Rollback result: this slice owns only process-local vectors/policy state and a read-only COM enumeration object; no persistent/device state is changed, so teardown is ordinary object/process destruction.
+Next packet: remain on P3-CTRL-02 until fresh native Windows x64/x86 validation is recorded. Do not start production DirectInput interposition or another packet from this evidence.
+
 ## Next Codex task
 
 Use:
 
 ```text
-Implement P3-CTRL-02 exactly as specified in
+Validate P3-CTRL-02 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Implement only the clean-room controlled DirectInput enumeration/order/visibility
-adapter. Use stable instance identity rather than friendly name or enumeration
-order, keep XInput/Raw HID/SDL separate, do not replace system DLLs, and do not
-claim physical hiding or production game support from the controlled adapter.
+Run fresh Windows x64 and Win32/x86 MSVC/CTest for the controlled DirectInput
+policy/probes, including the read-only native DirectInput 8 observation test.
+Keep the packet `CODE_COMPLETE` if native Windows evidence is absent or fails;
+do not start production interposition, physical hiding, SDL/Raw HID, or another
+packet until the required P3-CTRL-02 validation evidence is recorded.
 
 ```
