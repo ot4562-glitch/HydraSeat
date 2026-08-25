@@ -49,6 +49,13 @@ packet, queue, and token state. Native x64, Win32/x86, and x64-host-to-x64/x86
 controlled acceptance pass with expected keyboard/mouse events, zero cross-Seat
 events, and zero API/stale-token/queue-overflow failures.
 
+P3-CTRL-01 is `CODE_COMPLETE`. Adapter ABI v4, separate controller protocol
+messages, a bounded four-slot normalized XInput component, planner boundary,
+and deterministic component/process test source are implemented. Portable
+strict builds and all 14 Gate C regressions pass. Native x64/Win32 and the
+x64-host-to-x64/x86 controlled process matrix have not yet run for this branch,
+so no Windows or physical-controller validation is claimed.
+
 This is not a general game hook or a completed Gate C implementation. The
 controlled targets still call HydraSeat's adapter API directly; only the
 explicitly launched API probe may opt into polling, cursor/focus, or Raw Input
@@ -235,7 +242,8 @@ or reference-repository source was copied, adapted, or used as a build input.
 
 ### `hydra_gate_c_adapter.dll`
 
-The adapter is a process-local state component with a C ABI. ABI v3 currently provides semantic equivalents for controlled tests:
+The adapter is a process-local state component with a C ABI. ABI v4 retains the
+v1-v3 structures and provides semantic equivalents for controlled tests:
 
 - key down/up state;
 - `GetAsyncKeyState`-style high bit plus one-shot press edge;
@@ -250,6 +258,8 @@ The adapter is a process-local state component with a C ABI. ABI v3 currently pr
   and virtual capture HWND runtime values;
 - fixed-width Raw Input registration/query/delivery records and bounded
   registration/data/buffer/reset operations;
+- four bounded logical XInput-style slots with normalized state, capabilities,
+  battery, source/mapping generations, and source-only vibration routes;
 - full state snapshot and reset.
 
 The adapter is linked normally into the controlled target. It is not injected into another program.
@@ -290,6 +300,9 @@ StateSnapshot
 Shutdown
 Error
 ProbeSnapshot
+ControllerUpdate
+ControllerQuery
+ControllerSnapshot
 ```
 
 Important properties:
@@ -326,6 +339,15 @@ both C11 and C++ tests assert those constants in x86 and x64 builds. Consumers
 link through the architecture-matching import library, so x86 decoration is
 resolved by the toolchain rather than guessed at runtime.
 
+ABI v4 controller sizes are architecture-independent: source 28, mapping 36,
+source state 40, queried state 52, source capabilities 50, queried capabilities
+58, source battery 32, queried battery 40, and vibration 56 bytes. Every v4
+record carries exact `struct_size` and `api_version`; reserved bytes must be
+zero and a v3 caller fails closed. Unsupported capability fields remain zero.
+Battery-unavailable is an explicit successful metadata value with
+`available=0`, while an unmapped/disconnected slot returns the disconnected
+adapter result and a cleared output payload.
+
 Major functions:
 
 ```text
@@ -347,6 +369,16 @@ hydra_gate_c_adapter_get_window_state
 hydra_gate_c_adapter_set_virtual_capture
 hydra_gate_c_adapter_release_virtual_capture
 hydra_gate_c_adapter_invalidate_window
+hydra_gate_c_adapter_xinput_map_slot
+hydra_gate_c_adapter_xinput_unmap_slot
+hydra_gate_c_adapter_xinput_apply_state
+hydra_gate_c_adapter_xinput_apply_capabilities
+hydra_gate_c_adapter_xinput_apply_battery
+hydra_gate_c_adapter_xinput_disconnect
+hydra_gate_c_adapter_xinput_get_state
+hydra_gate_c_adapter_xinput_get_capabilities
+hydra_gate_c_adapter_xinput_get_battery
+hydra_gate_c_adapter_xinput_route_vibration
 ```
 
 This API is the boundary a future clean-room Windows compatibility layer can call after interposing a target API. It does not itself install that interposition.
@@ -566,6 +598,40 @@ This evidence is controlled synthetic no-cross-state only. It cannot satisfy
 P3-HW-01 physical `WM_INPUT`, hot-plug, composite HID, suppression, or game
 zero-bleed gates.
 
+### Controlled XInput component and process tests
+
+```powershell
+ctest --test-dir build-x64 --build-config Release `
+  -R "VirtualXInput|GateCXInput|GateCProtocol|GateCAdapter|IsolationPlanner" `
+  --output-on-failure
+
+.\build-x64\gate-c\x64\hydra_gate_c_api_probe.exe --xinput-self-test
+
+.\build-x64\gate-c\x64\hydra_gate_c_host.exe `
+  --xinput-self-test `
+  --target .\build-x64\gate-c\x64\hydra_gate_c_api_probe.exe
+
+.\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe `
+  --xinput-self-test `
+  --artifact-root .\matrix-artifacts\gate-c `
+  --target-architecture x86
+```
+
+The component suite covers slots 0..3, slot 4 rejection, remap generations,
+context isolation, duplicate sources, state extrema and packet wrap, metadata
+consistency, unavailable battery, vibration min/max/stop/repeat, stale
+sequence/source/mapping generation, disconnect/reconnect, reset, malformed ABI,
+and fixed C11/C++ sizes. The process test runs two complete cycles with Seat 1
+and Seat 2 both querying logical slot 0 backed by distinct synthetic sources.
+Success requires every expected state/capability/battery/vibration counter to
+be nonzero, every cross counter to be zero, `api_failures=0`,
+`stale_accepted=0`, and no surviving probe process.
+
+This facade does not call ordinary `XInputGetState`, `XInputGetCapabilities`,
+`XInputGetBatteryInformation`, or `XInputSetState`. It validates the controlled
+adapter/protocol contract only; physical controller and API-interposition
+evidence remain pending.
+
 ### Raw Input behavior probe tests
 
 Portable trace and malformed-contract coverage:
@@ -761,11 +827,14 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] P3-API-03 cursor/clip/logical-focus/capture shim, adapter ABI v2, native x64/x86 24/24 CTest, cross-architecture two-probe isolation, and host-native global-state preservation (`32792381573`)
 - [x] P3-RAW-01 standalone probe, bounded trace/parser contract, explicit synthetic fixture, native x64/x86 28/28 CTest, retained/reviewed observed registration traces, and process teardown evidence (`32800513365`)
 - [x] P3-RAW-02 controlled Raw Input virtualization, native x64/x86 ordinary-API tests, x64-host-to-x64/x86 two-process no-cross-Seat acceptance, rollback, and existing polling/cursor regressions (`32806163164`)
+- [x] P3-CTRL-01 bounded normalized XInput state, adapter ABI v4, controller protocol, planner boundary, and portable component/Gate C regressions (`CODE_COMPLETE`)
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Physical keyboard/mouse `WM_INPUT` and actual device-change trace (P3-HW-01)
+- [ ] P3-CTRL-01 native x64/x86 and x64-host-to-x64/x86 controlled process acceptance
+- [ ] Physical controller polling/routing/vibration evidence
 
 - [ ] Adapter crash/watchdog recovery acceptance
 - [ ] Commercial non-anti-cheat game profile experiment
@@ -778,8 +847,9 @@ P3-RAW-01 is `VALIDATED` by Windows run `32800513365` and P3-RAW-02 is
 last-registration-wins per usage, usage-local removal, accepted-but-not-echoed
 `RIDEV_DEVNOTIFY`, retained destroyed-HWND runtime values until replacement,
 and the architecture-specific structure sizes with 8-byte raw-buffer alignment.
-Physical `WM_INPUT` and device-change evidence remains P3-HW-01. The next
-controlled compatibility packet is P3-CTRL-01 XInput state and slot remapping.
+Physical `WM_INPUT` and device-change evidence remains P3-HW-01. P3-CTRL-01 is
+`CODE_COMPLETE`; its next step is native x64/x86 and x64-host-to-x64/x86
+controlled acceptance. P3-CTRL-02 remains blocked until that validation passes.
 
 The two-probe process test releases Probe B's virtual capture while asserting
 that Probe A retains its own capture, then shuts down Probe A and re-queries

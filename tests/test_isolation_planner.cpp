@@ -146,6 +146,42 @@ void testRawInputProfileFailsClosed() {
           "unavailable HidHide is reported rather than assumed");
 }
 
+void testControlledXInputCapabilityBoundary() {
+    auto profile = hydra::compatibilityProfileTemplate(
+        "xinput-controller-game");
+    check(profile.has_value(), "XInput controller profile exists");
+
+    BackendEnvironment detectedOnly;
+    const IsolationPlanner detectionPlanner(
+        hydra::builtInIsolationBackends(detectedOnly));
+    const auto detectionPlan = detectionPlanner.plan(
+        *profile, detectedOnly);
+    check(detectionPlan.status == PlanStatus::Unsupported &&
+              hydra::hasCapability(
+                  detectionPlan.missingCapabilities,
+                  InputIsolationCapability::XInputSlotRemapping) &&
+              !selected(detectionPlan,
+                        "hydra.controlled-xinput-adapter"),
+          "controller detection never advertises controlled XInput remapping");
+
+    BackendEnvironment controlled;
+    controlled.controlledXInputAdapterAvailable = true;
+    const IsolationPlanner controlledPlanner(
+        hydra::builtInIsolationBackends(controlled));
+    const auto controlledPlan = controlledPlanner.plan(
+        *profile, controlled);
+    check(controlledPlan.status == PlanStatus::Unsupported &&
+              selected(controlledPlan,
+                       "hydra.controlled-xinput-adapter") &&
+              hydra::hasCapability(
+                  controlledPlan.coveredCapabilities,
+                  InputIsolationCapability::XInputSlotRemapping) &&
+              hydra::hasCapability(
+                  controlledPlan.missingCapabilities,
+                  InputIsolationCapability::PhysicalInputSuppression),
+          "explicit controlled adapter availability covers only slot remapping and not physical production routing");
+}
+
 void testConfiguredReferencesStillFailWithoutVerifiedSuppression() {
     BackendEnvironment environment;
     environment.protoInputAvailable = true;
@@ -502,6 +538,7 @@ int main() {
     testCapabilityHelpers();
     testObservationProfile();
     testRawInputProfileFailsClosed();
+    testControlledXInputCapabilityBoundary();
     testConfiguredReferencesStillFailWithoutVerifiedSuppression();
     testVerifiedSuppressionBackendCanCompletePlan();
     testAntiCheatRejectsInvasiveBackends();

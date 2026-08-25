@@ -19,7 +19,7 @@
 extern "C" {
 #endif
 
-#define HYDRA_GATE_C_ADAPTER_API_VERSION 3u
+#define HYDRA_GATE_C_ADAPTER_API_VERSION 4u
 #define HYDRA_GATE_C_ADAPTER_KEY_BYTES 32u
 #define HYDRA_GATE_C_ADAPTER_KEYBOARD_STATE_BYTES 256u
 #define HYDRA_GATE_C_ADAPTER_NO_PROBE_KEY 0xffffu
@@ -31,6 +31,17 @@ extern "C" {
 #define HYDRA_GATE_C_ADAPTER_RAW_REGISTRATION_V3_BYTES 28u
 #define HYDRA_GATE_C_ADAPTER_RAW_REGISTRATION_ENTRY_V3_BYTES 36u
 #define HYDRA_GATE_C_ADAPTER_RAW_DELIVERY_V3_BYTES 40u
+#define HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_V4_BYTES 28u
+#define HYDRA_GATE_C_ADAPTER_XINPUT_MAPPING_V4_BYTES 36u
+#define HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_STATE_V4_BYTES 40u
+#define HYDRA_GATE_C_ADAPTER_XINPUT_STATE_V4_BYTES 52u
+#define HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_CAPABILITIES_V4_BYTES 50u
+#define HYDRA_GATE_C_ADAPTER_XINPUT_CAPABILITIES_V4_BYTES 58u
+#define HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_BATTERY_V4_BYTES 32u
+#define HYDRA_GATE_C_ADAPTER_XINPUT_BATTERY_V4_BYTES 40u
+#define HYDRA_GATE_C_ADAPTER_XINPUT_VIBRATION_V4_BYTES 56u
+#define HYDRA_GATE_C_ADAPTER_XINPUT_SLOT_COUNT 4u
+#define HYDRA_GATE_C_ADAPTER_XINPUT_NO_RUNTIME_SLOT 0xffu
 
 typedef void* HydraGateCAdapterHandle;
 
@@ -42,8 +53,22 @@ typedef enum HydraGateCAdapterResult {
     HYDRA_GATE_C_ADAPTER_INVALID_STATE = 4,
     HYDRA_GATE_C_ADAPTER_BUFFER_TOO_SMALL = 5,
     HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR = 6,
-    HYDRA_GATE_C_ADAPTER_RAW_INPUT_FAILURE = 7
+    HYDRA_GATE_C_ADAPTER_RAW_INPUT_FAILURE = 7,
+    HYDRA_GATE_C_ADAPTER_XINPUT_DISCONNECTED = 8,
+    HYDRA_GATE_C_ADAPTER_XINPUT_STALE_GENERATION = 9,
+    HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_CONFLICT = 10,
+    HYDRA_GATE_C_ADAPTER_XINPUT_INVALID_SLOT = 11,
+    HYDRA_GATE_C_ADAPTER_XINPUT_MAPPING_MISMATCH = 12
 } HydraGateCAdapterResult;
+
+typedef enum HydraGateCAdapterXInputSourceKind {
+    HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_SYNTHETIC = 1,
+    HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_PROFILE_SELECTED = 2
+} HydraGateCAdapterXInputSourceKind;
+
+typedef enum HydraGateCAdapterXInputCapabilityType {
+    HYDRA_GATE_C_ADAPTER_XINPUT_CAPABILITY_GAMEPAD = 1
+} HydraGateCAdapterXInputCapabilityType;
 
 typedef enum HydraGateCAdapterInputKind {
     HYDRA_GATE_C_ADAPTER_INPUT_KEYBOARD = 1,
@@ -168,6 +193,164 @@ typedef struct HydraGateCAdapterRawDeliveryV3 {
     uint32_t message_wparam;
     uint32_t reserved0;
 } HydraGateCAdapterRawDeliveryV3;
+
+/*
+ * source_key is a nonzero, session-scoped opaque key resolved by the host.
+ * runtime_xinput_slot_hint is 0..3 or NO_RUNTIME_SLOT and is never a stable
+ * physical identity.
+ */
+typedef struct HydraGateCAdapterXInputSourceV4 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint8_t source_kind;
+    uint8_t runtime_xinput_slot_hint;
+    uint8_t reserved0[2];
+    uint64_t source_key;
+    uint64_t source_generation;
+} HydraGateCAdapterXInputSourceV4;
+
+typedef struct HydraGateCAdapterXInputMappingV4 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint8_t logical_slot;
+    uint8_t source_kind;
+    uint8_t runtime_xinput_slot_hint;
+    uint8_t reserved0;
+    uint64_t source_key;
+    uint64_t source_generation;
+    uint64_t mapping_generation;
+} HydraGateCAdapterXInputMappingV4;
+
+typedef struct HydraGateCAdapterXInputSourceStateV4 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint8_t source_kind;
+    uint8_t runtime_xinput_slot_hint;
+    uint8_t reserved0[2];
+    uint64_t source_key;
+    uint64_t source_generation;
+    uint16_t buttons;
+    uint8_t left_trigger;
+    uint8_t right_trigger;
+    int16_t thumb_lx;
+    int16_t thumb_ly;
+    int16_t thumb_rx;
+    int16_t thumb_ry;
+} HydraGateCAdapterXInputSourceStateV4;
+
+typedef struct HydraGateCAdapterXInputStateV4 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint8_t logical_slot;
+    uint8_t connected;
+    uint8_t source_kind;
+    uint8_t runtime_xinput_slot_hint;
+    uint64_t source_key;
+    uint64_t source_generation;
+    uint64_t mapping_generation;
+    uint32_t packet_number;
+    uint16_t buttons;
+    uint8_t left_trigger;
+    uint8_t right_trigger;
+    int16_t thumb_lx;
+    int16_t thumb_ly;
+    int16_t thumb_rx;
+    int16_t thumb_ry;
+} HydraGateCAdapterXInputStateV4;
+
+typedef struct HydraGateCAdapterXInputSourceCapabilitiesV4 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint8_t source_kind;
+    uint8_t runtime_xinput_slot_hint;
+    uint8_t type;
+    uint8_t subtype;
+    uint8_t vibration_supported;
+    uint8_t reserved0[3];
+    uint64_t source_key;
+    uint64_t source_generation;
+    uint16_t flags;
+    uint16_t buttons;
+    uint8_t left_trigger;
+    uint8_t right_trigger;
+    int16_t thumb_lx;
+    int16_t thumb_ly;
+    int16_t thumb_rx;
+    int16_t thumb_ry;
+    uint16_t left_motor_maximum;
+    uint16_t right_motor_maximum;
+} HydraGateCAdapterXInputSourceCapabilitiesV4;
+
+typedef struct HydraGateCAdapterXInputCapabilitiesV4 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint8_t logical_slot;
+    uint8_t source_kind;
+    uint8_t runtime_xinput_slot_hint;
+    uint8_t type;
+    uint8_t subtype;
+    uint8_t vibration_supported;
+    uint8_t reserved0[2];
+    uint64_t source_key;
+    uint64_t source_generation;
+    uint64_t mapping_generation;
+    uint16_t flags;
+    uint16_t buttons;
+    uint8_t left_trigger;
+    uint8_t right_trigger;
+    int16_t thumb_lx;
+    int16_t thumb_ly;
+    int16_t thumb_rx;
+    int16_t thumb_ry;
+    uint16_t left_motor_maximum;
+    uint16_t right_motor_maximum;
+} HydraGateCAdapterXInputCapabilitiesV4;
+
+typedef struct HydraGateCAdapterXInputSourceBatteryV4 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint8_t source_kind;
+    uint8_t runtime_xinput_slot_hint;
+    uint8_t available;
+    uint8_t device_type;
+    uint8_t battery_type;
+    uint8_t battery_level;
+    uint8_t reserved0[2];
+    uint64_t source_key;
+    uint64_t source_generation;
+} HydraGateCAdapterXInputSourceBatteryV4;
+
+typedef struct HydraGateCAdapterXInputBatteryV4 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint8_t logical_slot;
+    uint8_t available;
+    uint8_t device_type;
+    uint8_t battery_type;
+    uint8_t battery_level;
+    uint8_t source_kind;
+    uint8_t runtime_xinput_slot_hint;
+    uint8_t reserved0;
+    uint64_t source_key;
+    uint64_t source_generation;
+    uint64_t mapping_generation;
+} HydraGateCAdapterXInputBatteryV4;
+
+typedef struct HydraGateCAdapterXInputVibrationV4 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint8_t logical_slot;
+    uint8_t source_kind;
+    uint8_t runtime_xinput_slot_hint;
+    uint8_t reserved0;
+    uint64_t source_key;
+    uint64_t source_generation;
+    uint64_t mapping_generation;
+    uint16_t left_motor;
+    uint16_t right_motor;
+    uint64_t command_sequence;
+    uint64_t route_count;
+} HydraGateCAdapterXInputVibrationV4;
 
 #pragma pack(pop)
 
@@ -319,6 +502,70 @@ hydra_gate_c_adapter_raw_begin_stopping(HydraGateCAdapterHandle handle);
 
 HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_raw_reset(HydraGateCAdapterHandle handle);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_xinput_map_slot(
+    HydraGateCAdapterHandle handle,
+    uint64_t sequence,
+    HydraGateCAdapterXInputMappingV4* mapping);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_xinput_unmap_slot(
+    HydraGateCAdapterHandle handle,
+    uint64_t sequence,
+    uint8_t logical_slot);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_xinput_apply_state(
+    HydraGateCAdapterHandle handle,
+    uint64_t sequence,
+    const HydraGateCAdapterXInputSourceStateV4* state);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_xinput_apply_capabilities(
+    HydraGateCAdapterHandle handle,
+    uint64_t sequence,
+    const HydraGateCAdapterXInputSourceCapabilitiesV4* capabilities);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_xinput_apply_battery(
+    HydraGateCAdapterHandle handle,
+    uint64_t sequence,
+    const HydraGateCAdapterXInputSourceBatteryV4* battery);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_xinput_disconnect(
+    HydraGateCAdapterHandle handle,
+    uint64_t sequence,
+    const HydraGateCAdapterXInputSourceV4* source);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_xinput_get_state(
+    HydraGateCAdapterHandle handle,
+    uint8_t logical_slot,
+    HydraGateCAdapterXInputStateV4* state);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_xinput_get_capabilities(
+    HydraGateCAdapterHandle handle,
+    uint8_t logical_slot,
+    HydraGateCAdapterXInputCapabilitiesV4* capabilities);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_xinput_get_battery(
+    HydraGateCAdapterHandle handle,
+    uint8_t logical_slot,
+    HydraGateCAdapterXInputBatteryV4* battery);
+
+/*
+ * Returns a validated source route only. The adapter never calls a physical
+ * XInputSetState backend from this process-local state boundary.
+ */
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_xinput_route_vibration(
+    HydraGateCAdapterHandle handle,
+    uint64_t sequence,
+    HydraGateCAdapterXInputVibrationV4* vibration);
 
 #ifdef __cplusplus
 }

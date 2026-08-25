@@ -126,3 +126,7 @@ jobs:
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & .\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe --raw-input-shim-self-test --artifact-root .\matrix-artifacts\gate-c --target-architecture x86
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & .\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe --xinput-self-test --artifact-root .\matrix-artifacts\gate-c --target-architecture x64
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & .\build-cross-x64\gate-c\x64\hydra_gate_c_host.exe --xinput-self-test --artifact-root .\matrix-artifacts\gate-c --target-architecture x86
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

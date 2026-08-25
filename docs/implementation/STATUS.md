@@ -4,8 +4,8 @@
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
 - Current default packet: **P3-CTRL-01 — XInput controlled state and slot remapping**
-- Current validated fork-main baseline: `d22ca244dc8a3b1429cb5866ee3f7e4103eb57e3` (merged P3-RAW-02)
-- Current validated Windows CI evidence: fork-main run `32807199628`; native x64/x86 full CTest, roadmap/current-packet validation, observed Raw Input trace verification/upload, and the dedicated x64-host-to-x64/x86 Gate C matrix passed
+- Current validated fork-main baseline: `1adbd314c41cb07bbabd4a63cb6d83a4214141bd` (final P3-RAW-02 fork-main validation)
+- Current validated Windows CI evidence: final fork-main run `32807401295`; P3-RAW-02 implementation run `32806163164` and merge validation run `32807199628` remain the controller packet regression baseline
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -43,7 +43,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
 | P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
 | P3-HW-01 Gate A/B/C physical acceptance runner | READY | P3-QUEUE-01 | User-run two-keyboard/two-pointing-device traces and report |
-| P3-CTRL-01 XInput controlled adapter state | READY | P3-STATE-01 | Two controlled targets see different mapped XInput slots/states |
+| P3-CTRL-01 XInput controlled adapter state | CODE_COMPLETE | P3-STATE-01 | Portable state/ABI/protocol/planner/Gate C regressions pass; native x64/x86 and two-process Windows acceptance pending |
 | P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | BLOCKED | P3-CTRL-01 | Controlled DirectInput probe sees only declared devices/order |
 | P3-D-01 HidHide read-only availability/capability probe | READY | P3-PLAN-01 | No mutation; exact installed/version/control-interface report |
 | P3-D-02 Guarded HidHide session-cloak lab | BLOCKED | P3-REC-01, P3-D-01 | Spare input/watchdog/timeout/crash rollback and physical evidence |
@@ -184,20 +184,33 @@ Known limitations: only HydraSeat-owned startup-loaded controlled probes and the
 Rollback result: portable transaction tests pass all-or-rollback, combined polling prerequisite rollback, reverse exact restoration, idempotent install/uninstall, and retry after uninstall failure; Windows run `32806163164` also passed native x64/x86 process teardown/uninstall and the cross-architecture regression matrix
 Next packet: P3-CTRL-01 is READY; implement controlled XInput state/slot remapping while P3-HW-01 remains PENDING and P3-E-01 remains blocked by metrics/recovery prerequisites
 
+### 2026-08-25 — P3-CTRL-01
+
+State: CODE_COMPLETE
+Branch/commit: `feat/p3-ctrl-01-virtual-xinput`; local implementation commit recorded after final validation
+Windows CI: not run from this environment; native x64/Win32 and x64-host-to-x64/x86 controlled process acceptance remain required before `VALIDATED`
+Automated tests:
+- strict GCC 15 CMake builds pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion` for the bounded virtual XInput component, adapter ABI v4, controller protocol, planner, and controlled host/probe portable surfaces
+- 14/14 portable Gate C CTest regressions pass, including virtual XInput state, C++/C11 adapter ABI, protocol, architecture, virtual Raw Input, polling, cursor/focus, target, and host tests
+- deterministic component tests cover logical slots 0..3, invalid slot 4, independent contexts, duplicate-source rejection, packet change/wrap, capabilities/battery consistency, vibration routing, disconnect clearing, reconnect generation, stale state/vibration rejection, and reset
+- declared Windows tests cover local controlled facade use and two distinct probe processes; the cross-architecture CI matrix invokes the x64 host against both x64 and x86 probes and emits expected/cross/API/stale counters
+Manual evidence: none claimed; physical XInput discovery/routing, physical vibration, physical suppression, and commercial-game behavior remain pending and separate from the synthetic controlled acceptance
+Known limitations: no ordinary XInput API interposition, XInput DLL proxy, DirectInput, Raw HID/SDL, physical polling worker, physical controller mutation/hiding, third-party injection, or game support is implemented
+Rollback result: adapter reset deterministically clears all four controller slots; disconnect clears state/metadata/vibration and requires a newer source generation; controlled process acceptance runs two complete start/stop cycles and requires no surviving child
+Next packet: keep P3-CTRL-01 as the current validation packet until native x64/x86 and x64-host-to-x64/x86 controlled acceptance pass; P3-CTRL-02 remains BLOCKED by P3-CTRL-01 validation
+
 ## Next Codex task
 
 Use:
 
 ```text
-Implement P3-CTRL-01 exactly as specified in
+Validate P3-CTRL-01 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Add process-local normalized XInput-style state and profile-defined logical-slot
-mapping to the controlled adapter. Prove two contexts can map logical user index
-0 to different synthetic controller sources, with capabilities, disconnect /
-reconnect generation, battery, and vibration routing kept Seat-local. Preserve
-the validated polling/cursor/Raw Input boundaries. Do not implement DirectInput,
-physical device suppression/cloaking, third-party injection, game support,
-anti-cheat, DRM, or protected-process work.
+Run the native x64 and Win32/x86 CTest matrices plus the x64-host-to-x64/x86
+controlled XInput process acceptance. Require nonzero expected counters, zero
+cross-state/capability/battery/vibration counters, zero API/stale acceptance,
+clean disconnect/reconnect generations, and no regression in polling, cursor,
+or Raw Input. Do not claim physical-controller routing from synthetic evidence.
 
 ```

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "hydra/virtual_xinput_state.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -29,7 +31,10 @@ enum class MessageType : std::uint16_t {
     StateSnapshot = 6,
     Shutdown = 7,
     Error = 8,
-    ProbeSnapshot = 9
+    ProbeSnapshot = 9,
+    ControllerUpdate = 10,
+    ControllerQuery = 11,
+    ControllerSnapshot = 12
 };
 
 enum class InputKind : std::uint8_t {
@@ -53,7 +58,8 @@ enum class TestCapability : std::uint64_t {
     ApiProbeBaselineSnapshot = 1ull << 5,
     PollingApiShim = 1ull << 6,
     CursorFocusApiShim = 1ull << 7,
-    RawInputApiShim = 1ull << 8
+    RawInputApiShim = 1ull << 8,
+    VirtualXInputState = 1ull << 9
 };
 
 constexpr TestCapability operator|(TestCapability left,
@@ -86,6 +92,9 @@ inline constexpr TestCapability kControlledCursorFocusProbeCapabilities =
 
 inline constexpr TestCapability kControlledRawInputProbeCapabilities =
     kControlledPollingProbeCapabilities | TestCapability::RawInputApiShim;
+
+inline constexpr TestCapability kControlledXInputProbeCapabilities =
+    kControlledApiProbeCapabilities | TestCapability::VirtualXInputState;
 
 struct DecodedFrame {
     MessageType type{MessageType::Error};
@@ -183,6 +192,60 @@ struct ErrorMessage {
     bool operator==(const ErrorMessage&) const = default;
 };
 
+enum class ControllerUpdateKind : std::uint8_t {
+    Map = 1,
+    Unmap = 2,
+    State = 3,
+    Capabilities = 4,
+    Battery = 5,
+    Disconnect = 6
+};
+
+struct ControllerUpdateMessage {
+    std::uint32_t seatId{0};
+    ControllerUpdateKind kind{ControllerUpdateKind::Map};
+    std::uint8_t logicalSlot{0};
+    ControllerSourceIdentity source{};
+    std::uint64_t sourceGeneration{0};
+    NormalizedXInputGamepad gamepad{};
+    NormalizedXInputCapabilities capabilities{};
+    NormalizedXInputBattery battery{};
+
+    bool operator==(const ControllerUpdateMessage&) const = default;
+};
+
+enum class ControllerQueryKind : std::uint8_t {
+    Snapshot = 1,
+    Vibration = 2
+};
+
+struct ControllerQueryMessage {
+    std::uint32_t seatId{0};
+    ControllerQueryKind kind{ControllerQueryKind::Snapshot};
+    std::uint8_t logicalSlot{0};
+    std::uint64_t expectedMappingGeneration{0};
+    std::uint64_t expectedSourceGeneration{0};
+    std::uint16_t leftMotor{0};
+    std::uint16_t rightMotor{0};
+
+    bool operator==(const ControllerQueryMessage&) const = default;
+};
+
+struct ControllerSnapshotMessage {
+    std::uint32_t seatId{0};
+    std::uint8_t logicalSlot{0};
+    VirtualXInputResult stateResult{VirtualXInputResult::NotMapped};
+    VirtualXInputResult capabilitiesResult{VirtualXInputResult::NotMapped};
+    VirtualXInputResult batteryResult{VirtualXInputResult::NotMapped};
+    VirtualXInputResult vibrationResult{VirtualXInputResult::NotMapped};
+    VirtualXInputState state{};
+    VirtualXInputCapabilities capabilities{};
+    VirtualXInputBattery battery{};
+    VirtualXInputVibrationRoute vibration{};
+
+    bool operator==(const ControllerSnapshotMessage&) const = default;
+};
+
 std::vector<std::byte> encodeFrame(MessageType type,
                                    std::uint64_t sequence,
                                    std::span<const std::byte> payload);
@@ -203,6 +266,12 @@ std::vector<std::byte> encodeStateSnapshot(
 std::vector<std::byte> encodeShutdown(std::uint64_t sequence);
 std::vector<std::byte> encodeError(std::uint64_t sequence,
                                    const ErrorMessage& message);
+std::vector<std::byte> encodeControllerUpdate(
+    std::uint64_t sequence, const ControllerUpdateMessage& message);
+std::vector<std::byte> encodeControllerQuery(
+    std::uint64_t sequence, const ControllerQueryMessage& message);
+std::vector<std::byte> encodeControllerSnapshot(
+    std::uint64_t sequence, const ControllerSnapshotMessage& message);
 
 bool decodeHello(const DecodedFrame& frame, HelloMessage& message,
                  std::string* error = nullptr);
@@ -223,6 +292,18 @@ bool decodeShutdown(const DecodedFrame& frame,
                     std::string* error = nullptr);
 bool decodeError(const DecodedFrame& frame, ErrorMessage& message,
                  std::string* error = nullptr);
+bool decodeControllerUpdate(const DecodedFrame& frame,
+                            ControllerUpdateMessage& message,
+                            std::string* error = nullptr);
+bool decodeControllerQuery(const DecodedFrame& frame,
+                           ControllerQueryMessage& message,
+                           std::string* error = nullptr);
+bool decodeControllerSnapshot(const DecodedFrame& frame,
+                              ControllerSnapshotMessage& message,
+                              std::string* error = nullptr);
+
+bool controllerSeatAuthorityMatches(std::uint32_t expectedSeatId,
+                                    std::uint32_t messageSeatId) noexcept;
 
 std::string tokenToHex(const SessionToken& token);
 std::optional<SessionToken> tokenFromHex(std::string_view text);
