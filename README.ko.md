@@ -353,7 +353,7 @@ Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled prob
 현재 기본 packet:
 
 ```text
-P3-CTRL-01 — XInput controlled state and slot remapping
+P3-CTRL-02 — DirectInput enumeration and visibility adapter
 ```
 
 작업 시작 전:

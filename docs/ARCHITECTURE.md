@@ -274,11 +274,16 @@ physical `XInputSetState` backend.
 Controller updates, queries, and snapshots are separate bounded little-endian
 Gate C messages with Seat authority and monotonic mutation sequences. The
 controlled host test launches two HydraSeat-owned probes whose logical slot 0
-maps to distinct synthetic sources and records expected/cross counters. Native
-x64/x86 execution remains pending for this branch. No ordinary XInput API hook,
-DLL proxy, DirectInput, Raw HID/SDL virtualization, or physical polling worker
-is part of this slice. A future polling worker must remain outside the Raw Input
-window procedure and feed normalized source state through this boundary.
+maps to distinct synthetic sources and records expected/cross counters. Windows
+run `32816241577` validates native x64/x86 and x64-host-to-x64/x86 execution;
+both architecture legs report state/capability/battery/vibration expected=2,
+every cross counter=0, `api_failures=0`, and `stale_accepted=0`. Source ownership
+uses the opaque source key rather than the optional runtime slot hint; a changed
+routing hint requires explicit remap and mapping-generation advance. No
+ordinary XInput API hook, DLL proxy, DirectInput, Raw HID/SDL virtualization, or
+physical polling worker is part of this slice. A future polling worker must
+remain outside the Raw Input window procedure and feed normalized source state
+through this boundary.
 
 See [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
 

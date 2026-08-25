@@ -505,7 +505,7 @@ The compatibility planner may truthfully advertise x86 controlled adapter availa
 
 ## P3-CTRL-01 — XInput controlled state and slot remapping
 
-**State:** CODE_COMPLETE
+**State:** VALIDATED
 
 **Goal**
 
@@ -556,8 +556,13 @@ Controlled targets have independent, queryable XInput-style state and the planne
   preserve the x86/x64 contract without serializing Windows XInput structs;
 - synthetic two-context/component tests and 14/14 portable Gate C regressions
   pass under strict GCC warnings;
-- native Windows x64/x86 and x64-host-to-x64/x86 process acceptance are declared
-  in CMake/CI but have not run for this branch, so the packet is not `VALIDATED`;
+- review fixed source ownership so the session-scoped opaque source key remains
+  the identity even if its optional runtime XInput slot hint changes; changing
+  that routing hint requires an explicit remap and mapping-generation advance;
+- Windows run `32816241577` passes native x64, Win32/x86, and x64-host-to-x64/x86
+  controlled process acceptance. Both architecture legs report state/capability/
+  battery/vibration expected counters of 2, every cross counter at 0,
+  `api_failures=0`, and `stale_accepted=0`;
 - ordinary XInput API interposition and physical controller polling/mutation stay
   out of scope.
 
@@ -569,7 +574,7 @@ Controlled targets have independent, queryable XInput-style state and the planne
 
 ## P3-CTRL-02 — DirectInput enumeration and visibility adapter
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 

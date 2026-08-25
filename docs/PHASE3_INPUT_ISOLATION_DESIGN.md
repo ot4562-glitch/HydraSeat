@@ -674,8 +674,11 @@ anti-cheat targets remain out of scope. See
    keys, validates distinct state/capabilities/battery/vibration, disconnects
    one Seat without changing the other, repeats teardown twice, and emits
    machine-readable expected/cross/API/stale counters.
-7. Strict portable component and Gate C regressions pass. Native x64/x86 and
-   x64-host-to-x64/x86 execution are still required before `VALIDATED`.
+7. Strict portable component and Gate C regressions pass. Windows run
+   `32816241577` validates native x64/x86 and x64-host-to-x64/x86 synthetic
+   acceptance with all state/capability/battery/vibration cross counters zero;
+   opaque source ownership remains independent from the runtime XInput slot hint,
+   while a changed routing hint requires explicit remap/generation advance.
 8. Detection through `XInputGetState(index)` is only a runtime availability
    hint. It does not prove stable identity, physical routing, or isolation.
    Ordinary XInput interposition, DirectInput, Raw HID/SDL, physical polling,

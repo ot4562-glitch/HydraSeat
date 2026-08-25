@@ -49,12 +49,13 @@ packet, queue, and token state. Native x64, Win32/x86, and x64-host-to-x64/x86
 controlled acceptance pass with expected keyboard/mouse events, zero cross-Seat
 events, and zero API/stale-token/queue-overflow failures.
 
-P3-CTRL-01 is `CODE_COMPLETE`. Adapter ABI v4, separate controller protocol
-messages, a bounded four-slot normalized XInput component, planner boundary,
-and deterministic component/process test source are implemented. Portable
-strict builds and all 14 Gate C regressions pass. Native x64/Win32 and the
-x64-host-to-x64/x86 controlled process matrix have not yet run for this branch,
-so no Windows or physical-controller validation is claimed.
+P3-CTRL-01 is `VALIDATED` by Windows run `32816241577`. Adapter ABI v4,
+separate controller protocol messages, a bounded four-slot normalized XInput
+component, planner boundary, and deterministic component/process tests are
+implemented. Native x64, Win32/x86, and x64-host-to-x64/x86 controlled
+acceptance pass. Both architecture legs report state/capability/battery/
+vibration expected=2, every cross counter=0, `api_failures=0`, and
+`stale_accepted=0`. Physical-controller routing is not implied.
 
 This is not a general game hook or a completed Gate C implementation. The
 controlled targets still call HydraSeat's adapter API directly; only the
@@ -827,13 +828,13 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] P3-API-03 cursor/clip/logical-focus/capture shim, adapter ABI v2, native x64/x86 24/24 CTest, cross-architecture two-probe isolation, and host-native global-state preservation (`32792381573`)
 - [x] P3-RAW-01 standalone probe, bounded trace/parser contract, explicit synthetic fixture, native x64/x86 28/28 CTest, retained/reviewed observed registration traces, and process teardown evidence (`32800513365`)
 - [x] P3-RAW-02 controlled Raw Input virtualization, native x64/x86 ordinary-API tests, x64-host-to-x64/x86 two-process no-cross-Seat acceptance, rollback, and existing polling/cursor regressions (`32806163164`)
-- [x] P3-CTRL-01 bounded normalized XInput state, adapter ABI v4, controller protocol, planner boundary, and portable component/Gate C regressions (`CODE_COMPLETE`)
+- [x] P3-CTRL-01 bounded normalized XInput state, adapter ABI v4, controller protocol, planner boundary, native x64/x86 tests, and x64-host-to-x64/x86 zero-cross acceptance (`32816241577`)
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Physical keyboard/mouse `WM_INPUT` and actual device-change trace (P3-HW-01)
-- [ ] P3-CTRL-01 native x64/x86 and x64-host-to-x64/x86 controlled process acceptance
+- [ ] P3-CTRL-02 controlled DirectInput enumeration/order/visibility acceptance
 - [ ] Physical controller polling/routing/vibration evidence
 
 - [ ] Adapter crash/watchdog recovery acceptance
@@ -848,8 +849,9 @@ last-registration-wins per usage, usage-local removal, accepted-but-not-echoed
 `RIDEV_DEVNOTIFY`, retained destroyed-HWND runtime values until replacement,
 and the architecture-specific structure sizes with 8-byte raw-buffer alignment.
 Physical `WM_INPUT` and device-change evidence remains P3-HW-01. P3-CTRL-01 is
-`CODE_COMPLETE`; its next step is native x64/x86 and x64-host-to-x64/x86
-controlled acceptance. P3-CTRL-02 remains blocked until that validation passes.
+`VALIDATED` by run `32816241577`; physical controller polling/routing/vibration
+remains a separate manual/production concern. P3-CTRL-02 is now READY for the
+controlled clean-room DirectInput enumeration/order/visibility boundary.
 
 The two-probe process test releases Probe B's virtual capture while asserting
 that Probe A retains its own capture, then shuts down Probe A and re-queries
