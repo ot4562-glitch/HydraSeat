@@ -63,6 +63,28 @@ function Resolve-ExistingPath {
     return $resolved.Path
 }
 
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][string]$PathValue)
+
+    $stream = [System.IO.File]::Open(
+        $PathValue,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::Read
+    )
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $bytes = $sha.ComputeHash($stream)
+            return ([System.BitConverter]::ToString($bytes)).Replace("-", "").ToLowerInvariant()
+        } finally {
+            if ($null -ne $sha) { $sha.Dispose() }
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Get-RelativeArtifactPath {
     param(
         [Parameter(Mandatory = $true)][string]$SessionPath,
@@ -248,7 +270,7 @@ function New-SharedCaseProfile {
     Write-JsonAtomic -PathValue $DestinationPath -Value $clone
     return [pscustomobject][ordered]@{
         derived_profile = [System.IO.Path]::GetFileName($DestinationPath)
-        sha256 = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        sha256 = Get-Sha256Hex -PathValue $DestinationPath
         device_id = [string]$candidate.device_id
         category = [string]$candidate.category
     }
@@ -587,13 +609,13 @@ function Test-RunnerSelfTest {
             )
         }
         Write-JsonAtomic -PathValue $profilePath -Value $fixture
-        $beforeHash = (Get-FileHash -LiteralPath $profilePath -Algorithm SHA256).Hash
+        $beforeHash = Get-Sha256Hex -PathValue $profilePath
         $snapshot = Get-ProfileSnapshot -ResolvedProfilePath $profilePath
         if (@($snapshot.ownership).Count -ne 4) {
             throw "Runner self-test expected four exclusive fixture input identities."
         }
         $shared = New-SharedCaseProfile -ProfileSnapshot $snapshot -DestinationPath $derivedPath -RequestedDeviceId "Keyboard:A"
-        $afterHash = (Get-FileHash -LiteralPath $profilePath -Algorithm SHA256).Hash
+        $afterHash = Get-Sha256Hex -PathValue $profilePath
         if ($beforeHash -ne $afterHash) {
             throw "Runner self-test modified the source profile while deriving shared-case evidence."
         }
@@ -657,7 +679,7 @@ if (-not [string]::IsNullOrWhiteSpace($Resume)) {
     if ($Stage -ne "Summarize") {
         $resolvedProfile = Resolve-ExistingPath ([string]$manifest.profile.source_path)
         $profileSnapshot = Get-ProfileSnapshot -ResolvedProfilePath $resolvedProfile
-        $currentHash = (Get-FileHash -LiteralPath $resolvedProfile -Algorithm SHA256).Hash.ToLowerInvariant()
+        $currentHash = Get-Sha256Hex -PathValue $resolvedProfile
         if ($currentHash -ne [string]$manifest.profile.sha256) {
             throw "The profile changed since this session started. Start a new acceptance session instead of mixing evidence."
         }
@@ -684,7 +706,7 @@ if (-not [string]::IsNullOrWhiteSpace($Resume)) {
 
     $sharedProfilePath = Join-Path $sessionPath "shared-case-profile.json"
     $sharedCase = New-SharedCaseProfile -ProfileSnapshot $profileSnapshot -DestinationPath $sharedProfilePath -RequestedDeviceId $SharedTestDeviceId
-    $profileHash = (Get-FileHash -LiteralPath $resolvedProfile -Algorithm SHA256).Hash.ToLowerInvariant()
+    $profileHash = Get-Sha256Hex -PathValue $resolvedProfile
     $now = Get-UtcString
     $manifest = [pscustomobject][ordered]@{
         schema_version = 1
