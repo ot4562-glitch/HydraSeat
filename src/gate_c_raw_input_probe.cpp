@@ -137,7 +137,7 @@ bool runPortableSelfTest() {
 #ifdef _WIN32
 
 constexpr wchar_t kWindowClassName[] = L"HydraSeatRawInputBehaviorProbeV1";
-constexpr std::uint32_t kApiError = std::numeric_limits<std::uint32_t>::max();
+constexpr std::uint32_t kApiError = (std::numeric_limits<std::uint32_t>::max)();
 
 std::uint64_t runtimeValue(const void* value) noexcept {
     return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(value));
@@ -915,7 +915,7 @@ bool runChildAndWait(const std::filesystem::path& executable) {
     }
     CloseHandle(process.hThread);
     const DWORD wait = WaitForSingleObject(process.hProcess, 20000);
-    DWORD exitCode = std::numeric_limits<DWORD>::max();
+    DWORD exitCode = (std::numeric_limits<DWORD>::max)();
     BOOL queried = FALSE;
     if (wait == WAIT_TIMEOUT) {
         TerminateProcess(process.hProcess, 2);
