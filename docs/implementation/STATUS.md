@@ -4,8 +4,8 @@
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
 - Current default packet: **P3-CTRL-02 — DirectInput enumeration and visibility adapter**
-- Current validated fork-main baseline: `1adbd314c41cb07bbabd4a63cb6d83a4214141bd` (final P3-RAW-02 fork-main validation)
-- Current validated Windows CI evidence: P3-CTRL-01 branch run `32816241577` passed native x64/x86 and x64-host-to-x64/x86 controlled state/capability/battery/vibration isolation; fork-main remains at the prior validated baseline until merge
+- Current validated fork-main baseline: `e2f01da08173e5150d9e9e729197847df4588a31` (merged P3-CTRL-01)
+- Current validated Windows CI evidence: fork-main run `32817021965` passed native x64/x86 full CTest, roadmap/current-packet validation, and the x64-host-to-x64/x86 controlled Gate C matrix; P3-CTRL-01 branch validation run `32816241577` records the zero-cross controller counters
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
