@@ -334,3 +334,45 @@ Rules:
 - release validation checks localized README/version/link consistency and supported-locale UI resource completeness.
 
 Traditional Chinese or additional locales may be added later through the same resource contract without changing core runtime protocols.
+
+## D-036 — Household shared-PC gaming is the product north star
+
+HydraSeat is not being built only as an input-isolation research harness. The product target is a household/friend shared-PC experience in which one sufficiently capable Windows gaming PC can become two or more simultaneous local gaming stations while preserving ordinary local-monitor performance and a clear path back to normal Windows.
+
+The roadmap must preserve these user outcomes:
+
+- two or more Seats can run different games/applications concurrently;
+- a Seat may use one or multiple monitors and its own keyboard, mouse, controller, and audio endpoints;
+- separate instances of the same multiplayer title are supported only when the exact game version, launcher/provider, account/license rules, single-instance behavior, and compatibility profile permit it;
+- HydraSeat never bypasses DRM, anti-cheat, account restrictions, launcher restrictions, protected processes, or single-instance protections to create same-title support;
+- setup, Start, Stop / Return to Windows, Reconfigure, diagnostics, and recovery must be understandable to a non-developer;
+- the added CPU/memory/input-latency overhead must be measured and low enough that sharing available machine headroom remains useful for gaming.
+
+When technical choices are otherwise equivalent, prefer the path that improves a reproducible two-Seat household workflow over a research-only capability that cannot be integrated into the user journey.
+
+## D-037 — Public open-source distribution is a gated product objective
+
+The intended long-term distribution model is a broadly reusable open-source project with public documentation, compatibility evidence, contribution-friendly profiles, and a community extension ecosystem.
+
+That intent does not change the repository's current legal state. Until a tracked project license and contribution terms are resolved:
+
+- documentation must not claim that the repository is already open source;
+- external code contributions and third-party source reuse must follow D-025 and `docs/CLEAN_ROOM_POLICY.md`;
+- release/community tooling may be designed for future public use, but redistribution rights must not be assumed;
+- P10-LIC-01 remains the formal release gate for project license, contribution policy, notices, and provenance.
+
+After that gate is satisfied, package, SDK, compatibility-profile, documentation, and contribution workflows should minimize friction for lawful community adoption without weakening security, provenance, compatibility, or recovery requirements.
+
+## D-038 — Every numbered roadmap phase ends with a phase-wide code verification gate
+
+A numbered roadmap phase is not complete merely because its final packet passes. Before Phase N is marked `Complete` and the default implementation flow advances to Phase N+1, HydraSeat performs a dedicated **Phase-close verification** across the whole phase.
+
+The verification is intentionally broader than packet review. It rechecks all phase-owned code, cross-packet integration, tests, contracts, documentation, and declared evidence as one system. At minimum it reviews normal and failure paths, resource ownership/teardown, rollback, stale/duplicate handling, no-cross-Seat invariants, ABI/protocol/schema compatibility, Windows x64/x86 behavior when applicable, manual/physical evidence, and performance/recovery claims required by that phase.
+
+Rules:
+
+- Phase-close verification is a review gate, not a multi-feature implementation packet and not an exception for opportunistic feature work.
+- Defects found during the audit reopen the owning packet or create a narrowly scoped repair task; the audit is rerun after the repair is validated.
+- A phase with unresolved required evidence remains `Current`/incomplete even if every implementation packet is individually `VALIDATED`.
+- `docs/implementation/STATUS.md` records the exact phase-close scope, reviewed commits, test/CI/manual evidence, findings, repairs, and final pass/fail result.
+- Cross-phase prerequisite work explicitly declared by the roadmap may still be pulled forward, but it does not waive the prior phase's close gate.

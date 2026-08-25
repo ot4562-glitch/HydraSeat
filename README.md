@@ -50,6 +50,21 @@ The intended user experience is not "three monitors attached to one PC". It is *
 
 Windows normally exposes global concepts such as foreground focus, cursor state, keyboard state, and a merged desktop. HydraSeat's long-term job is to virtualize or mediate the parts that matter to local gaming so each Seat behaves as independently as practical.
 
+### Product north star: one capable PC, multiple local players
+
+HydraSeat is intended to become a practical household/shared-PC product, not remain only a research harness. When a PC has enough CPU, GPU, memory, and display/input capacity, a family or group of friends should be able to use that one Windows gaming PC as two or more local gaming stations at the same time.
+
+Primary product scenarios are:
+
+- two people playing different games concurrently on separate Seats;
+- two people running separate instances of the same multiplayer title **only when** that title, launcher, account/license rules, single-instance behavior, and an explicit HydraSeat compatibility profile allow it;
+- one person gaming while another Seat runs a different game or ordinary application;
+- switching back to ordinary one-PC Windows without a reboot or developer-only recovery steps.
+
+HydraSeat does **not** bypass DRM, anti-cheat, account limits, launcher restrictions, protected processes, or game single-instance protections. Same-title multiseat is therefore a compatibility-specific capability, not a universal promise.
+
+Product success also means guided device/Seat setup, measured low overhead, exact compatibility evidence, safe install/update/uninstall/recovery, and formats that let a future community contribute profiles, compatibility results, diagnostics, and extensions. The long-term distribution goal is a broadly usable open-source project, but the repository license and contribution terms are **not yet formally declared**, so the current repository must not be described as open source until that legal gate is resolved.
+
 ### Management Seat and background operation
 
 HydraSeat is planned as a background runtime plus an on-demand control console, not as one permanently visible configuration window.

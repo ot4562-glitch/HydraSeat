@@ -2,11 +2,13 @@
 
 ## 1. Project identity
 
-HydraSeat is an experimental Windows local gaming multiseat framework written primarily in C++20. The repository license is not yet formally declared; do not describe it as open source or copy third-party source until the tracked license and contribution terms are resolved.
+HydraSeat is an experimental Windows local gaming multiseat framework written primarily in C++20. The repository license is not yet formally declared; long-term public open-source distribution is a product goal, not the current legal status. Do not describe the current repository as open source or copy third-party source until the tracked license and contribution terms are resolved.
 
 The product goal is:
 
 > Make one physical Windows PC feel like multiple local gaming PCs. Each Seat may own one or more displays, keyboard/mouse/controller devices, audio endpoints, processes, windows, virtual cursor/focus state, profiles, and an optional Seat shell. Ordinary local-monitor use must not require a VM, RDP, or streaming.
+
+The primary human use case is a household or group of friends sharing the unused headroom of one capable gaming PC: different games may run concurrently on separate Seats, and separate instances of the same title are in scope only when the title/launcher/account/license/single-instance policy and an explicit compatibility profile permit it. Product work must optimize for a non-developer being able to configure Seats, start a split session, understand compatibility limits, and safely return to ordinary Windows.
 
 A **Seat**, not a monitor or game window, is the primary ownership unit.
 
@@ -40,6 +42,23 @@ Required behavior:
 - update `docs/implementation/STATUS.md` with truthful evidence.
 
 Use `docs/implementation/CODEX_PLAYBOOK.md` as the standard workflow and prompt contract.
+
+### Phase-close verification exception
+
+The roadmap **phase** is the numbered product phase in `docs/ROADMAP.md` and `docs/implementation/README.md`, not a conversation turn or one coding packet.
+
+Before a numbered phase may change to `Complete`, run one dedicated **Phase-close verification** task across the entire phase. This is a review and verification gate, not permission to implement multiple feature packets at once.
+
+The phase-close task must:
+
+- re-read every packet, decision, architecture contract, test plan, and status entry that defines or was changed by that phase;
+- inspect the complete phase-owned code and tests, including interactions between packets rather than reviewing only the final packet diff;
+- re-run the broadest applicable phase regression matrix, including required Windows x64/x86, process/ABI, recovery, performance, and physical/manual gates;
+- verify error paths, stale/duplicate input, resource ownership, rollback, teardown, no-cross-Seat behavior, compatibility claims, and documentation;
+- identify temporary shortcuts, dead/unused paths, warning suppressions, TODOs, false capability claims, or assumptions that accumulated across the phase;
+- record a phase-close evidence summary in `docs/implementation/STATUS.md`.
+
+If the audit finds a defect, do not repair unrelated defects inside the audit. Reopen the owning packet or create one narrowly scoped repair packet/task, fix and validate it, then rerun the phase-close verification. The next numbered phase may start only after the prior phase's close verification passes, except for an already-declared cross-phase prerequisite explicitly permitted by the roadmap.
 
 ## 4. Current status and next task
 

@@ -7,9 +7,11 @@ This document maps the user's intended product behavior to the design decisions,
 | Requirement | Design decisions | Primary packets | Required evidence |
 | --- | --- | --- | --- |
 | One physical Windows PC feels like multiple local PCs | D-001, D-003, D-004, D-030 | P4-RUN-01, P5-LAUNCH-01, P7-SHELL-01 | Two active Seats, host-owned runtime, distinct shell/process/display/input state |
+| A household or group of friends can share one capable gaming PC as multiple local gaming stations | D-001, D-003, D-036 | P5-MVP-02, P7-SHELL-01, P8-INST-01, P10-UX-01 | A non-developer completes a two-Seat session on one machine, uses both Seats concurrently, and returns to ordinary Windows without reboot |
 | Seat, not monitor, is the unit | D-001, D-002 | P2-SEAT-01, P4-DIS-02, P7-SHELL-01 | Seat 1 owns LG+Samsung while Seat 2 owns BenQ |
 | One Seat may own multiple monitors | D-002, D-013, D-015 | P4-DIS-01/02/03, P4-WIN-02 | Mixed-DPI multi-monitor physical acceptance and hot-plug recovery |
 | Different games/apps run concurrently | D-014, D-028 | P3-E-03, P5-MVP-02, P6 provider/profile packets | Exact two-target compatibility entries and session evidence |
+| The same multiplayer title may run in separate Seats only when the exact title/provider/account/license/single-instance rules allow it | D-006, D-007, D-028, D-036 | P6 profile/provider packets, P5-COMPAT-01, P10-COMPAT-01 | Exact-version matrix entry proves two lawful independent instances without bypassing protection or launcher policy |
 | Keyboard/mouse do not bleed into the other Seat | D-005, D-006, D-008, D-011 | P3-API/RAW packets, P3-D-02, P3-E-03 | Zero measured cross-Seat key/button/movement events |
 | Both games may believe they are active | D-005, D-006 | P3-API-03, controlled probes, P3-E profiles | Per-process focus/capture API results and game profile evidence |
 | Independent visible cursors per Seat | D-015 | P3-API-03, P7-CURSOR-01 | Two cursor overlays within disjoint Seat display groups and latency report |
@@ -23,6 +25,7 @@ This document maps the user's intended product behavior to the design decisions,
 | Whole-machine controls stay on the Management Seat | D-031 | P4-CTRL-01, P7-SHELL-01 | Console opens on Seat 1 primary by default, falls back visibly, and other Seats cannot stop/reconfigure by default |
 | User can return the split PC to ordinary Windows with one clear operation | D-033 | P4-CTRL-02, P8-RESET-01 | Stop/Return transaction verifies rollback; all monitors/input return to normal without reboot |
 | User can reconfigure monitors/input with a few guided steps | D-034 | P4-CTRL-02, Phase 6 profile UI | Active session safely stops, editor opens on Management Seat, validation/save/start uses a new plan |
+| A non-developer can install, configure, start, stop, diagnose, recover, and uninstall the product | D-020, D-032, D-033, D-034, D-036 | P4-CTRL-01/02, P8-INST-01, P8-RESET-01, P10-UX-01 | Clean-machine tester completes the supported lifecycle without developer assistance or mandatory reboot recovery |
 | User can choose manual, hidden background, or automatic validated startup | D-032 | P8-BOOT-01 | Reboot/logon matrix proves Manual, BackgroundIdle, and AutoActivateValidatedSession behavior |
 | UI/UX and end-user README are available in English, Korean, and Simplified Chinese | D-035 | P7-I18N-01, P7-A11Y-01, P10-UX-01 | `en-US`/`ko-KR`/`zh-CN` catalog parity, three-language critical-flow acceptance, and README language/version/status parity |
 | Startup is silent and ordinary use has no repeated UAC | D-004, D-020 | P8-PRIV-01, P8-BOOT-01 | Standard-user logon/reboot acceptance |
@@ -37,10 +40,11 @@ This document maps the user's intended product behavior to the design decisions,
 | Performance is good enough for gaming | D-021, D-029 | P3-MET-01, P5-MET-01, P10-PERF-01 | p50/p95/p99 latency and resource budgets on reference topology |
 | Product survives long use and repeated failures | D-020, D-029 | P8-SOAK-01, P10-REL-01 | Soak/fault/reboot/resource-leak campaign |
 | Release is legally and technically distributable | D-025 | P10-LIC-01, P10-PKG-01, P10-RC/GA packets | License, notices, SBOM, signatures, provenance, verified artifacts |
+| HydraSeat can become a broadly reusable open-source/community project after the legal gate is resolved | D-025, D-037 | P9 ecosystem packets, P10-LIC-01, P10-PKG-01, P10-UX-01 | Tracked license/contribution terms, provenance-safe packages, contribution docs, and community-facing compatibility/profile workflows |
 
 ## Product-defining acceptance scenario
 
-The minimum scenario that proves the original user intent is:
+The minimum scenario that proves the original user intent is a household/friend shared-PC session:
 
 ```text
 One Windows PC
@@ -81,6 +85,9 @@ Required observable behavior:
 10. `Reconfigure` safely returns to ordinary Windows, edits assignments on the Management Seat, validates/saves a new plan, and may start it again.
 11. Manual, BackgroundIdle, and AutoActivateValidatedSession startup modes behave exactly as selected and unsafe auto-activation falls back to idle.
 12. A report records versions, topology, backends, latency, drops, bleed, and rollback.
+13. A non-developer can identify the two Seat layouts, start the session, see why an unsupported profile is blocked, and return the PC to ordinary Windows without developer-only recovery steps.
+
+An additional same-title scenario may be added for a specific multiplayer game only after its exact launcher/provider, account/license terms, single-instance behavior, protection model, and compatibility profile are verified. It is not required for the baseline two-different-game MVP and never authorizes a DRM, anti-cheat, launcher, account, or protected-process bypass.
 
 This scenario is reached by P3-E-03, P4 physical display/window acceptance, P5-MVP-02, P5-HOT-01, P7 shell packets, and Phase 8 recovery/productization. No earlier synthetic test satisfies the complete requirement.
 
