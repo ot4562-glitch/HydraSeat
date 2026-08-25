@@ -4,8 +4,8 @@
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
 - Current default packet: **P3-RAW-02 — Controlled Raw Input virtualization shim**
-- Current validated implementation head: `ec704d4` (P3-RAW-01 branch; final merge SHA pending)
-- Current validated Windows CI evidence: run `32800513365`; native x64/x86 28/28 CTest, retained observed Raw Input registration traces, repeated process teardown, and the existing Gate C cross-architecture job passed
+- Current validated fork-main baseline: `f6933982d096851896d995bbce67d59b939c8bdd` (merged P3-RAW-01)
+- Current validated Windows CI evidence: fork-main run `32801563240`; x64/x86 28/28 CTest, roadmap/current-packet validation, observed Raw Input trace verification/upload, and the existing Gate C cross-architecture job passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
