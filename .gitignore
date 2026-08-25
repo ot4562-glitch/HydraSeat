@@ -59,6 +59,7 @@ __pycache__/
 hydra_input_lab*.jsonl
 phase3-input-lab*.jsonl
 hydra_gate_c*.jsonl
+hydra_gate_c_metrics*.json
 gate-c*.jsonl
 raw-input-observed*.json
 

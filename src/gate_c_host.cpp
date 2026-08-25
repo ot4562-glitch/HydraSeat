@@ -3,6 +3,7 @@
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/gate_c_probe_snapshot.hpp"
 #include "hydra/gate_c_transport.hpp"
+#include "hydra/input_metrics.hpp"
 #include "hydra/input_observation.hpp"
 #include "hydra/input_router.hpp"
 #include "hydra/virtual_input_state.hpp"
@@ -15,7 +16,9 @@
 #include <deque>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -62,6 +65,8 @@ struct HostOptions {
         hydra::gatec::ProcessArchitecture::Unknown};
     std::string profilePath{"workspace_config.json"};
     std::string tracePath{"hydra_gate_c_host.jsonl"};
+    std::string metricsReportPath{"hydra_gate_c_metrics.json"};
+    bool metricsDiagnostic{false};
     bool selfTest{false};
     bool architectureSelfTest{false};
     bool baselineSelfTest{false};
@@ -90,7 +95,9 @@ void printUsage(std::ostream& output) {
         << "                     --shim <hydra_gate_c_shim.dll>\n"
         << "  hydra_gate_c_host --protocol-error-self-test [--target <hydra_gate_c_target.exe>]\n"
         << "  hydra_gate_c_host [--profile <workspace_config.json>] [--trace <file.jsonl>]\n"
+        << "                     [--metrics-report <file.json>] [--metrics-diagnostic]\n"
         << "                     [--target <hydra_gate_c_target.exe>]\n\n"
+        << "Metrics are redacted by default; --metrics-diagnostic retains key/button IDs.\n"
         << "The host launches only HydraSeat's controlled target executable. It does\n"
         << "not inject, hook, hide devices, or attach to a commercial game.\n";
 }
@@ -208,6 +215,10 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
             options.profilePath = wideToUtf8(argv[++index]);
         } else if (argument == L"--trace" && index + 1 < argc) {
             options.tracePath = wideToUtf8(argv[++index]);
+        } else if (argument == L"--metrics-report" && index + 1 < argc) {
+            options.metricsReportPath = wideToUtf8(argv[++index]);
+        } else if (argument == L"--metrics-diagnostic") {
+            options.metricsDiagnostic = true;
         } else if (argument == L"--self-test") {
             options.selfTest = true;
         } else if (argument == L"--architecture-self-test") {
@@ -370,7 +381,10 @@ struct TargetSession {
 
 class TargetInputWriter {
 public:
-    explicit TargetInputWriter(TargetSession& session) : m_session(session) {}
+    TargetInputWriter(TargetSession& session,
+                      hydra::InputMetricsRecorder* metrics)
+        : m_session(session),
+          m_metrics(metrics) {}
     ~TargetInputWriter() { stop(); }
 
     TargetInputWriter(const TargetInputWriter&) = delete;
@@ -386,10 +400,18 @@ public:
         return true;
     }
 
-    bool enqueue(const InputEventMessage& input) {
+    bool enqueue(const InputEventMessage& input,
+                 std::uint64_t correlationId,
+                 hydra::InputMetricEventClass eventClass,
+                 std::uint32_t detailCode) {
         if (m_failed.load() || m_stopping.load()) {
             return false;
         }
+
+        QueuedInputFrame queued;
+        queued.correlationId = correlationId;
+        queued.eventClass = eventClass;
+        queued.detailCode = detailCode;
 
         {
             std::scoped_lock lock(m_mutex);
@@ -397,15 +419,29 @@ public:
                 return false;
             }
             if (m_queue.size() >= kMaximumQueuedFrames) {
-                ++m_droppedFrames;
+                const auto dropped =
+                    m_droppedFrames.fetch_add(1u, std::memory_order_relaxed) + 1u;
+                m_queueDepth.store(
+                    static_cast<std::uint32_t>(m_queue.size()),
+                    std::memory_order_relaxed);
+                recordMetric(hydra::InputMetricStage::RouteDropped, queued,
+                             hydra::monotonicInputMetricTimestampMicros(), dropped);
                 return false;
             }
             const auto sequence = m_session.nextSequence++;
-            auto frame = hydra::gatec::encodeInputEvent(sequence, input);
-            if (frame.empty()) {
+            queued.frame = hydra::gatec::encodeInputEvent(sequence, input);
+            if (queued.frame.empty()) {
                 return false;
             }
-            m_queue.push_back(std::move(frame));
+            m_queue.push_back(std::move(queued));
+            const auto depth = static_cast<std::uint32_t>(m_queue.size());
+            m_queueDepth.store(depth, std::memory_order_relaxed);
+            const auto highWater = m_queueHighWater.load(std::memory_order_relaxed);
+            if (depth > highWater) {
+                m_queueHighWater.store(depth, std::memory_order_relaxed);
+            }
+            recordMetric(hydra::InputMetricStage::RouteEnqueued, m_queue.back(),
+                         hydra::monotonicInputMetricTimestampMicros());
         }
         m_condition.notify_one();
         return true;
@@ -418,9 +454,17 @@ public:
         m_stopping.store(true);
         {
             std::scoped_lock lock(m_mutex);
-            m_droppedFrames.fetch_add(
-                static_cast<std::uint64_t>(m_queue.size()));
+            const auto discarded = static_cast<std::uint64_t>(m_queue.size());
+            if (discarded != 0u) {
+                const auto dropped = m_droppedFrames.fetch_add(
+                    discarded, std::memory_order_relaxed) + discarded;
+                recordMetric(hydra::InputMetricStage::RouteDropped,
+                             m_queue.back(),
+                             hydra::monotonicInputMetricTimestampMicros(),
+                             dropped);
+            }
             m_queue.clear();
+            m_queueDepth.store(0u, std::memory_order_relaxed);
         }
         m_thread.request_stop();
         m_condition.notify_all();
@@ -438,9 +482,42 @@ public:
     }
 
 private:
+    struct QueuedInputFrame {
+        std::vector<std::byte> frame;
+        std::uint64_t correlationId{0};
+        hydra::InputMetricEventClass eventClass{hydra::InputMetricEventClass::None};
+        std::uint32_t detailCode{0};
+    };
+
+    void recordMetric(
+        hydra::InputMetricStage stage,
+        const QueuedInputFrame& queued,
+        std::uint64_t timestampMicros,
+        std::optional<std::uint64_t> droppedOverride = std::nullopt) noexcept {
+        if (m_metrics == nullptr) return;
+
+        hydra::InputMetricSample sample;
+        sample.correlationId = queued.correlationId;
+        sample.timestampMicros = timestampMicros;
+        sample.stage = stage;
+        sample.eventClass = queued.eventClass;
+        sample.expectedSeatId = m_session.seatId;
+        // Host queue/write stages describe routing intent only. Actual receiver
+        // identity stays unknown until a target-side apply/query sample confirms it.
+        sample.receivingSeatId = 0u;
+        sample.targetProcessId = m_session.process.processId();
+        sample.receivingProcessId = 0u;
+        sample.detailCode = queued.detailCode;
+        sample.queueDepth = m_queueDepth.load(std::memory_order_relaxed);
+        sample.queueHighWater = m_queueHighWater.load(std::memory_order_relaxed);
+        sample.queueDroppedCount = droppedOverride.value_or(
+            m_droppedFrames.load(std::memory_order_relaxed));
+        (void)m_metrics->tryRecord(sample);
+    }
+
     void writerLoop(std::stop_token token) {
         while (true) {
-            std::vector<std::byte> frame;
+            QueuedInputFrame queued;
             {
                 std::unique_lock lock(m_mutex);
                 m_condition.wait(lock, [&] {
@@ -453,14 +530,19 @@ private:
                 if (m_queue.empty()) {
                     continue;
                 }
-                frame = std::move(m_queue.front());
+                queued = std::move(m_queue.front());
                 m_queue.pop_front();
+                m_queueDepth.store(
+                    static_cast<std::uint32_t>(m_queue.size()),
+                    std::memory_order_relaxed);
+                recordMetric(hydra::InputMetricStage::RouteDequeued, queued,
+                             hydra::monotonicInputMetricTimestampMicros());
             }
 
             std::string error;
             std::uint32_t systemError = 0;
             if (!m_session.channel.writeFrame(
-                    frame, kWriteTimeoutMs, &error, &systemError)) {
+                    queued.frame, kWriteTimeoutMs, &error, &systemError)) {
                 {
                     std::scoped_lock lock(m_errorMutex);
                     m_lastError = error + " (" +
@@ -469,9 +551,18 @@ private:
                 m_failed.store(true);
                 m_stopping.store(true);
                 std::scoped_lock lock(m_mutex);
+                const auto discarded =
+                    static_cast<std::uint64_t>(m_queue.size()) + 1u;
+                const auto dropped = m_droppedFrames.fetch_add(
+                    discarded, std::memory_order_relaxed) + discarded;
                 m_queue.clear();
+                m_queueDepth.store(0u, std::memory_order_relaxed);
+                recordMetric(hydra::InputMetricStage::RouteDropped, queued,
+                             hydra::monotonicInputMetricTimestampMicros(), dropped);
                 break;
             }
+            recordMetric(hydra::InputMetricStage::RouteWritten, queued,
+                         hydra::monotonicInputMetricTimestampMicros());
         }
     }
 
@@ -479,15 +570,18 @@ private:
     static constexpr std::uint32_t kWriteTimeoutMs = 1000;
 
     TargetSession& m_session;
+    hydra::InputMetricsRecorder* m_metrics{nullptr};
     mutable std::mutex m_errorMutex;
     std::string m_lastError;
     std::mutex m_mutex;
     std::condition_variable m_condition;
-    std::deque<std::vector<std::byte>> m_queue;
+    std::deque<QueuedInputFrame> m_queue;
     std::jthread m_thread;
     std::atomic<bool> m_stopping{false};
     std::atomic<bool> m_failed{false};
     std::atomic<std::uint64_t> m_droppedFrames{0};
+    std::atomic<std::uint32_t> m_queueDepth{0};
+    std::atomic<std::uint32_t> m_queueHighWater{0};
 };
 
 InputEventMessage toProtocolEvent(const RawInputEvent& event) {
@@ -1977,11 +2071,17 @@ private:
             }
         }
 
+        hydra::InputMetricsRecorder metrics(
+            hydra::kDefaultInputMetricsCapacity,
+            m_options.metricsDiagnostic
+                ? hydra::InputMetricsPrivacyMode::Diagnostic
+                : hydra::InputMetricsPrivacyMode::Redacted);
+
         std::vector<std::unique_ptr<TargetInputWriter>> writers;
         std::unordered_map<SeatId, TargetInputWriter*> writerBySeat;
         writers.reserve(sessions.size());
         for (auto& session : sessions) {
-            auto writer = std::make_unique<TargetInputWriter>(session);
+            auto writer = std::make_unique<TargetInputWriter>(session, &metrics);
             if (!writer->start()) {
                 for (auto& started : writers) started->stop();
                 cleanupSessions(sessions, true);
@@ -2001,7 +2101,10 @@ private:
                 if (found == writerBySeat.end() || found->second == nullptr) {
                     return false;
                 }
-                return found->second->enqueue(toProtocolEvent(event));
+                return found->second->enqueue(
+                    toProtocolEvent(event), event.sequence,
+                    hydra::classifyInputMetricEvent(event),
+                    hydra::inputMetricDetailCode(event));
             });
         const auto bindings = observation.rebuildBindings();
         std::cout << "Gate C host bound " << bindings.boundDevices
@@ -2014,6 +2117,14 @@ private:
         hydra::InputTraceWriter trace(m_options.tracePath);
         hydra::InputRouter router;
         router.setGlobalCallback([&](const RawInputEvent& event) {
+            hydra::InputMetricSample physical;
+            physical.correlationId = event.sequence;
+            physical.timestampMicros = event.monotonicTimestampMicros;
+            physical.stage = hydra::InputMetricStage::PhysicalObserved;
+            physical.eventClass = hydra::classifyInputMetricEvent(event);
+            physical.detailCode = hydra::inputMetricDetailCode(event);
+            (void)metrics.tryRecord(physical);
+
             const InputRouteRecord route = observation.processInput(event, false);
             if (trace.isOpen()) trace.writeInput(event, route);
         });
@@ -2070,9 +2181,53 @@ private:
                       << " input frames; those route attempts were marked failed.\n";
         }
 
+        constexpr std::uint64_t kRollbackMetricCorrelationId =
+            (std::numeric_limits<std::uint64_t>::max)();
+        hydra::InputMetricSample rollbackStart;
+        rollbackStart.correlationId = kRollbackMetricCorrelationId;
+        rollbackStart.timestampMicros = hydra::monotonicInputMetricTimestampMicros();
+        rollbackStart.stage = hydra::InputMetricStage::RollbackStarted;
+        (void)metrics.tryRecord(rollbackStart);
+
         const bool cleanExit = cleanupSessions(sessions, writerFailure);
+
+        auto rollbackComplete = rollbackStart;
+        rollbackComplete.timestampMicros = hydra::monotonicInputMetricTimestampMicros();
+        rollbackComplete.stage = hydra::InputMetricStage::RollbackCompleted;
+        (void)metrics.tryRecord(rollbackComplete);
+
+        bool metricsFailure = false;
+        const auto metricsSnapshot = metrics.snapshot();
+        hydra::InputMetricsReport metricsReport;
+        const auto metricsResult =
+            hydra::buildInputMetricsReport(metricsSnapshot, metricsReport);
+        if (metricsResult != hydra::InputMetricsReportResult::Success) {
+            std::cerr << "Gate C metrics report failed: "
+                      << hydra::inputMetricsReportResultName(metricsResult) << '\n';
+            metricsFailure = true;
+        } else {
+            std::ofstream metricsOutput(
+                m_options.metricsReportPath,
+                std::ios::out | std::ios::trunc | std::ios::binary);
+            if (!metricsOutput.is_open()) {
+                std::cerr << "Gate C metrics report could not open: "
+                          << m_options.metricsReportPath << '\n';
+                metricsFailure = true;
+            } else {
+                metricsOutput << hydra::encodeInputMetricsReportJson(metricsReport)
+                              << '\n';
+                metricsOutput.flush();
+                if (!metricsOutput.good()) {
+                    std::cerr << "Gate C metrics report write failed: "
+                              << m_options.metricsReportPath << '\n';
+                    metricsFailure = true;
+                }
+            }
+        }
         SetConsoleCtrlHandler(consoleControlHandler, FALSE);
-        return writerFailure || !cleanExit ? 46 : EXIT_SUCCESS;
+        return writerFailure || !cleanExit || metricsFailure
+                   ? 46
+                   : EXIT_SUCCESS;
     }
 
     HostOptions m_options;

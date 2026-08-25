@@ -100,6 +100,7 @@ set(HYDRA_HARDWARE_HEADERS
 
 set(HYDRA_HEADERS
     include/hydra/directinput_policy.hpp
+    include/hydra/input_metrics.hpp
     include/hydra/input_router.hpp
     include/hydra/input_isolation.hpp
     include/hydra/input_observation.hpp
@@ -151,6 +152,22 @@ if(MSVC)
     target_compile_options(hydra_directinput_policy PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_directinput_policy PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P3-MET-01 fixed-capacity, process-local metrics recorder and deterministic
+# off-path report generator. The recorder performs no I/O on the input path.
+add_library(hydra_input_metrics STATIC
+    src/input_metrics.cpp
+    include/hydra/input_metrics.hpp
+)
+set_target_properties(hydra_input_metrics PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+if(MSVC)
+    target_compile_options(hydra_input_metrics PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_input_metrics PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
@@ -303,6 +320,22 @@ if(MSVC)
     target_compile_options(hydra_plan PRIVATE /W4 /permissive-)
 endif()
 
+# P3-MET-01 report/self-test CLI. Live producers use hydra_input_metrics
+# directly; report generation remains outside latency-sensitive callbacks.
+add_executable(hydra_input_metrics_cli
+    src/input_metrics_cli.cpp
+)
+set_target_properties(hydra_input_metrics_cli PROPERTIES
+    OUTPUT_NAME hydra_input_metrics
+)
+target_link_libraries(hydra_input_metrics_cli PRIVATE hydra_input_metrics)
+if(MSVC)
+    target_compile_options(hydra_input_metrics_cli PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_input_metrics_cli PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # Phase 3 Gate A/B observation and explicit-routing harness.
 # The interactive windows are Windows-only, while --self-test is portable.
 add_executable(hydra_input_lab
@@ -404,7 +437,8 @@ add_executable(hydra_gate_c_host
     include/hydra/input_isolation.hpp
     include/hydra/workspace_manager.hpp
 )
-target_link_libraries(hydra_gate_c_host PRIVATE hydra_gate_c_core hydra_hardware)
+target_link_libraries(hydra_gate_c_host PRIVATE
+    hydra_gate_c_core hydra_hardware hydra_input_metrics)
 hydra_set_gate_c_output(hydra_gate_c_host)
 if(WIN32)
     target_link_libraries(hydra_gate_c_host PRIVATE ${WIN32_LIBS})
@@ -565,6 +599,23 @@ if(WIN32)
     add_test(NAME DirectInputNativeObservationSelfTest
              COMMAND hydra_directinput_probe --native-observation-self-test)
 endif()
+
+# P3-MET-01 recorder/report contract, deterministic fixture, and CLI checks.
+add_executable(input_metrics_tests
+    tests/test_input_metrics.cpp
+)
+target_link_libraries(input_metrics_tests PRIVATE hydra_input_metrics)
+if(MSVC)
+    target_compile_options(input_metrics_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(input_metrics_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME InputMetricsTests COMMAND input_metrics_tests)
+add_test(NAME InputMetricsCliSelfTest
+         COMMAND hydra_input_metrics_cli --self-test)
+add_test(NAME InputMetricsFixtureReport
+         COMMAND hydra_input_metrics_cli --fixture-report)
 
 # C ABI adapter tests exercise independent process-local contexts and
 # GetAsyncKeyState/GetKeyboardState-style semantics without installing hooks.
