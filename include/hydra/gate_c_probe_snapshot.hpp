@@ -11,9 +11,9 @@
 namespace hydra::gatec {
 
 inline constexpr std::uint32_t kProbeSnapshotMagic = 0x31535048u; // "HPS1".
-inline constexpr std::uint16_t kProbeSnapshotSchemaVersion = 2;
+inline constexpr std::uint16_t kProbeSnapshotSchemaVersion = 3;
 inline constexpr std::uint16_t kProbeSnapshotHeaderBytes = 16;
-inline constexpr std::size_t kProbeSnapshotWireBytes = 848;
+inline constexpr std::size_t kProbeSnapshotWireBytes = 904;
 inline constexpr std::size_t kMaximumProbeSnapshotBytes = 1024;
 
 struct ProbeRect {
@@ -83,6 +83,28 @@ struct AdapterInputSnapshot {
     bool operator==(const AdapterInputSnapshot&) const = default;
 };
 
+struct RawInputApiSnapshot {
+    bool enabled{false};
+    bool registrationLifecyclePassed{false};
+    bool registrationQueryPassed{false};
+    bool dataQueryPassed{false};
+    bool bufferReadPassed{false};
+    std::uint32_t registeredCount{0};
+    std::uint32_t keyboardExpected{0};
+    std::uint32_t keyboardCross{0};
+    std::uint32_t mouseExpected{0};
+    std::uint32_t mouseCross{0};
+    std::uint32_t dataReads{0};
+    std::uint32_t bufferPackets{0};
+    std::uint32_t apiFailures{0};
+    std::uint32_t destroyedTargetFailures{0};
+    std::uint32_t staleTokenFailures{0};
+    std::uint32_t queueOverflowFailures{0};
+    std::uint32_t lastSystemError{0};
+
+    bool operator==(const RawInputApiSnapshot&) const = default;
+};
+
 struct ProbeComparison {
     std::uint16_t schemaVersion{kProbeSnapshotSchemaVersion};
     std::uint64_t sequence{0};
@@ -95,6 +117,7 @@ struct ProbeComparison {
 
     OsInputSnapshot os;
     AdapterInputSnapshot adapter;
+    RawInputApiSnapshot rawInput;
 
     bool asyncDownMatches{false};
     bool keyStateDownMatches{false};
@@ -126,7 +149,7 @@ struct ProbeSnapshotDecodeResult {
 void updateProbeComparison(ProbeComparison& comparison) noexcept;
 
 // The wire format is fixed-width little-endian, versioned, and exactly
-// kProbeSnapshotWireBytes bytes for schema version 2.
+// kProbeSnapshotWireBytes bytes for schema version 3.
 std::vector<std::byte> encodeProbeComparison(
     const ProbeComparison& comparison);
 ProbeSnapshotDecodeResult decodeProbeComparison(

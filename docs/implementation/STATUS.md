@@ -4,7 +4,7 @@
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
 - Current default packet: **P3-RAW-02 — Controlled Raw Input virtualization shim**
-- Current validated fork-main baseline: `f6933982d096851896d995bbce67d59b939c8bdd` (merged P3-RAW-01)
+- Current validated fork-main baseline: `e45c86d83b440c8a1653dba01084cc3ea6ea1b71` (merged P3-RAW-01 documentation baseline)
 - Current validated Windows CI evidence: fork-main run `32801563240`; x64/x86 28/28 CTest, roadmap/current-packet validation, observed Raw Input trace verification/upload, and the existing Gate C cross-architecture job passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
@@ -39,7 +39,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-API-02 Startup-loaded polling shim for controlled probe | VALIDATED | P3-API-01, P3-ARCH-01 | Windows run `32780563364`: native x64/x86 polling-shim CTest plus x64-host-to-x64/x86 ordinary-API two-probe isolation passed |
 | P3-API-03 Cursor/focus/capture shim for controlled probe | VALIDATED | P3-API-02 | Windows run `32792381573`: x64/x86 24/24 CTest plus x64-host-to-x64/x86 Seat-local cursor/clip/logical focus/capture and host-native global-state preservation passed |
 | P3-RAW-01 Raw Input registration/data probe | VALIDATED | P3-API-01 | Windows run `32800513365`: native x64/x86 28/28 CTest, retained observed registration traces, replacement/remove/destroyed-HWND evidence, and repeated process teardown passed |
-| P3-RAW-02 Raw Input virtualization shim | READY | P3-RAW-01, P3-API-02 | Next packet: two HydraSeat-owned probes receive only their Seat synthetic Raw Input stream through ordinary registration/data APIs |
+| P3-RAW-02 Raw Input virtualization shim | CODE_COMPLETE | P3-RAW-01, P3-API-02 | Portable 20/20 CTest and strict component/ABI tests pass; native Windows x64/x86 ordinary-API, two-process, rollback, and cross-architecture evidence is pending |
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
 | P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
 | P3-HW-01 Gate A/B/C physical acceptance runner | READY | P3-QUEUE-01 | User-run two-keyboard/two-pointing-device traces and report |
@@ -70,6 +70,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | Gate C physical controlled-process routing | PENDING | Two physical input sets driving two controlled target adapter states |
 | Gate C polling API interposition | VALIDATED (CONTROLLED CI) | HydraSeat-owned x64/x86 probes call the three ordinary polling APIs through the opt-in shim; physical/game acceptance is still separate |
 | Gate C Raw Input API behavior baseline | VALIDATED (CONTROLLED CI) | Run `32800513365` retained native x64/x86 registration traces and validated replacement/remove/destroyed-HWND/process teardown; physical `WM_INPUT` and hot-plug remain P3-HW-01 |
+| Gate C Raw Input API virtualization | CODE_COMPLETE (WINDOWS CI PENDING) | Four-API controlled shim, Seat-local registrations/queue/tokens, synthetic `WM_INPUT`, data/buffer reads, and x86/x64 layouts pass portable tests; native x64/x86 process acceptance is not yet recorded |
 | Gate C watchdog/crash recovery | NOT IMPLEMENTED | Forced host/target/adapter failure and clean restoration |
 | Gate D device cloaking | NOT IMPLEMENTED | Guarded session-cloak experiment with spare input and automatic rollback |
 | Gate E two-game zero bleed | NOT IMPLEMENTED | Two distinct profile entries and objective cross-Seat metrics |
@@ -168,19 +169,36 @@ Known limitations: no Raw Input hook, synthetic HRAWINPUT/WM_INPUT, virtual queu
 Rollback result: the standalone probe tracks only its own keyboard/mouse registrations, records bounded best-effort removal, makes cleanup idempotent, destroys owned windows, and contains teardown children in a kill-on-close Job Object
 Next packet: P3-RAW-02 is READY; implement controlled Raw Input virtualization only against the validated P3-RAW-01 behavior contract and keep P3-HW-01 physical evidence separate
 
+### 2026-08-25 — P3-RAW-02
+
+State: CODE_COMPLETE
+Branch/commit: `feat/p3-raw-02-virtualization-shim`; local implementation commit is the branch head reported with this packet
+Windows CI: pending; this workstation has no MSVC/Windows CMake toolchain, so no native x64/x86 validation is claimed
+Automated tests:
+- strict GCC 15 syntax and component builds pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion`
+- portable CMake/CTest passes 20/20 targets, including virtual registration/token/queue/data/buffer, C++ and C11 adapter ABI, four-function Raw Input IAT transaction, combined rollback, polling, cursor/focus, protocol, snapshot-schema v3, target, and host regressions
+- Windows CTest declarations and the dedicated artifact-matrix job include local ordinary Raw Input API use and x64-host-to-x64/x86 two-process no-cross-Seat acceptance
+- the process snapshot schema emits bounded machine-readable expected/cross counters and failure counters; every cross counter must remain zero
+Manual evidence: none claimed; physical keyboard/mouse `WM_INPUT`, hot-plug, composite HID, and physical zero-bleed remain P3-HW-01
+Known limitations: only HydraSeat-owned startup-loaded controlled probes and the four allowlisted Raw Input APIs are supported; no native Windows result, physical suppression, device cloaking, third-party/commercial process, game, anti-cheat, DRM, protected-process, `GetRawInputDeviceInfo`, or `GetRawInputDeviceList` support is claimed
+Rollback result: portable transaction tests pass all-or-rollback, combined polling prerequisite rollback, reverse exact restoration, idempotent install/uninstall, and retry after uninstall failure; native DLL restoration still requires Windows CI
+Next packet: keep P3-RAW-02 at CODE_COMPLETE until native x64/x86 and cross-architecture controlled acceptance pass; P3-HW-01 remains PENDING and P3-E-01 remains blocked
+
 ## Next Codex task
 
 Use:
 
 ```text
-Implement P3-RAW-02 exactly as specified in
+Validate the CODE_COMPLETE P3-RAW-02 implementation exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
 Use the validated P3-RAW-01 Windows behavior evidence as the compatibility
 contract: per-usage last-registration-wins replacement, usage-local removal,
 `RIDEV_DEVNOTIFY` accepted-but-not-echoed registration flags, retained destroyed
 HWND runtime values until replacement, and the x64/x86 size/alignment contracts.
-Preserve the validated P3-API-02/P3-API-03 capability boundaries. Limit all
+Run the native x64/x86 ordinary Raw Input API, two-process no-cross-Seat,
+failure, uninstall, and x64-host-to-x86 acceptance matrix. Preserve the
+validated P3-API-02/P3-API-03 capability boundaries. Limit all
 interposition to HydraSeat-owned controlled probes; do not add physical device
 suppression/cloaking, third-party injection, game support, anti-cheat, DRM, or
 protected-process work.

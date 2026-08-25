@@ -41,11 +41,17 @@ teardown passed, and the existing Gate C cross-architecture job stayed green.
 The traces agree on last-registration-wins replacement, usage-local removal,
 `RIDEV_INPUTSINK` echo, accepted-but-not-echoed `RIDEV_DEVNOTIFY`, and a
 registered destroyed HWND remaining as a runtime value until valid replacement.
-This is observation only and does not add Raw Input interposition.
+P3-RAW-02 is `CODE_COMPLETE` on
+`feat/p3-raw-02-virtualization-shim`. Portable strict builds and 20/20 CTest
+targets pass. The existing startup-loaded shim now has an explicit Raw Input
+capability for exactly four APIs, backed by adapter-owned bounded registration,
+packet, queue, and token state. Native Windows x64/x86 and cross-architecture
+process acceptance remains pending, so this is not yet `VALIDATED`.
 
 This is not a general game hook or a completed Gate C implementation. The
 controlled targets still call HydraSeat's adapter API directly; only the
-explicitly launched API probe may opt into the polling/cursor-focus shim. Commercial games
+explicitly launched API probe may opt into polling, cursor/focus, or Raw Input
+shim capabilities. Commercial games
 remain unsupported and are never modified by this packet.
 
 ## Safety boundary
@@ -104,6 +110,9 @@ The API probe is a separate HydraSeat-owned process. It:
 - calls `GetAsyncKeyState`, `GetKeyState`, `GetKeyboardState`,
   `GetCursorPos`, `GetClipCursor`, `GetForegroundWindow`, `GetFocus`, and
   `GetCapture` on its window/UI thread;
+- in explicit Raw mode calls ordinary `RegisterRawInputDevices`,
+  `GetRegisteredRawInputDevices`, `GetRawInputData`, and
+  `GetRawInputBuffer`, and consumes synthetic `WM_INPUT` on its UI thread;
 - reads the matching process-local state through the existing adapter C ABI;
 - returns both observations in one versioned `ProbeSnapshot` frame;
 - treats HWND values as transient runtime diagnostics, never persisted identity;
@@ -191,7 +200,29 @@ state, and cursor setters clamp to an enabled clip. Disabled `GetClipCursor`
 returns the documented full signed logical-domain sentinel. `ShowCursor`
 remains deferred because its counter/thread semantics are not defined.
 
-Shim ABI v1 is `__cdecl` and uses packed fixed-width config/status structures
+P3-RAW-02 adds a third optional patch set for exactly
+`RegisterRawInputDevices`, `GetRegisteredRawInputDevices`,
+`GetRawInputData`, and `GetRawInputBuffer`. It is installed only when
+`HYDRA_GATE_C_SHIM_ENABLE_RAW_INPUT` is requested. ACTIVE registration is
+virtual-only and never changes native process registration. INACTIVE behavior
+uses the exact saved originals, while adapter loss fails closed without native
+fallback.
+
+The adapter owns at most two current usage registrations, 128 packets/handles,
+and 64 KiB of queued payload. Requested `RIDEV_DEVNOTIFY` intent is retained
+but omitted from observable query flags. A destroyed HWND remains queryable as
+a runtime value, while delivery revalidates same-process ownership and never
+reroutes. Keyboard and relative mouse packets use null `hDevice`, architecture
+sizes 24/48 on x64 and 16/40 on x86, and eight-byte buffer alignment on both.
+Successful full `RID_INPUT` reads and successful buffer reads consume packets;
+queries and failed/undersized reads do not.
+
+Install order is polling, optional cursor/focus, optional Raw Input; uninstall
+stops acceptance, drains calls, resets Raw state, then restores Raw Input,
+cursor/focus, and polling in reverse. An incomplete restoration retains a
+retryable fail-closed lifecycle and refuses unload.
+
+Shim API v3 is `__cdecl` and uses packed fixed-width config/status structures
 with `struct_size`, generation, API masks, result, adapter-result, system-error,
 and rollback diagnostics. Toggle low bits are explicitly unsupported in v1:
 `GetKeyState` returns only the adapter high bit and every `GetKeyboardState`
@@ -203,7 +234,7 @@ or reference-repository source was copied, adapted, or used as a build input.
 
 ### `hydra_gate_c_adapter.dll`
 
-The adapter is a process-local state component with a C ABI. ABI v2 currently provides semantic equivalents for controlled tests:
+The adapter is a process-local state component with a C ABI. ABI v3 currently provides semantic equivalents for controlled tests:
 
 - key down/up state;
 - `GetAsyncKeyState`-style high bit plus one-shot press edge;
@@ -216,6 +247,8 @@ The adapter is a process-local state component with a C ABI. ABI v2 currently pr
 - virtual capture state;
 - fixed-width transient controlled target, logical foreground/active/focus,
   and virtual capture HWND runtime values;
+- fixed-width Raw Input registration/query/delivery records and bounded
+  registration/data/buffer/reset operations;
 - full state snapshot and reset.
 
 The adapter is linked normally into the controlled target. It is not injected into another program.
@@ -498,6 +531,40 @@ the host-native cursor, clip, foreground, and capture observations to remain
 unchanged. Native x64/x86 and x64-host-to-x64/x86 execution passed in Windows
 CI run `32792381573`.
 
+### Raw Input virtualization component and process tests
+
+```powershell
+ctest --test-dir build --build-config Release -R "VirtualRawInput|GateCRawInputShim|GateCAdapter|GateCProbeSnapshot" --output-on-failure
+
+.\build-x64\gate-c\x64\hydra_gate_c_api_probe.exe `
+  --raw-input-shim-self-test `
+  --shim .\build-x64\gate-c\x64\hydra_gate_c_shim.dll
+
+.\build-x64\gate-c\x64\hydra_gate_c_host.exe `
+  --raw-input-shim-self-test `
+  --target .\build-x64\gate-c\x64\hydra_gate_c_api_probe.exe `
+  --shim .\build-x64\gate-c\x64\hydra_gate_c_shim.dll
+
+.\build-x64\gate-c\x64\hydra_gate_c_host.exe `
+  --raw-input-shim-self-test `
+  --artifact-root .\matrix-artifacts\gate-c `
+  --target-architecture x86
+```
+
+The local test uses only ordinary Raw Input APIs. It verifies zero, two-entry,
+and DEVNOTIFY observable registration states, exact data and buffer queries,
+undersized non-consuming reads, packet consumption, destroyed-target visible
+failure, and native registration-count restoration after uninstall. The host
+test launches Seat 1 and Seat 2 probes, sends distinct A/B keyboard and mouse
+packets, and requires machine-readable expected/cross and API/token/queue
+failure counters. Every cross and failure counter must be zero in the accepted
+normal cycle. Existing missing-window, timeout, abnormal-exit, host-disconnect,
+repeat-cycle, polling, cursor/focus, and no-orphan tests remain regressions.
+
+This evidence is controlled synthetic no-cross-state only. It cannot satisfy
+P3-HW-01 physical `WM_INPUT`, hot-plug, composite HID, suppression, or game
+zero-bleed gates.
+
 ### Raw Input behavior probe tests
 
 Portable trace and malformed-contract coverage:
@@ -692,24 +759,26 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] P3-API-02 polling shim source, fixed C ABI, transactional IAT engine, architecture manifest, native x64/x86 tests, and cross-architecture ordinary-polling proof (`32780563364`)
 - [x] P3-API-03 cursor/clip/logical-focus/capture shim, adapter ABI v2, native x64/x86 24/24 CTest, cross-architecture two-probe isolation, and host-native global-state preservation (`32792381573`)
 - [x] P3-RAW-01 standalone probe, bounded trace/parser contract, explicit synthetic fixture, native x64/x86 28/28 CTest, retained/reviewed observed registration traces, and process teardown evidence (`32800513365`)
+- [x] P3-RAW-02 controlled Raw Input virtualization source, portable component/ABI/transaction tests, probe/host acceptance declarations, and x86/x64 packet/alignment model (Windows execution pending)
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Physical keyboard/mouse `WM_INPUT` and actual device-change trace (P3-HW-01)
-- [ ] Controlled Raw Input virtualization consumer (P3-RAW-02; ready)
+- [ ] Native x64/x86 and x64-host-to-x86 P3-RAW-02 ordinary-API/two-process validation
 - [ ] Adapter crash/watchdog recovery acceptance
 - [ ] Commercial non-anti-cheat game profile experiment
 - [ ] Physical device cloaking/suppression
 
 ## Next implementation step
 
-P3-RAW-01 is `VALIDATED` by Windows run `32800513365`. P3-RAW-02 is now
-READY and must use the retained x64/x86 observed behavior as its contract:
+P3-RAW-01 is `VALIDATED` by Windows run `32800513365`. P3-RAW-02 is
+`CODE_COMPLETE` and uses the retained x64/x86 observed behavior as its contract:
 last-registration-wins per usage, usage-local removal, accepted-but-not-echoed
 `RIDEV_DEVNOTIFY`, retained destroyed-HWND runtime values until replacement,
 and the architecture-specific structure sizes with 8-byte raw-buffer alignment.
-Physical `WM_INPUT` and device-change evidence remains P3-HW-01.
+Native P3-RAW-02 x64/x86 process execution is still required before
+`VALIDATED`. Physical `WM_INPUT` and device-change evidence remains P3-HW-01.
 
 The two-probe process test releases Probe B's virtual capture while asserting
 that Probe A retains its own capture, then shuts down Probe A and re-queries

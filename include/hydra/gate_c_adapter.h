@@ -19,7 +19,7 @@
 extern "C" {
 #endif
 
-#define HYDRA_GATE_C_ADAPTER_API_VERSION 2u
+#define HYDRA_GATE_C_ADAPTER_API_VERSION 3u
 #define HYDRA_GATE_C_ADAPTER_KEY_BYTES 32u
 #define HYDRA_GATE_C_ADAPTER_KEYBOARD_STATE_BYTES 256u
 #define HYDRA_GATE_C_ADAPTER_NO_PROBE_KEY 0xffffu
@@ -28,6 +28,9 @@ extern "C" {
 #define HYDRA_GATE_C_ADAPTER_SNAPSHOT_V1_BYTES 120u
 #define HYDRA_GATE_C_ADAPTER_CLIP_RECT_V2_BYTES 24u
 #define HYDRA_GATE_C_ADAPTER_WINDOW_STATE_V2_BYTES 56u
+#define HYDRA_GATE_C_ADAPTER_RAW_REGISTRATION_V3_BYTES 28u
+#define HYDRA_GATE_C_ADAPTER_RAW_REGISTRATION_ENTRY_V3_BYTES 36u
+#define HYDRA_GATE_C_ADAPTER_RAW_DELIVERY_V3_BYTES 40u
 
 typedef void* HydraGateCAdapterHandle;
 
@@ -38,7 +41,8 @@ typedef enum HydraGateCAdapterResult {
     HYDRA_GATE_C_ADAPTER_STALE_SEQUENCE = 3,
     HYDRA_GATE_C_ADAPTER_INVALID_STATE = 4,
     HYDRA_GATE_C_ADAPTER_BUFFER_TOO_SMALL = 5,
-    HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR = 6
+    HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR = 6,
+    HYDRA_GATE_C_ADAPTER_RAW_INPUT_FAILURE = 7
 } HydraGateCAdapterResult;
 
 typedef enum HydraGateCAdapterInputKind {
@@ -131,6 +135,39 @@ typedef struct HydraGateCAdapterWindowStateV2 {
     uint64_t logical_focus_window;
     uint64_t virtual_capture_window;
 } HydraGateCAdapterWindowStateV2;
+
+typedef struct HydraGateCAdapterRawRegistrationV3 {
+    uint32_t struct_size;
+    uint16_t usage_page;
+    uint16_t usage;
+    uint32_t flags;
+    uint64_t target_window;
+    uint8_t target_window_current_process;
+    uint8_t reserved0[7];
+} HydraGateCAdapterRawRegistrationV3;
+
+typedef struct HydraGateCAdapterRawRegistrationEntryV3 {
+    uint32_t struct_size;
+    uint16_t usage_page;
+    uint16_t usage;
+    uint32_t requested_flags;
+    uint32_t observable_flags;
+    uint64_t target_window;
+    uint64_t generation;
+    uint8_t target_validated_at_registration;
+    uint8_t device_notification_requested;
+    uint8_t reserved0[2];
+} HydraGateCAdapterRawRegistrationEntryV3;
+
+typedef struct HydraGateCAdapterRawDeliveryV3 {
+    uint32_t struct_size;
+    uint32_t result;
+    uint64_t token;
+    uint64_t target_window;
+    uint64_t registration_generation;
+    uint32_t message_wparam;
+    uint32_t reserved0;
+} HydraGateCAdapterRawDeliveryV3;
 
 #pragma pack(pop)
 
@@ -228,6 +265,60 @@ HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_invalidate_window(
     HydraGateCAdapterHandle handle,
     uint64_t window);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_configure(
+    HydraGateCAdapterHandle handle,
+    uint32_t seat_id,
+    uint32_t process_id,
+    uint16_t architecture_bits);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_register(
+    HydraGateCAdapterHandle handle,
+    const HydraGateCAdapterRawRegistrationV3* registrations,
+    uint32_t registration_count);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_get_registered(
+    HydraGateCAdapterHandle handle,
+    HydraGateCAdapterRawRegistrationEntryV3* registrations,
+    uint32_t* registration_count);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_take_delivery(
+    HydraGateCAdapterHandle handle,
+    HydraGateCAdapterRawDeliveryV3* delivery);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_complete_delivery(
+    HydraGateCAdapterHandle handle,
+    uint64_t token,
+    uint8_t target_currently_valid,
+    uint8_t post_succeeded);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_get_data(
+    HydraGateCAdapterHandle handle,
+    uint64_t token,
+    uint32_t command,
+    void* data,
+    uint32_t* size,
+    uint32_t header_size);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_get_buffer(
+    HydraGateCAdapterHandle handle,
+    void* data,
+    uint32_t* size,
+    uint32_t header_size,
+    uint32_t* packet_count);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_begin_stopping(HydraGateCAdapterHandle handle);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_reset(HydraGateCAdapterHandle handle);
 
 #ifdef __cplusplus
 }

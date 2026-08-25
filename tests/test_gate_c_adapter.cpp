@@ -12,6 +12,12 @@ static_assert(sizeof(HydraGateCAdapterClipRectV2) ==
               HYDRA_GATE_C_ADAPTER_CLIP_RECT_V2_BYTES);
 static_assert(sizeof(HydraGateCAdapterWindowStateV2) ==
               HYDRA_GATE_C_ADAPTER_WINDOW_STATE_V2_BYTES);
+static_assert(sizeof(HydraGateCAdapterRawRegistrationV3) ==
+              HYDRA_GATE_C_ADAPTER_RAW_REGISTRATION_V3_BYTES);
+static_assert(sizeof(HydraGateCAdapterRawRegistrationEntryV3) ==
+              HYDRA_GATE_C_ADAPTER_RAW_REGISTRATION_ENTRY_V3_BYTES);
+static_assert(sizeof(HydraGateCAdapterRawDeliveryV3) ==
+              HYDRA_GATE_C_ADAPTER_RAW_DELIVERY_V3_BYTES);
 
 void check(bool condition, std::string_view message) {
     if (!condition) {
@@ -232,6 +238,91 @@ void testApiAndIndependentContexts() {
               HYDRA_GATE_C_ADAPTER_OK && keyboard[0x41] == 0x80u &&
               keyboard[0x42] == 0,
           "C API provides GetKeyboardState-compatible high bits");
+
+    check(hydra_gate_c_adapter_raw_configure(
+              first, 1u, 101u,
+              static_cast<std::uint16_t>(sizeof(void*) * 8u)) ==
+              HYDRA_GATE_C_ADAPTER_OK &&
+              hydra_gate_c_adapter_raw_configure(
+                  second, 2u, 202u,
+                  static_cast<std::uint16_t>(sizeof(void*) * 8u)) ==
+                  HYDRA_GATE_C_ADAPTER_OK,
+          "raw input is configured independently per adapter context");
+    HydraGateCAdapterRawRegistrationV3 rawRegistration{};
+    rawRegistration.struct_size = sizeof(rawRegistration);
+    rawRegistration.usage_page = 0x01u;
+    rawRegistration.usage = 0x06u;
+    rawRegistration.flags = 0x00002100u;
+    rawRegistration.target_window = 0x4444u;
+    rawRegistration.target_window_current_process = 1u;
+    auto malformedRawRegistration = rawRegistration;
+    malformedRawRegistration.struct_size = 0;
+    check(hydra_gate_c_adapter_raw_register(
+              first, &malformedRawRegistration, 1u) ==
+              HYDRA_GATE_C_ADAPTER_STRUCT_VERSION_MISMATCH,
+          "raw registration ABI rejects an invalid struct size without mutation");
+    check(hydra_gate_c_adapter_raw_register(
+              first, &rawRegistration, 1u) == HYDRA_GATE_C_ADAPTER_OK &&
+              hydra_gate_c_adapter_raw_register(
+                  second, &rawRegistration, 1u) == HYDRA_GATE_C_ADAPTER_OK,
+          "raw keyboard registration accepts INPUTSINK plus DEVNOTIFY");
+    std::uint32_t rawRegistrationCount = 0;
+    check(hydra_gate_c_adapter_raw_get_registered(
+              first, nullptr, &rawRegistrationCount) ==
+              HYDRA_GATE_C_ADAPTER_OK && rawRegistrationCount == 1u,
+          "raw registration query reports the required capacity");
+    HydraGateCAdapterRawRegistrationEntryV3 rawEntry{};
+    rawEntry.struct_size = sizeof(rawEntry);
+    check(hydra_gate_c_adapter_raw_get_registered(
+              first, &rawEntry, &rawRegistrationCount) ==
+              HYDRA_GATE_C_ADAPTER_OK &&
+              rawEntry.requested_flags == 0x00002100u &&
+              rawEntry.observable_flags == 0x00000100u &&
+              rawEntry.device_notification_requested == 1u,
+          "raw registration preserves requested DEVNOTIFY without echoing it as observable");
+
+    auto keyC = keyboardEvent(0x43u);
+    keyC.scan_code = 0x2eu;
+    check(hydra_gate_c_adapter_apply_input(first, 4u, &keyC) ==
+              HYDRA_GATE_C_ADAPTER_OK,
+          "registered raw input is serialized during adapter input application");
+    HydraGateCAdapterRawDeliveryV3 rawDelivery{};
+    rawDelivery.struct_size = sizeof(rawDelivery);
+    check(hydra_gate_c_adapter_raw_take_delivery(first, &rawDelivery) ==
+              HYDRA_GATE_C_ADAPTER_OK && rawDelivery.token != 0u &&
+              rawDelivery.target_window == 0x4444u &&
+              hydra_gate_c_adapter_raw_complete_delivery(
+                  first, rawDelivery.token, 1u, 1u) ==
+                  HYDRA_GATE_C_ADAPTER_OK,
+          "raw delivery carries an opaque token and completes after a valid post");
+    std::uint32_t rawBytes = 0;
+    check(hydra_gate_c_adapter_raw_get_data(
+              first, rawDelivery.token, 0x10000003u, nullptr, &rawBytes,
+              static_cast<std::uint32_t>(sizeof(void*) == 8u ? 24u : 16u)) ==
+              HYDRA_GATE_C_ADAPTER_OK && rawBytes != 0u,
+          "RID_INPUT size query retains the raw token");
+    std::array<std::uint8_t, 64> rawStorage{};
+    std::uint32_t crossBytes = static_cast<std::uint32_t>(rawStorage.size());
+    check(hydra_gate_c_adapter_raw_get_data(
+              second, rawDelivery.token, 0x10000003u, rawStorage.data(),
+              &crossBytes,
+              static_cast<std::uint32_t>(sizeof(void*) == 8u ? 24u : 16u)) ==
+              HYDRA_GATE_C_ADAPTER_RAW_INPUT_FAILURE,
+          "an opaque raw token cannot cross adapter contexts");
+    std::uint32_t rawCapacity = static_cast<std::uint32_t>(rawStorage.size());
+    check(hydra_gate_c_adapter_raw_get_data(
+              first, rawDelivery.token, 0x10000003u, rawStorage.data(),
+              &rawCapacity,
+              static_cast<std::uint32_t>(sizeof(void*) == 8u ? 24u : 16u)) ==
+              HYDRA_GATE_C_ADAPTER_OK && rawCapacity == rawBytes,
+          "full RID_INPUT read consumes the exact serialized packet");
+    rawCapacity = static_cast<std::uint32_t>(rawStorage.size());
+    check(hydra_gate_c_adapter_raw_get_data(
+              first, rawDelivery.token, 0x10000003u, rawStorage.data(),
+              &rawCapacity,
+              static_cast<std::uint32_t>(sizeof(void*) == 8u ? 24u : 16u)) ==
+              HYDRA_GATE_C_ADAPTER_RAW_INPUT_FAILURE,
+          "a consumed raw token fails deterministically on reuse");
 
     check(hydra_gate_c_adapter_apply_input(first, 2, &keyA) ==
               HYDRA_GATE_C_ADAPTER_STALE_SEQUENCE,

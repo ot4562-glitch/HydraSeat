@@ -29,6 +29,16 @@ hydra::gatec::DecodedFrame decodeOrFail(
 void testProtocolRoundTrips() {
     using namespace hydra::gatec;
 
+    const auto rawCapabilities = testCapabilityBits(
+        kControlledRawInputProbeCapabilities);
+    check((rawCapabilities & testCapabilityBits(
+               TestCapability::RawInputApiShim)) != 0 &&
+              (rawCapabilities & testCapabilityBits(
+               TestCapability::PollingApiShim)) != 0 &&
+              (rawCapabilities & testCapabilityBits(
+               TestCapability::CursorFocusApiShim)) == 0,
+          "Raw Input probe capability is explicit and preserves polling without enabling cursor/focus");
+
     HelloMessage hello;
     for (std::size_t index = 0; index < hello.token.size(); ++index) {
         hello.token[index] = static_cast<std::uint8_t>(index * 7 + 3);

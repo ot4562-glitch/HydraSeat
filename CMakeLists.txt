@@ -157,6 +157,22 @@ if(MSVC)
     target_compile_options(hydra_gate_c_core PRIVATE /W4 /permissive-)
 endif()
 
+# P3-RAW-02 bounded process-local registration, synthetic-handle, packet, and
+# queue model. Win32 API interposition remains in the startup-loaded shim.
+add_library(hydra_virtual_raw_input STATIC
+    src/virtual_raw_input.cpp
+    include/hydra/virtual_raw_input.hpp
+)
+set_target_properties(hydra_virtual_raw_input PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+if(MSVC)
+    target_compile_options(hydra_virtual_raw_input PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_virtual_raw_input PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # Process-local Gate C adapter boundary. The controlled target links this
 # shared library normally; no process injection is performed.
 add_library(hydra_gate_c_adapter SHARED
@@ -166,19 +182,22 @@ add_library(hydra_gate_c_adapter SHARED
 target_compile_definitions(hydra_gate_c_adapter PRIVATE
     HYDRA_GATE_C_ADAPTER_BUILD=1
 )
-target_link_libraries(hydra_gate_c_adapter PRIVATE hydra_gate_c_core)
+target_link_libraries(hydra_gate_c_adapter PRIVATE
+    hydra_gate_c_core hydra_virtual_raw_input)
 hydra_set_gate_c_output(hydra_gate_c_adapter)
 if(MSVC)
     target_compile_options(hydra_gate_c_adapter PRIVATE /W4 /permissive-)
 endif()
 
-# P3-API-02/03 bounded polling plus cursor/focus IAT transaction support and
-# startup-loaded shim. The DLL is selected per architecture and is never
-# remotely injected.
+# P3-API-02/03 and P3-RAW-02 bounded polling, cursor/focus, and Raw Input IAT
+# transaction support. The startup-loaded DLL is selected per architecture
+# and is never remotely injected.
 add_library(hydra_gate_c_shim_support STATIC
     src/gate_c_cursor_focus_shim.cpp
+    src/gate_c_raw_input_shim.cpp
     src/gate_c_shim_iat.cpp
     include/hydra/gate_c_cursor_focus_policy.hpp
+    include/hydra/gate_c_raw_input_shim.hpp
     include/hydra/win32_iat_patch.hpp
 )
 set_target_properties(hydra_gate_c_shim_support PROPERTIES
@@ -285,8 +304,8 @@ if(MSVC)
     target_compile_options(hydra_gate_c_target PRIVATE /W4 /permissive-)
 endif()
 
-# P3-API-01 read-only Win32 API probe. This controlled executable observes
-# ordinary OS state beside the direct adapter state; it installs no shim/hook.
+# Controlled Win32 API probe. Baseline mode is read-only; explicit polling,
+# cursor/focus, and Raw Input self-test modes startup-load the owned shim.
 add_executable(hydra_gate_c_api_probe
     src/gate_c_api_probe.cpp
 )
@@ -447,6 +466,19 @@ add_test(NAME RawInputProbeTraceTests COMMAND raw_input_probe_trace_tests)
 add_test(NAME RawInputProbeSelfTest
          COMMAND hydra_gate_c_raw_input_probe --self-test)
 
+# P3-RAW-02 portable registration/token/queue/data/buffer contract tests.
+add_executable(virtual_raw_input_tests
+    tests/test_virtual_raw_input.cpp
+)
+target_link_libraries(virtual_raw_input_tests PRIVATE hydra_virtual_raw_input)
+if(MSVC)
+    target_compile_options(virtual_raw_input_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(virtual_raw_input_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME VirtualRawInputTests COMMAND virtual_raw_input_tests)
+
 # C ABI adapter tests exercise independent process-local contexts and
 # GetAsyncKeyState/GetKeyboardState-style semantics without installing hooks.
 add_executable(gate_c_adapter_tests
@@ -499,6 +531,23 @@ endif()
 add_test(NAME GateCCursorFocusShimTests
          COMMAND gate_c_cursor_focus_shim_tests)
 
+add_executable(gate_c_raw_input_shim_tests
+    tests/test_gate_c_raw_input_shim.cpp
+)
+target_link_libraries(gate_c_raw_input_shim_tests PRIVATE
+    hydra_gate_c_shim_support
+)
+hydra_set_gate_c_output(gate_c_raw_input_shim_tests)
+if(MSVC)
+    target_compile_options(gate_c_raw_input_shim_tests PRIVATE
+        /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(gate_c_raw_input_shim_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME GateCRawInputShimTests
+         COMMAND gate_c_raw_input_shim_tests)
+
 add_executable(gate_c_shim_c_smoke
     tests/test_gate_c_shim_c.c
 )
@@ -540,6 +589,13 @@ if(WIN32)
                 --shim $<TARGET_FILE:hydra_gate_c_shim>
     )
     set_tests_properties(GateCCursorFocusShimProbeSelfTest PROPERTIES TIMEOUT 25)
+
+    add_test(
+        NAME GateCRawInputShimProbeSelfTest
+        COMMAND hydra_gate_c_api_probe --raw-input-shim-self-test
+                --shim $<TARGET_FILE:hydra_gate_c_shim>
+    )
+    set_tests_properties(GateCRawInputShimProbeSelfTest PROPERTIES TIMEOUT 25)
 
     add_test(
         NAME RawInputRegistrationSelfTest
@@ -593,6 +649,14 @@ if(WIN32)
                 --shim $<TARGET_FILE:hydra_gate_c_shim>
     )
     set_tests_properties(GateCCursorFocusShimProcessSelfTest PROPERTIES TIMEOUT 75)
+
+    add_test(
+        NAME GateCRawInputShimProcessSelfTest
+        COMMAND hydra_gate_c_host --raw-input-shim-self-test
+                --target $<TARGET_FILE:hydra_gate_c_api_probe>
+                --shim $<TARGET_FILE:hydra_gate_c_shim>
+    )
+    set_tests_properties(GateCRawInputShimProcessSelfTest PROPERTIES TIMEOUT 75)
 else()
     add_test(NAME GateCHostPortableSelfTest COMMAND hydra_gate_c_host --self-test)
 endif()

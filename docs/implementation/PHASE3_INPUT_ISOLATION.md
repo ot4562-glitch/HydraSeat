@@ -378,7 +378,7 @@ P3-RAW-02 has a stable behavior specification and fixtures rather than assumptio
 
 ## P3-RAW-02 — Controlled Raw Input virtualization shim
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -396,7 +396,9 @@ Make two HydraSeat-owned probes receive only their Seat's synthetic Raw Input th
 - `src/virtual_raw_input.cpp`
 - `src/gate_c_raw_input_shim.cpp`
 - `tests/test_virtual_raw_input.cpp`
-- `tests/test_gate_c_raw_input_process.cpp`
+- `tests/test_gate_c_raw_input_shim.cpp`
+- `src/gate_c_api_probe.cpp`
+- `src/gate_c_host.cpp`
 
 **Core types**
 
@@ -437,6 +439,18 @@ class SyntheticRawHandleTable;
 **Done when**
 
 Two controlled probes consume separate Raw Input streams through the ordinary API surface and rollback restores the baseline.
+
+**Implementation status (2026-08-25)**
+
+The controlled implementation is code-complete on
+`feat/p3-raw-02-virtualization-shim`. The adapter owns a bounded per-context
+registration table, immutable packet queue, and generation-checked opaque
+handle table. The startup-loaded shim adds an explicit Raw Input capability
+for the four allowlisted APIs, posts only to a revalidated same-process HWND,
+and restores Raw Input, cursor/focus, then polling IAT entries on uninstall.
+Portable strict builds and 20/20 CTest targets pass. Native Windows x64/x86
+ordinary-API and two-process acceptance remain required before `VALIDATED`.
+P3-HW-01 physical evidence remains pending.
 
 **Suggested commit**
 

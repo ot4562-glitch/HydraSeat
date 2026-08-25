@@ -67,6 +67,7 @@ struct HostOptions {
     bool baselineSelfTest{false};
     bool pollingShimSelfTest{false};
     bool cursorFocusShimSelfTest{false};
+    bool rawInputShimSelfTest{false};
     bool protocolErrorSelfTest{false};
     bool showHelp{false};
 };
@@ -82,6 +83,8 @@ void printUsage(std::ostream& output) {
         << "  hydra_gate_c_host --polling-shim-self-test --target <hydra_gate_c_api_probe.exe>\n"
         << "                     --shim <hydra_gate_c_shim.dll>\n"
         << "  hydra_gate_c_host --cursor-focus-shim-self-test --target <hydra_gate_c_api_probe.exe>\n"
+        << "                     --shim <hydra_gate_c_shim.dll>\n"
+        << "  hydra_gate_c_host --raw-input-shim-self-test --target <hydra_gate_c_api_probe.exe>\n"
         << "                     --shim <hydra_gate_c_shim.dll>\n"
         << "  hydra_gate_c_host --protocol-error-self-test [--target <hydra_gate_c_target.exe>]\n"
         << "  hydra_gate_c_host [--profile <workspace_config.json>] [--trace <file.jsonl>]\n"
@@ -213,6 +216,8 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
             options.pollingShimSelfTest = true;
         } else if (argument == L"--cursor-focus-shim-self-test") {
             options.cursorFocusShimSelfTest = true;
+        } else if (argument == L"--raw-input-shim-self-test") {
+            options.rawInputShimSelfTest = true;
         } else if (argument == L"--protocol-error-self-test") {
             options.protocolErrorSelfTest = true;
         } else if (argument == L"--help" || argument == L"-h") {
@@ -226,6 +231,7 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
         static_cast<int>(options.baselineSelfTest) +
         static_cast<int>(options.pollingShimSelfTest) +
         static_cast<int>(options.cursorFocusShimSelfTest) +
+        static_cast<int>(options.rawInputShimSelfTest) +
         static_cast<int>(options.protocolErrorSelfTest);
     if (selfTestModes > 1) {
         return false;
@@ -238,7 +244,8 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
          (!options.targetPath.empty() || !options.shimPath.empty())) ||
         (options.architectureSelfTest && !hasArtifactRoot) ||
         (!options.pollingShimSelfTest &&
-         !options.cursorFocusShimSelfTest && !options.shimPath.empty())) {
+         !options.cursorFocusShimSelfTest &&
+         !options.rawInputShimSelfTest && !options.shimPath.empty())) {
         return false;
     }
     return true;
@@ -517,10 +524,12 @@ public:
             m_options.targetPath = siblingTargetPath(
                 m_options.baselineSelfTest ||
                 m_options.pollingShimSelfTest ||
-                m_options.cursorFocusShimSelfTest);
+                m_options.cursorFocusShimSelfTest ||
+                m_options.rawInputShimSelfTest);
         }
         if ((m_options.pollingShimSelfTest ||
-             m_options.cursorFocusShimSelfTest) &&
+             m_options.cursorFocusShimSelfTest ||
+             m_options.rawInputShimSelfTest) &&
             m_options.shimPath.empty() && m_options.artifactRoot.empty()) {
             m_options.shimPath = siblingShimPath();
         }
@@ -530,7 +539,8 @@ public:
         if (!m_options.artifactRoot.empty()) {
             const auto kind = (m_options.baselineSelfTest ||
                                m_options.pollingShimSelfTest ||
-                               m_options.cursorFocusShimSelfTest)
+                               m_options.cursorFocusShimSelfTest ||
+                               m_options.rawInputShimSelfTest)
                 ? hydra::gatec::GateCArtifactKind::ApiProbe
                 : hydra::gatec::GateCArtifactKind::ControlledTarget;
             const auto selected = hydra::gatec::resolveGateCArtifacts(
@@ -547,7 +557,8 @@ public:
             m_options.targetPath =
                 selected.selection->executablePath.wstring();
             if (m_options.pollingShimSelfTest ||
-                m_options.cursorFocusShimSelfTest) {
+                m_options.cursorFocusShimSelfTest ||
+                m_options.rawInputShimSelfTest) {
                 m_options.shimPath = selected.selection->shimPath.wstring();
             }
             m_expectedArchitecture = selected.selection->architecture;
@@ -577,7 +588,8 @@ public:
             return 22;
         }
         if (m_options.pollingShimSelfTest ||
-            m_options.cursorFocusShimSelfTest) {
+            m_options.cursorFocusShimSelfTest ||
+            m_options.rawInputShimSelfTest) {
             if (GetFileAttributesW(m_options.shimPath.c_str()) ==
                 INVALID_FILE_ATTRIBUTES) {
                 std::cerr << "Controlled polling shim was not found.\n";
@@ -603,7 +615,10 @@ public:
             return runApiProbeBaselineSelfTest(true, false);
         }
         if (m_options.cursorFocusShimSelfTest) {
-            return runApiProbeBaselineSelfTest(true, true);
+            return runApiProbeBaselineSelfTest(true, true, false);
+        }
+        if (m_options.rawInputShimSelfTest) {
+            return runApiProbeBaselineSelfTest(true, false, true);
         }
         if (m_options.protocolErrorSelfTest) {
             return runProtocolErrorSelfTest();
@@ -649,7 +664,10 @@ private:
             commandLine.push_back(L' ');
             commandLine.append(extraArguments);
         }
-        if (m_options.cursorFocusShimSelfTest) {
+        if (m_options.rawInputShimSelfTest) {
+            commandLine += L" --raw-input-shim --shim " +
+                           quoteArgument(m_options.shimPath);
+        } else if (m_options.cursorFocusShimSelfTest) {
             commandLine += L" --cursor-focus-shim --shim " +
                            quoteArgument(m_options.shimPath);
         } else if (m_options.pollingShimSelfTest) {
@@ -738,11 +756,13 @@ private:
         ack.serverProcessId = GetCurrentProcessId();
         ack.grantedCapabilities = hydra::gatec::testCapabilityBits(
             requireOwnedWindow
-                ? (m_options.cursorFocusShimSelfTest
+                ? (m_options.rawInputShimSelfTest
+                       ? hydra::gatec::kControlledRawInputProbeCapabilities
+                       : (m_options.cursorFocusShimSelfTest
                        ? hydra::gatec::kControlledCursorFocusProbeCapabilities
                        : (m_options.pollingShimSelfTest
                               ? hydra::gatec::kControlledPollingProbeCapabilities
-                              : hydra::gatec::kControlledApiProbeCapabilities))
+                              : hydra::gatec::kControlledApiProbeCapabilities)))
                 : hydra::gatec::kControlledTargetCapabilities);
         if (!session.channel.writeFrame(
                 hydra::gatec::encodeHelloAck(1, ack), kIoTimeoutMs,
@@ -990,7 +1010,8 @@ private:
     }
 
     int runApiProbeBaselineSelfTest(bool pollingShim,
-                                    bool cursorFocusShim) {
+                                    bool cursorFocusShim,
+                                    bool rawInputShim = false) {
         POINT globalCursorBefore{};
         RECT globalClipBefore{};
         const bool nativeBaselineAvailable = !cursorFocusShim ||
@@ -1205,6 +1226,29 @@ private:
                  secondA->os.clipRectangle ==
                      hydra::gatec::ProbeRect{400, 400, 800, 800});
 
+            const auto rawSnapshotPassed = [](const ProbeComparison& value) {
+                return value.rawInput.enabled &&
+                    value.rawInput.registrationLifecyclePassed &&
+                    value.rawInput.registrationQueryPassed &&
+                    value.rawInput.dataQueryPassed &&
+                    value.rawInput.bufferReadPassed &&
+                    value.rawInput.registeredCount == 2u &&
+                    value.rawInput.keyboardExpected >= 1u &&
+                    value.rawInput.keyboardCross == 0u &&
+                    value.rawInput.mouseExpected >= 1u &&
+                    value.rawInput.mouseCross == 0u &&
+                    value.rawInput.dataReads >= 1u &&
+                    value.rawInput.bufferPackets >= 1u &&
+                    value.rawInput.apiFailures == 0u &&
+                    value.rawInput.destroyedTargetFailures == 0u &&
+                    value.rawInput.staleTokenFailures == 0u &&
+                    value.rawInput.queueOverflowFailures == 0u &&
+                    value.rawInput.lastSystemError == 0u;
+            };
+            const bool ordinaryRawInputIsolated = !rawInputShim ||
+                (rawSnapshotPassed(*firstASecond) &&
+                 rawSnapshotPassed(*secondB));
+
             bool releaseAndDestructionIsolated = true;
             if (cursorFocusShim) {
                 auto releasedSecondControl = secondControl;
@@ -1259,8 +1303,9 @@ private:
             const bool passed = firstIsolated && secondIsolated &&
                 baselineDifferenceObserved && completeObservations &&
                 ordinaryPollingIsolated && ordinaryCursorFocusIsolated &&
+                ordinaryRawInputIsolated &&
                 releaseAndDestructionIsolated;
-            if (!passed && cursorFocusShim) {
+            if (!passed && (cursorFocusShim || rawInputShim)) {
                 std::cerr
                     << "Cursor/focus acceptance failed: firstIsolated="
                     << firstIsolated << " secondIsolated=" << secondIsolated
@@ -1268,8 +1313,35 @@ private:
                     << " completeObservations=" << completeObservations
                     << " polling=" << ordinaryPollingIsolated
                     << " cursorFocus=" << ordinaryCursorFocusIsolated
+                    << " rawInput=" << ordinaryRawInputIsolated
                     << " releaseDestroy=" << releaseAndDestructionIsolated
                     << '\n';
+            }
+            if (rawInputShim) {
+                const auto& firstRaw = firstASecond->rawInput;
+                const auto& secondRaw = secondB->rawInput;
+                std::cout
+                    << "{\"event\":\"p3_raw_02_acceptance\""
+                    << ",\"seat1_keyboard_expected\":"
+                    << firstRaw.keyboardExpected
+                    << ",\"seat1_keyboard_cross\":"
+                    << firstRaw.keyboardCross
+                    << ",\"seat1_mouse_expected\":"
+                    << firstRaw.mouseExpected
+                    << ",\"seat1_mouse_cross\":"
+                    << firstRaw.mouseCross
+                    << ",\"seat1_api_failures\":"
+                    << firstRaw.apiFailures
+                    << ",\"seat2_keyboard_expected\":"
+                    << secondRaw.keyboardExpected
+                    << ",\"seat2_keyboard_cross\":"
+                    << secondRaw.keyboardCross
+                    << ",\"seat2_mouse_expected\":"
+                    << secondRaw.mouseExpected
+                    << ",\"seat2_mouse_cross\":"
+                    << secondRaw.mouseCross
+                    << ",\"seat2_api_failures\":"
+                    << secondRaw.apiFailures << "}\n";
             }
             const bool cleaned = cleanupSessions(sessions, !passed);
             return passed && cleaned &&
@@ -1280,7 +1352,15 @@ private:
         // Two full cycles prove deterministic startup, capture, shutdown, and
         // release of both controlled child processes.
         if (!runNormalCycle() || !runNormalCycle()) return 50;
-        if (cursorFocusShim) {
+        if (rawInputShim) {
+            std::cout
+                << "HydraSeat Gate C Raw Input shim process self-test "
+                   "passed: two startup-loaded controlled probes retained "
+                   "independent registration, WM_INPUT, GetRawInputData, "
+                   "GetRawInputBuffer, and polling state; raw_api_failures=0 "
+                   "raw_cross_deliveries=0 raw_stale_tokens=0 "
+                   "raw_queue_overflows=0.\n";
+        } else if (cursorFocusShim) {
             POINT globalCursorAfter{};
             RECT globalClipAfter{};
             if (GetCursorPos(&globalCursorAfter) == FALSE ||

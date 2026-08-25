@@ -18,6 +18,15 @@ _Static_assert(sizeof(HydraGateCAdapterClipRectV2) ==
 _Static_assert(sizeof(HydraGateCAdapterWindowStateV2) ==
                    HYDRA_GATE_C_ADAPTER_WINDOW_STATE_V2_BYTES,
                "Gate C window ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterRawRegistrationV3) ==
+                   HYDRA_GATE_C_ADAPTER_RAW_REGISTRATION_V3_BYTES,
+               "Gate C raw registration ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterRawRegistrationEntryV3) ==
+                   HYDRA_GATE_C_ADAPTER_RAW_REGISTRATION_ENTRY_V3_BYTES,
+               "Gate C raw entry ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterRawDeliveryV3) ==
+                   HYDRA_GATE_C_ADAPTER_RAW_DELIVERY_V3_BYTES,
+               "Gate C raw delivery ABI size changed");
 
 int main(void) {
     if (hydra_gate_c_adapter_api_version() !=
@@ -81,6 +90,32 @@ int main(void) {
         windows.logical_foreground_window != 0x1234u) {
         hydra_gate_c_adapter_destroy(handle);
         return 7;
+    }
+
+    if (hydra_gate_c_adapter_raw_configure(
+            handle, 1u, 1234u, (uint16_t)(sizeof(void*) * 8u)) !=
+        HYDRA_GATE_C_ADAPTER_OK) {
+        hydra_gate_c_adapter_destroy(handle);
+        return 8;
+    }
+    HydraGateCAdapterRawRegistrationV3 raw = {0};
+    raw.struct_size = (uint32_t)sizeof(raw);
+    raw.usage_page = 0x01u;
+    raw.usage = 0x06u;
+    raw.flags = 0x00000100u;
+    raw.target_window = 0x1234u;
+    raw.target_window_current_process = 1u;
+    if (hydra_gate_c_adapter_raw_register(handle, &raw, 1u) !=
+        HYDRA_GATE_C_ADAPTER_OK) {
+        hydra_gate_c_adapter_destroy(handle);
+        return 9;
+    }
+    uint32_t raw_count = 0;
+    if (hydra_gate_c_adapter_raw_get_registered(
+            handle, NULL, &raw_count) != HYDRA_GATE_C_ADAPTER_OK ||
+        raw_count != 1u) {
+        hydra_gate_c_adapter_destroy(handle);
+        return 10;
     }
 
     hydra_gate_c_adapter_destroy(handle);

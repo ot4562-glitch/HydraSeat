@@ -169,16 +169,24 @@ Gate C introduces a process boundary without attaching to a third-party game.
 
 #### `hydra_gate_c_adapter`
 
-The adapter is a normally loaded shared library with a versioned C ABI. It owns one process-local `VirtualInputState` per adapter context and exposes controlled-test equivalents for async/key/keyboard state, mouse buttons/wheel, cursor/clip and virtual foreground/capture queries. ABI v2 also stores fixed-width transient controlled-target, logical foreground/active/focus, and virtual-capture HWND runtime values; those values are never persisted as identity. It does not install hooks or modify Windows APIs.
+The adapter is a normally loaded shared library with a versioned C ABI. It
+owns one process-local `VirtualInputState` and one `VirtualRawInputContext` per
+adapter context. ABI v3 adds fixed-width Raw Input registration and delivery
+records while retaining transient HWND runtime values as diagnostics, never
+stable identity. The adapter owns the bounded registration table, immutable
+packet queue, and generation-checked opaque token table; it does not install
+hooks or modify Windows APIs.
 
 The startup-loaded `hydra_gate_c_shim.dll` is confined to a HydraSeat-owned
-probe's own IAT. One lifecycle owns both the validated three-function polling
-set and a separate closed ten-function cursor/clip/focus/capture set. Active
+probe's own IAT. One lifecycle owns the validated three-function polling set,
+a separate closed ten-function cursor/clip/focus/capture set, and an optional
+closed four-function Raw Input set. Active
 cursor/capture mutators update only adapter state, while inactive calls use
-the exact saved original pointer. Install is all-or-rollback across both sets;
-uninstall blocks new virtual calls, drains in-flight adapter calls, restores
-cursor/focus then polling entries in reverse, and refuses unload after an
-incomplete restoration.
+the exact saved original pointer. Install is all-or-rollback in polling,
+optional cursor/focus, optional Raw Input order. Uninstall blocks new virtual
+calls, drains in-flight adapter calls, stops and resets Raw Input state,
+restores Raw Input, cursor/focus, then polling entries in reverse, and refuses
+unload after an incomplete restoration.
 
 P3-API-03 controlled v1 coordinates are signed 32-bit logical screen values
 with no inferred DPI/client/physical transform. Clip right/bottom are
@@ -196,8 +204,9 @@ is deferred.
 - the target displays virtual state beside actual OS foreground state to make the current limitation visible.
 
 The current target calls the adapter C ABI directly. Polling and cursor/focus
-interposition are Windows-validated. Gate C remains incomplete until the
-separate Raw Input surface, recovery, physical acceptance, and later declared
+interposition are Windows-validated. Raw Input interposition is CODE_COMPLETE
+for controlled probes but awaits native x64/x86 validation. Gate C remains
+incomplete until recovery, physical acceptance, and later declared
 compatibility gates pass. No commercial-process injection, physical
 suppression, or anti-cheat interaction is implemented.
 
@@ -220,6 +229,31 @@ removal is usage-local, accepted `RIDEV_DEVNOTIFY` is not echoed in registered
 flags, and a destroyed target HWND remains as a runtime value until valid
 replacement. This component observes behavior only and supplies no Raw Input
 virtualization or isolation capability.
+
+#### Controlled Raw Input virtualization
+
+P3-RAW-02 keeps virtualization inside the existing controlled adapter/shim
+lifecycle. Raw capability is explicit; polling-only and cursor/focus modes do
+not patch Raw Input imports. The named allowlist is limited to registration,
+registration query, data read, and buffer read. In ACTIVE Raw mode these calls
+never reach native registration or native Raw Input data. INACTIVE calls use
+the exact saved imports, while loss of the active adapter fails closed.
+
+Each adapter context owns at most two current usage registrations (Generic
+Desktop keyboard and mouse), 128 queued packets/handles, and 64 KiB of payload.
+Requested flags retain `RIDEV_DEVNOTIFY`, but observable registration flags
+omit it to match P3-RAW-01 evidence. Registration storage may retain a
+destroyed HWND runtime value; delivery revalidates same-process ownership and
+never reroutes. Tokens encode a marker, context discriminator, generation,
+and slot within pointer-width limits and are never object pointers or device
+identity. `RAWINPUTHEADER`/`RAWINPUT` blocks are 24/48 bytes on x64 and 16/40
+bytes on x86, with eight-byte buffer traversal on both architectures.
+
+Install order is polling, optional cursor/focus, optional Raw Input. Uninstall
+stops acceptance, drains calls, resets registrations/queue/tokens, and restores
+Raw Input, cursor/focus, then polling. Portable tests cover the model and
+transaction; native Windows x64/x86 and x64-host-to-x86 controlled-process
+acceptance remain required before validation.
 
 See [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
 

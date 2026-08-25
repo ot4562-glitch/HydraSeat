@@ -511,7 +511,7 @@ Only after Gate E may Phase 3 be marked complete.
 | Two-process synthetic state separation | Partial | Yes | No | Controlled process only |
 | Bounded per-target writer queues | Partial | Yes | Gate C physical acceptance pending | Controlled process only |
 | Raw Input behavior trace/parser | Yes | Windows x64/x86 validated (`32800513365`) | P3-HW-01 physical trace pending | Controlled probe only |
-| Raw Input API virtualization | No | P3-RAW-02 READY | Pending | Controlled probe only |
+| Raw Input API virtualization | Code complete | Portable component/process declarations pass; Windows x64/x86 pending | Pending | HydraSeat-owned controlled probe only |
 | Polling API interposition | Yes | CI pending | No | Controlled probe only |
 | Cursor/focus API interposition | No | Pending | Pending | Controlled probe only |
 | HidHide session lifecycle | No | Yes | Yes | No |
