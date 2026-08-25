@@ -1074,14 +1074,14 @@ int runLocalRawInputShimSelfTest(HINSTANCE instance,
         RAWINPUTDEVICE doomedRegistration{
             HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_KEYBOARD,
             RIDEV_INPUTSINK, doomedWindow};
-        const bool registered = RegisterRawInputDevices(
+        const bool doomedRegistered = RegisterRawInputDevices(
             &doomedRegistration, 1, sizeof(doomedRegistration)) != FALSE;
         const bool destroyed = DestroyWindow(doomedWindow) != FALSE;
         auto doomedEvent = toAdapterEvent(keyMessage);
         const bool enqueued = hydra_gate_c_adapter_apply_input(
             failureAdapter.get(), 1, &doomedEvent) ==
             HYDRA_GATE_C_ADAPTER_OK;
-        destroyedTargetRejected = registered && destroyed && enqueued &&
+        destroyedTargetRejected = doomedRegistered && destroyed && enqueued &&
             !failureShim.dispatchRawInput();
         destroyedTargetRejected = failureShim.uninstall() &&
             destroyedTargetRejected;
