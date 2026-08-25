@@ -274,14 +274,18 @@ public:
         ok = performRegistration(RawProbeOperation::RegisterDeviceNotify,
                                  HID_USAGE_GENERIC_MOUSE, RIDEV_DEVNOTIFY,
                                  windowA_) && ok;
-        ok = requireStored(HID_USAGE_GENERIC_MOUSE, RIDEV_DEVNOTIFY,
-                           windowA_) && ok;
+        // Native Windows x64 and WOW64/x86 observation shows that
+        // RegisterRawInputDevices accepts RIDEV_DEVNOTIFY, while
+        // GetRegisteredRawInputDevices does not echo that notification bit.
+        // The request and stored snapshots remain separately recorded so
+        // P3-RAW-02 can preserve the distinction without guessing.
+        ok = requireStored(HID_USAGE_GENERIC_MOUSE, 0, windowA_) && ok;
         ok = performRegistration(
                  RawProbeOperation::RegisterBackgroundDeviceNotify,
                  HID_USAGE_GENERIC_KEYBOARD,
                  RIDEV_INPUTSINK | RIDEV_DEVNOTIFY, windowB_) && ok;
-        ok = requireStored(HID_USAGE_GENERIC_KEYBOARD,
-                           RIDEV_INPUTSINK | RIDEV_DEVNOTIFY, windowB_) && ok;
+        ok = requireStored(HID_USAGE_GENERIC_KEYBOARD, RIDEV_INPUTSINK,
+                           windowB_) && ok;
 
         ok = performRegistration(RawProbeOperation::RemoveMouse,
                                  HID_USAGE_GENERIC_MOUSE, RIDEV_REMOVE,
