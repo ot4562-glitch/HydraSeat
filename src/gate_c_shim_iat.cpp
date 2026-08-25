@@ -32,6 +32,10 @@ bool validFunction(CursorFocusImport function) noexcept {
     return static_cast<std::size_t>(function) < kCursorFocusImportCount;
 }
 
+bool validFunction(RawInputImport function) noexcept {
+    return static_cast<std::size_t>(function) < kRawInputImportCount;
+}
+
 #ifdef _WIN32
 
 bool imageRange(std::uint32_t rva, std::size_t bytes,
@@ -105,6 +109,19 @@ std::optional<CursorFocusImport> cursorFocusFunction(
     if (name == "GetCapture") return CursorFocusImport::GetCapture;
     if (name == "SetCapture") return CursorFocusImport::SetCapture;
     if (name == "ReleaseCapture") return CursorFocusImport::ReleaseCapture;
+    return std::nullopt;
+}
+
+std::optional<RawInputImport> rawInputFunction(
+    std::string_view name) noexcept {
+    if (name == "RegisterRawInputDevices") {
+        return RawInputImport::RegisterRawInputDevices;
+    }
+    if (name == "GetRegisteredRawInputDevices") {
+        return RawInputImport::GetRegisteredRawInputDevices;
+    }
+    if (name == "GetRawInputData") return RawInputImport::GetRawInputData;
+    if (name == "GetRawInputBuffer") return RawInputImport::GetRawInputBuffer;
     return std::nullopt;
 }
 
@@ -440,6 +457,175 @@ IatPatchReport CursorFocusIatPatchSet::uninstall(
             remaining.push_back(*current);
             report.rollbackComplete = false;
             if (report.systemError == 0) report.systemError = restored.systemError;
+        }
+    }
+    if (!remaining.empty()) {
+        std::reverse(remaining.begin(), remaining.end());
+        m_records = std::move(remaining);
+        report.status = IatPatchStatus::RollbackFailure;
+        return report;
+    }
+    m_records.clear();
+    m_installed = false;
+    report.patchedMask = 0;
+    return report;
+}
+
+IatPatchReport RawInputIatPatchSet::install(
+    std::span<const RawInputIatSlot> slots, IatSlotWriter writer,
+    void* writerContext) {
+    if (m_installed) {
+        IatPatchReport report;
+        report.status = IatPatchStatus::AlreadyInstalled;
+        report.discoveredMask = kRawInputImportMask;
+        report.patchedMask = kRawInputImportMask;
+        return report;
+    }
+    if (writer == nullptr) {
+        return failure(IatPatchStatus::PatchFailure,
+                       "Raw Input IAT slot writer is missing");
+    }
+    std::array<const RawInputIatSlot*, kRawInputImportCount> ordered{};
+    std::uint32_t discoveredMask = 0;
+    for (const auto& slot : slots) {
+        if (!validFunction(slot.function) || slot.address == nullptr ||
+            slot.original == 0 || slot.replacement == 0) {
+            auto report = failure(IatPatchStatus::InvalidImage,
+                                  "Raw Input IAT slot is invalid");
+            report.discoveredMask = discoveredMask;
+            return report;
+        }
+        const auto index = static_cast<std::size_t>(slot.function);
+        const auto bit = rawInputImportBit(slot.function);
+        if (ordered[index] != nullptr) {
+            auto report = failure(IatPatchStatus::DuplicateImport,
+                                  "Raw Input import occurs more than once");
+            report.discoveredMask = discoveredMask | bit;
+            return report;
+        }
+        ordered[index] = &slot;
+        discoveredMask |= bit;
+    }
+    if (discoveredMask != kRawInputImportMask) {
+        auto report = failure(IatPatchStatus::MissingImport,
+                              "one or more Raw Input imports are missing");
+        report.discoveredMask = discoveredMask;
+        return report;
+    }
+    for (const auto* slot : ordered) {
+        if (slot->original == slot->replacement ||
+            *slot->address == slot->replacement) {
+            auto report = failure(IatPatchStatus::AlreadyPatched,
+                                  "Raw Input import is already patched");
+            report.discoveredMask = discoveredMask;
+            return report;
+        }
+        if (*slot->address != slot->original) {
+            auto report = failure(IatPatchStatus::PatchFailure,
+                                  "Raw Input import changed after discovery");
+            report.discoveredMask = discoveredMask;
+            return report;
+        }
+    }
+
+    std::vector<RawInputIatSlot> applied;
+    applied.reserve(kRawInputImportCount);
+    std::vector<RawInputIatSlot> rollbackRemaining;
+    rollbackRemaining.reserve(kRawInputImportCount);
+    IatPatchReport report;
+    report.status = IatPatchStatus::Success;
+    report.discoveredMask = discoveredMask;
+    for (const auto* slot : ordered) {
+        const auto write = writer(slot->address, slot->original,
+                                  slot->replacement, writerContext);
+        if (write.success) {
+            applied.push_back(*slot);
+            report.patchedMask |= rawInputImportBit(slot->function);
+            continue;
+        }
+        report.status = write.protectionFailure
+                            ? IatPatchStatus::ProtectionFailure
+                            : IatPatchStatus::PatchFailure;
+        report.systemError = write.systemError;
+        report.rollbackComplete = write.valueRestored &&
+                                  write.protectionRestored;
+        if (!write.valueRestored) applied.push_back(*slot);
+        for (auto current = applied.rbegin(); current != applied.rend();
+             ++current) {
+            if (*current->address == current->original) {
+                report.restoredMask |= rawInputImportBit(current->function);
+                continue;
+            }
+            const auto restored = writer(
+                current->address, current->replacement, current->original,
+                writerContext);
+            if (restored.success) {
+                report.restoredMask |= rawInputImportBit(current->function);
+            } else {
+                rollbackRemaining.push_back(*current);
+                report.rollbackComplete = false;
+                if (report.systemError == 0) {
+                    report.systemError = restored.systemError;
+                }
+            }
+        }
+        report.patchedMask = report.rollbackComplete ? 0u
+                                                     : report.patchedMask;
+        if (!report.rollbackComplete) {
+            report.status = IatPatchStatus::RollbackFailure;
+            if (!rollbackRemaining.empty()) {
+                std::reverse(rollbackRemaining.begin(),
+                             rollbackRemaining.end());
+                m_records = std::move(rollbackRemaining);
+                m_installed = true;
+                report.patchedMask = 0;
+                for (const auto& remaining : m_records) {
+                    report.patchedMask |= rawInputImportBit(
+                        remaining.function);
+                }
+            }
+        }
+        return report;
+    }
+    m_records = std::move(applied);
+    m_installed = true;
+    return report;
+}
+
+IatPatchReport RawInputIatPatchSet::uninstall(
+    IatSlotWriter writer, void* writerContext) {
+    IatPatchReport report;
+    report.status = IatPatchStatus::Success;
+    report.rollbackComplete = true;
+    for (const auto& record : m_records) {
+        report.discoveredMask |= rawInputImportBit(record.function);
+        report.patchedMask |= rawInputImportBit(record.function);
+    }
+    if (!m_installed || m_records.empty()) return report;
+    if (writer == nullptr) {
+        report.status = IatPatchStatus::RollbackFailure;
+        report.rollbackComplete = false;
+        return report;
+    }
+    std::vector<RawInputIatSlot> remaining;
+    remaining.reserve(m_records.size());
+    for (auto current = m_records.rbegin(); current != m_records.rend();
+         ++current) {
+        if (*current->address == current->original) {
+            report.restoredMask |= rawInputImportBit(current->function);
+            continue;
+        }
+        const auto restored = writer(
+            current->address, current->replacement, current->original,
+            writerContext);
+        if (restored.success) {
+            report.restoredMask |= rawInputImportBit(current->function);
+        } else {
+            remaining.push_back(*current);
+            report.rollbackComplete = false;
+            if (report.systemError == 0) {
+                report.systemError = restored.systemError;
+            }
         }
     }
     if (!remaining.empty()) {
@@ -836,6 +1022,171 @@ IatPatchReport discoverCurrentProcessCursorFocusImports(
     if (discoveredMask != kCursorFocusImportMask) {
         auto report = failure(IatPatchStatus::MissingImport,
                               "one or more cursor/focus imports are missing");
+        report.discoveredMask = discoveredMask;
+        return report;
+    }
+    IatPatchReport report;
+    report.status = IatPatchStatus::Success;
+    report.discoveredMask = discoveredMask;
+    return report;
+#else
+    (void)replacements;
+    return failure(IatPatchStatus::UnsupportedPlatform,
+                   "Win32 IAT discovery is Windows-only");
+#endif
+}
+
+IatPatchReport discoverCurrentProcessRawInputImports(
+    const std::array<std::uintptr_t, kRawInputImportCount>& replacements,
+    std::vector<RawInputIatSlot>& slots) {
+    slots.clear();
+#ifdef _WIN32
+    const HMODULE module = GetModuleHandleW(nullptr);
+    if (module == nullptr) {
+        return failure(IatPatchStatus::InvalidImage,
+                       "current executable module is unavailable",
+                       GetLastError());
+    }
+    const auto* base = reinterpret_cast<const std::byte*>(module);
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0 ||
+        static_cast<std::size_t>(dos->e_lfanew) > 4096u) {
+        return failure(IatPatchStatus::InvalidImage,
+                       "current executable DOS header is invalid");
+    }
+#if defined(_WIN64)
+    using NtHeaders = IMAGE_NT_HEADERS64;
+    using ThunkData = IMAGE_THUNK_DATA64;
+    constexpr WORD kOptionalMagic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+#else
+    using NtHeaders = IMAGE_NT_HEADERS32;
+    using ThunkData = IMAGE_THUNK_DATA32;
+    constexpr WORD kOptionalMagic = IMAGE_NT_OPTIONAL_HDR32_MAGIC;
+#endif
+    const auto* nt = reinterpret_cast<const NtHeaders*>(
+        base + static_cast<std::size_t>(dos->e_lfanew));
+    if (nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->OptionalHeader.Magic != kOptionalMagic ||
+        nt->FileHeader.SizeOfOptionalHeader < sizeof(nt->OptionalHeader)) {
+        return failure(IatPatchStatus::InvalidImage,
+                       "current executable NT header is invalid");
+    }
+    const std::size_t imageBytes = nt->OptionalHeader.SizeOfImage;
+    if (imageBytes < sizeof(IMAGE_DOS_HEADER) ||
+        nt->OptionalHeader.NumberOfRvaAndSizes <=
+            IMAGE_DIRECTORY_ENTRY_IMPORT) {
+        return failure(IatPatchStatus::InvalidImage,
+                       "current executable image size is invalid");
+    }
+    const auto directory = nt->OptionalHeader.DataDirectory[
+        IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (directory.VirtualAddress == 0 || directory.Size == 0 ||
+        !imageRange(directory.VirtualAddress, directory.Size, imageBytes)) {
+        return failure(IatPatchStatus::MissingImport,
+                       "current executable has no bounded import directory");
+    }
+    const auto* descriptors = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(
+        base + directory.VirtualAddress);
+    const std::size_t descriptorLimit =
+        directory.Size / sizeof(IMAGE_IMPORT_DESCRIPTOR);
+    bool terminated = false;
+    std::uint32_t discoveredMask = 0;
+    for (std::size_t descriptorIndex = 0;
+         descriptorIndex < descriptorLimit; ++descriptorIndex) {
+        const auto& descriptor = descriptors[descriptorIndex];
+        if (descriptor.Name == 0 && descriptor.FirstThunk == 0 &&
+            descriptor.OriginalFirstThunk == 0) {
+            terminated = true;
+            break;
+        }
+        std::string_view moduleName;
+        if (!boundedAsciiString(base, imageBytes, descriptor.Name,
+                                moduleName)) {
+            return failure(IatPatchStatus::InvalidImage,
+                           "import module name is not bounded");
+        }
+        if (!allowedPollingModule(moduleName)) continue;
+        if (descriptor.OriginalFirstThunk == 0 ||
+            descriptor.FirstThunk == 0 ||
+            !imageRange(descriptor.OriginalFirstThunk, sizeof(ThunkData),
+                        imageBytes) ||
+            !imageRange(descriptor.FirstThunk, sizeof(ThunkData),
+                        imageBytes)) {
+            return failure(IatPatchStatus::InvalidImage,
+                           "Raw Input import thunk metadata is invalid");
+        }
+        const std::size_t thunkLimit = imageBytes / sizeof(ThunkData);
+        bool thunkTerminated = false;
+        for (std::size_t thunkIndex = 0; thunkIndex < thunkLimit;
+             ++thunkIndex) {
+            const auto originalRva = static_cast<std::uint64_t>(
+                descriptor.OriginalFirstThunk) +
+                thunkIndex * sizeof(ThunkData);
+            const auto firstRva = static_cast<std::uint64_t>(
+                descriptor.FirstThunk) + thunkIndex * sizeof(ThunkData);
+            if (originalRva > (std::numeric_limits<std::uint32_t>::max)() ||
+                firstRva > (std::numeric_limits<std::uint32_t>::max)() ||
+                !imageRange(static_cast<std::uint32_t>(originalRva),
+                            sizeof(ThunkData), imageBytes) ||
+                !imageRange(static_cast<std::uint32_t>(firstRva),
+                            sizeof(ThunkData), imageBytes)) {
+                return failure(IatPatchStatus::InvalidImage,
+                               "Raw Input import thunk is not bounded");
+            }
+            const auto* originalThunk = reinterpret_cast<const ThunkData*>(
+                base + static_cast<std::uint32_t>(originalRva));
+            if (originalThunk->u1.AddressOfData == 0) {
+                thunkTerminated = true;
+                break;
+            }
+            if (IMAGE_SNAP_BY_ORDINAL(originalThunk->u1.Ordinal)) continue;
+            const auto nameRva64 = originalThunk->u1.AddressOfData +
+                                   sizeof(WORD);
+            if (nameRva64 > (std::numeric_limits<std::uint32_t>::max)()) {
+                return failure(IatPatchStatus::InvalidImage,
+                               "Raw Input import name RVA is invalid");
+            }
+            std::string_view functionName;
+            if (!boundedAsciiString(
+                    base, imageBytes, static_cast<std::uint32_t>(nameRva64),
+                    functionName)) {
+                return failure(IatPatchStatus::InvalidImage,
+                               "Raw Input import name is not bounded");
+            }
+            const auto function = rawInputFunction(functionName);
+            if (!function) continue;
+            const auto bit = rawInputImportBit(*function);
+            if ((discoveredMask & bit) != 0) {
+                auto report = failure(
+                    IatPatchStatus::DuplicateImport,
+                    "Raw Input import occurs more than once");
+                report.discoveredMask = discoveredMask;
+                return report;
+            }
+            auto* slot = reinterpret_cast<std::uintptr_t*>(
+                const_cast<std::byte*>(base) +
+                static_cast<std::uint32_t>(firstRva));
+            const auto index = static_cast<std::size_t>(*function);
+            if (replacements[index] == 0 || *slot == 0) {
+                return failure(IatPatchStatus::InvalidImage,
+                               "Raw Input import pointer is invalid");
+            }
+            slots.push_back(RawInputIatSlot{
+                *function, slot, *slot, replacements[index]});
+            discoveredMask |= bit;
+        }
+        if (!thunkTerminated) {
+            return failure(IatPatchStatus::InvalidImage,
+                           "Raw Input import thunk table is unterminated");
+        }
+    }
+    if (!terminated) {
+        return failure(IatPatchStatus::InvalidImage,
+                       "import descriptor table is unterminated");
+    }
+    if (discoveredMask != kRawInputImportMask) {
+        auto report = failure(IatPatchStatus::MissingImport,
+                              "one or more Raw Input imports are missing");
         report.discoveredMask = discoveredMask;
         return report;
     }

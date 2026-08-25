@@ -2,17 +2,34 @@
 
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/virtual_input_state.hpp"
+#include "hydra/virtual_raw_input.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <new>
+#include <span>
+#include <vector>
 
 namespace {
 
 struct AdapterContext {
+    explicit AdapterContext(std::uint16_t contextDiscriminator)
+        : raw(architecture(), contextDiscriminator) {}
+
+    static constexpr hydra::gatec::RawArchitecture architecture() noexcept {
+        return sizeof(void*) == 8
+            ? hydra::gatec::RawArchitecture::X64
+            : hydra::gatec::RawArchitecture::X86;
+    }
+
     std::mutex mutex;
     hydra::gatec::VirtualInputState state;
+    hydra::gatec::VirtualRawInputContext raw;
+    std::deque<hydra::gatec::VirtualRawDelivery> pendingRawDeliveries;
+    bool rawEnabled{false};
     std::uint32_t processId{0};
     std::uint64_t targetWindow{0};
     std::uint64_t logicalForegroundWindow{0};
@@ -20,6 +37,8 @@ struct AdapterContext {
     std::uint64_t logicalFocusWindow{0};
     std::uint64_t virtualCaptureWindow{0};
 };
+
+std::atomic<std::uint32_t> gNextRawContextDiscriminator{1};
 
 static_assert(sizeof(HydraGateCAdapterInputEventV1) ==
               HYDRA_GATE_C_ADAPTER_INPUT_EVENT_V1_BYTES);
@@ -31,6 +50,12 @@ static_assert(sizeof(HydraGateCAdapterClipRectV2) ==
               HYDRA_GATE_C_ADAPTER_CLIP_RECT_V2_BYTES);
 static_assert(sizeof(HydraGateCAdapterWindowStateV2) ==
               HYDRA_GATE_C_ADAPTER_WINDOW_STATE_V2_BYTES);
+static_assert(sizeof(HydraGateCAdapterRawRegistrationV3) ==
+              HYDRA_GATE_C_ADAPTER_RAW_REGISTRATION_V3_BYTES);
+static_assert(sizeof(HydraGateCAdapterRawRegistrationEntryV3) ==
+              HYDRA_GATE_C_ADAPTER_RAW_REGISTRATION_ENTRY_V3_BYTES);
+static_assert(sizeof(HydraGateCAdapterRawDeliveryV3) ==
+              HYDRA_GATE_C_ADAPTER_RAW_DELIVERY_V3_BYTES);
 
 AdapterContext* contextOf(HydraGateCAdapterHandle handle) noexcept {
     return static_cast<AdapterContext*>(handle);
@@ -42,6 +67,32 @@ bool validBoolean(std::uint8_t value) noexcept {
 
 bool allZero(const std::uint8_t (&bytes)[3]) noexcept {
     return bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0;
+}
+
+bool allZero(const std::uint8_t (&bytes)[7]) noexcept {
+    return std::all_of(std::begin(bytes), std::end(bytes),
+                       [](std::uint8_t value) { return value == 0; });
+}
+
+HydraGateCAdapterResult mapRawResult(
+    hydra::gatec::VirtualRawResult result) noexcept {
+    using hydra::gatec::VirtualRawResult;
+    switch (result) {
+    case VirtualRawResult::Success:
+        return HYDRA_GATE_C_ADAPTER_OK;
+    case VirtualRawResult::InvalidArgument:
+    case VirtualRawResult::UnsupportedUsage:
+    case VirtualRawResult::InvalidFlags:
+    case VirtualRawResult::InvalidTarget:
+    case VirtualRawResult::UnsupportedCommand:
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    case VirtualRawResult::BufferTooSmall:
+        return HYDRA_GATE_C_ADAPTER_BUFFER_TOO_SMALL;
+    case VirtualRawResult::RegistrationMissing:
+        return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+    default:
+        return HYDRA_GATE_C_ADAPTER_RAW_INPUT_FAILURE;
+    }
 }
 
 void clearWindowState(AdapterContext& context) noexcept {
@@ -184,7 +235,15 @@ hydra_gate_c_adapter_api_version(void) {
 HydraGateCAdapterHandle HYDRA_GATE_C_ADAPTER_CALL
 hydra_gate_c_adapter_create(void) {
     try {
-        return new (std::nothrow) AdapterContext{};
+        const auto discriminator =
+            gNextRawContextDiscriminator.fetch_add(1);
+        constexpr std::uint32_t maximumDiscriminator =
+            sizeof(void*) == 8 ? 0xffu : 0x3fu;
+        if (discriminator == 0 || discriminator > maximumDiscriminator) {
+            return nullptr;
+        }
+        return new (std::nothrow) AdapterContext(
+            static_cast<std::uint16_t>(discriminator));
     } catch (...) {
         return nullptr;
     }
@@ -204,6 +263,9 @@ HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL hydra_gate_c_adapter_reset(
     try {
         std::scoped_lock lock(context->mutex);
         context->state.reset();
+        context->raw.reset();
+        context->pendingRawDeliveries.clear();
+        context->rawEnabled = false;
         clearWindowState(*context);
         return HYDRA_GATE_C_ADAPTER_OK;
     } catch (...) {
@@ -228,9 +290,27 @@ hydra_gate_c_adapter_apply_input(
         if (sequence <= context->state.lastAppliedSequence()) {
             return HYDRA_GATE_C_ADAPTER_STALE_SEQUENCE;
         }
-        return context->state.applyInput(sequence, toMessage(*eventData))
-                   ? HYDRA_GATE_C_ADAPTER_OK
-                   : HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+        const auto message = toMessage(*eventData);
+        if (!context->state.applyInput(sequence, message)) {
+            return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+        }
+        if (context->rawEnabled) {
+            const auto delivery = context->raw.enqueueInput(sequence, message);
+            if (delivery.result ==
+                hydra::gatec::VirtualRawResult::Success) {
+                if (context->pendingRawDeliveries.size() >=
+                    hydra::gatec::kVirtualRawMaximumPackets) {
+                    (void)context->raw.completeDelivery(
+                        delivery.token, false, false);
+                    return HYDRA_GATE_C_ADAPTER_RAW_INPUT_FAILURE;
+                }
+                context->pendingRawDeliveries.push_back(delivery);
+            } else if (delivery.result !=
+                       hydra::gatec::VirtualRawResult::RegistrationMissing) {
+                return mapRawResult(delivery.result);
+            }
+        }
+        return HYDRA_GATE_C_ADAPTER_OK;
     } catch (...) {
         return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
     }
@@ -563,6 +643,261 @@ hydra_gate_c_adapter_invalidate_window(
         if (context->virtualCaptureWindow == window) {
             context->virtualCaptureWindow = 0;
         }
+        return HYDRA_GATE_C_ADAPTER_OK;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_configure(
+    HydraGateCAdapterHandle handle, std::uint32_t seatId,
+    std::uint32_t processId, std::uint16_t architectureBits) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || seatId == 0 || processId == 0 ||
+        (architectureBits != 32 && architectureBits != 64) ||
+        architectureBits != sizeof(void*) * 8u) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    try {
+        std::scoped_lock lock(context->mutex);
+        const auto result = context->raw.configure(seatId, processId);
+        if (result != hydra::gatec::VirtualRawResult::Success) {
+            return mapRawResult(result);
+        }
+        context->rawEnabled = true;
+        context->pendingRawDeliveries.clear();
+        return HYDRA_GATE_C_ADAPTER_OK;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_register(
+    HydraGateCAdapterHandle handle,
+    const HydraGateCAdapterRawRegistrationV3* registrations,
+    std::uint32_t registrationCount) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || registrations == nullptr ||
+        registrationCount == 0 ||
+        registrationCount >
+            hydra::gatec::kVirtualRawMaximumRegistrationOperations) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    try {
+        std::vector<hydra::gatec::VirtualRawRegistrationRequest> requests;
+        requests.reserve(registrationCount);
+        for (std::uint32_t index = 0; index < registrationCount; ++index) {
+            const auto& value = registrations[index];
+            if (value.struct_size != sizeof(value)) {
+                return HYDRA_GATE_C_ADAPTER_STRUCT_VERSION_MISMATCH;
+            }
+            if (!allZero(value.reserved0) ||
+                !validBoolean(value.target_window_current_process)) {
+                return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+            }
+            requests.push_back({
+                {value.usage_page, value.usage}, value.flags,
+                value.target_window,
+                value.target_window_current_process != 0});
+        }
+        std::scoped_lock lock(context->mutex);
+        if (!context->rawEnabled) {
+            return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+        }
+        return mapRawResult(context->raw.registerDevices(requests));
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_get_registered(
+    HydraGateCAdapterHandle handle,
+    HydraGateCAdapterRawRegistrationEntryV3* registrations,
+    std::uint32_t* registrationCount) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || registrationCount == nullptr) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    try {
+        std::scoped_lock lock(context->mutex);
+        if (!context->rawEnabled) {
+            return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+        }
+        const auto values = context->raw.registrations();
+        if (registrations == nullptr) {
+            *registrationCount = static_cast<std::uint32_t>(values.size());
+            return HYDRA_GATE_C_ADAPTER_OK;
+        }
+        const auto capacity = *registrationCount;
+        *registrationCount = static_cast<std::uint32_t>(values.size());
+        if (capacity < values.size()) {
+            return HYDRA_GATE_C_ADAPTER_BUFFER_TOO_SMALL;
+        }
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            if (registrations[index].struct_size !=
+                sizeof(HydraGateCAdapterRawRegistrationEntryV3)) {
+                return HYDRA_GATE_C_ADAPTER_STRUCT_VERSION_MISMATCH;
+            }
+        }
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            const auto requestedSize = registrations[index].struct_size;
+            std::memset(&registrations[index], 0,
+                        sizeof(registrations[index]));
+            registrations[index].struct_size = requestedSize;
+            registrations[index].usage_page = values[index].key.usagePage;
+            registrations[index].usage = values[index].key.usage;
+            registrations[index].requested_flags =
+                values[index].requestedFlags;
+            registrations[index].observable_flags =
+                values[index].observableFlags;
+            registrations[index].target_window =
+                values[index].targetWindowRuntimeValue;
+            registrations[index].generation = values[index].generation;
+            registrations[index].target_validated_at_registration =
+                values[index].targetWindowValidatedAtRegistration ? 1u : 0u;
+            registrations[index].device_notification_requested =
+                values[index].deviceNotificationRequested ? 1u : 0u;
+        }
+        return HYDRA_GATE_C_ADAPTER_OK;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_take_delivery(
+    HydraGateCAdapterHandle handle,
+    HydraGateCAdapterRawDeliveryV3* delivery) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || delivery == nullptr) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    if (delivery->struct_size != sizeof(*delivery)) {
+        return HYDRA_GATE_C_ADAPTER_STRUCT_VERSION_MISMATCH;
+    }
+    try {
+        std::scoped_lock lock(context->mutex);
+        if (!context->rawEnabled || context->pendingRawDeliveries.empty()) {
+            return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+        }
+        const auto value = context->pendingRawDeliveries.front();
+        context->pendingRawDeliveries.pop_front();
+        const auto requestedSize = delivery->struct_size;
+        std::memset(delivery, 0, sizeof(*delivery));
+        delivery->struct_size = requestedSize;
+        delivery->result = static_cast<std::uint32_t>(value.result);
+        delivery->token = value.token;
+        delivery->target_window = value.targetWindowRuntimeValue;
+        delivery->registration_generation =
+            value.registrationGeneration;
+        delivery->message_wparam = value.messageWParam;
+        return HYDRA_GATE_C_ADAPTER_OK;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_complete_delivery(
+    HydraGateCAdapterHandle handle, std::uint64_t token,
+    std::uint8_t targetCurrentlyValid, std::uint8_t postSucceeded) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || token == 0 ||
+        !validBoolean(targetCurrentlyValid) ||
+        !validBoolean(postSucceeded)) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    try {
+        std::scoped_lock lock(context->mutex);
+        if (!context->rawEnabled) {
+            return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+        }
+        return mapRawResult(context->raw.completeDelivery(
+            token, targetCurrentlyValid != 0, postSucceeded != 0));
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_get_data(
+    HydraGateCAdapterHandle handle, std::uint64_t token,
+    std::uint32_t command, void* data, std::uint32_t* size,
+    std::uint32_t headerSize) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || size == nullptr || token == 0) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    try {
+        std::scoped_lock lock(context->mutex);
+        if (!context->rawEnabled) {
+            return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+        }
+        const auto capacity = *size;
+        auto output = data == nullptr
+            ? std::span<std::byte>{}
+            : std::span<std::byte>(static_cast<std::byte*>(data), capacity);
+        const auto result = context->raw.readData(
+            token, command, headerSize, output, data == nullptr);
+        *size = result.sizeAfter;
+        return mapRawResult(result.result);
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_get_buffer(
+    HydraGateCAdapterHandle handle, void* data, std::uint32_t* size,
+    std::uint32_t headerSize, std::uint32_t* packetCount) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || size == nullptr || packetCount == nullptr) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    try {
+        std::scoped_lock lock(context->mutex);
+        if (!context->rawEnabled) {
+            return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+        }
+        const auto capacity = *size;
+        auto output = data == nullptr
+            ? std::span<std::byte>{}
+            : std::span<std::byte>(static_cast<std::byte*>(data), capacity);
+        const auto result = context->raw.readBuffer(
+            headerSize, output, data == nullptr);
+        *size = result.sizeAfter;
+        *packetCount = result.packetCount;
+        return mapRawResult(result.result);
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_begin_stopping(HydraGateCAdapterHandle handle) {
+    auto* context = contextOf(handle);
+    if (context == nullptr) return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    try {
+        std::scoped_lock lock(context->mutex);
+        if (context->rawEnabled) context->raw.beginStopping();
+        return HYDRA_GATE_C_ADAPTER_OK;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_raw_reset(HydraGateCAdapterHandle handle) {
+    auto* context = contextOf(handle);
+    if (context == nullptr) return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    try {
+        std::scoped_lock lock(context->mutex);
+        context->raw.reset();
+        context->pendingRawDeliveries.clear();
+        context->rawEnabled = false;
         return HYDRA_GATE_C_ADAPTER_OK;
     } catch (...) {
         return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;

@@ -28,10 +28,19 @@ enum class CursorFocusImport : std::uint8_t {
     ReleaseCapture = 9
 };
 
+enum class RawInputImport : std::uint8_t {
+    RegisterRawInputDevices = 0,
+    GetRegisteredRawInputDevices = 1,
+    GetRawInputData = 2,
+    GetRawInputBuffer = 3
+};
+
 inline constexpr std::size_t kPollingImportCount = 3;
 inline constexpr std::uint32_t kPollingImportMask = 0x7u;
 inline constexpr std::size_t kCursorFocusImportCount = 10;
 inline constexpr std::uint32_t kCursorFocusImportMask = 0x3ffu;
+inline constexpr std::size_t kRawInputImportCount = 4;
+inline constexpr std::uint32_t kRawInputImportMask = 0x0fu;
 
 constexpr std::uint32_t pollingImportBit(PollingImport value) noexcept {
     return 1u << static_cast<std::uint32_t>(value);
@@ -39,6 +48,10 @@ constexpr std::uint32_t pollingImportBit(PollingImport value) noexcept {
 
 constexpr std::uint32_t cursorFocusImportBit(
     CursorFocusImport value) noexcept {
+    return 1u << static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t rawInputImportBit(RawInputImport value) noexcept {
     return 1u << static_cast<std::uint32_t>(value);
 }
 
@@ -51,6 +64,13 @@ struct PollingIatSlot {
 
 struct CursorFocusIatSlot {
     CursorFocusImport function{CursorFocusImport::GetCursorPos};
+    std::uintptr_t* address{nullptr};
+    std::uintptr_t original{0};
+    std::uintptr_t replacement{0};
+};
+
+struct RawInputIatSlot {
+    RawInputImport function{RawInputImport::RegisterRawInputDevices};
     std::uintptr_t* address{nullptr};
     std::uintptr_t original{0};
     std::uintptr_t replacement{0};
@@ -134,6 +154,24 @@ private:
     bool m_installed{false};
 };
 
+class RawInputIatPatchSet {
+public:
+    IatPatchReport install(std::span<const RawInputIatSlot> slots,
+                           IatSlotWriter writer,
+                           void* writerContext = nullptr);
+    IatPatchReport uninstall(IatSlotWriter writer,
+                             void* writerContext = nullptr);
+
+    bool installed() const noexcept { return m_installed; }
+    const std::vector<RawInputIatSlot>& records() const noexcept {
+        return m_records;
+    }
+
+private:
+    std::vector<RawInputIatSlot> m_records;
+    bool m_installed{false};
+};
+
 IatWriteResult writeProcessIatSlot(
     std::uintptr_t* address,
     std::uintptr_t expected,
@@ -147,5 +185,9 @@ IatPatchReport discoverCurrentProcessPollingImports(
 IatPatchReport discoverCurrentProcessCursorFocusImports(
     const std::array<std::uintptr_t, kCursorFocusImportCount>& replacements,
     std::vector<CursorFocusIatSlot>& slots);
+
+IatPatchReport discoverCurrentProcessRawInputImports(
+    const std::array<std::uintptr_t, kRawInputImportCount>& replacements,
+    std::vector<RawInputIatSlot>& slots);
 
 } // namespace hydra::gatec

@@ -390,6 +390,9 @@ Implemented Gate C state:
 - `GetKeyState` / `GetKeyboardState`-style high bits;
 - mouse button and wheel state;
 - virtual cursor, clip, foreground and capture state;
+- bounded per-process virtual Raw Input registrations, immutable synthetic
+  keyboard/mouse packets, generation-checked opaque `HRAWINPUT` tokens, and
+  an eight-byte-aligned queue;
 - two separate controlled target processes with different Seat states;
 - bounded per-target writer queues so a slow target cannot block Raw Input indefinitely;
 - Windows CI verification that A/B keys, mouse state, cursor state and virtual foreground do not cross between the two controlled processes.
@@ -400,8 +403,12 @@ Important boundary:
 - HydraSeat-owned probes may opt into a startup-loaded, process-local IAT shim
   for polling plus cursor/clip/logical-focus/capture APIs; both surfaces are
   Windows-validated in controlled x64/x86 CI;
+- the same shim has an explicit, separate Raw Input capability for only
+  `RegisterRawInputDevices`, `GetRegisteredRawInputDevices`,
+  `GetRawInputData`, and `GetRawInputBuffer`; it is CODE_COMPLETE with
+  portable tests, while native x64/x86 validation is pending;
 - the standalone Raw Input behavior probe and bounded trace/parser are
-  code-complete, while native x64/x86 observed traces are still pending;
+  Windows-validated on x64/x86 run `32800513365`;
 - no detour, remote injection, driver control, physical suppression, or
   third-party/commercial-process patch is installed;
 - Gate C is not complete until the Raw Input, recovery, physical, and later
@@ -427,7 +434,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-RAW-02 — Controlled Raw Input virtualization shim
+P3-CTRL-01 — XInput controlled state and slot remapping
 ```
 
 Start every coding task by reading:

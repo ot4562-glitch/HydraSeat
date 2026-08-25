@@ -4,6 +4,7 @@
 #include "hydra/gate_c_probe_snapshot.hpp"
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/gate_c_transport.hpp"
+#include "hydra/virtual_raw_input.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -11,6 +12,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -23,8 +25,10 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
+#include <hidusage.h>
 #include <windows.h>
 #endif
 
@@ -112,6 +116,8 @@ struct ProbeOptions {
     bool pollingShimSelfTest{false};
     bool cursorFocusShim{false};
     bool cursorFocusShimSelfTest{false};
+    bool rawInputShim{false};
+    bool rawInputShimSelfTest{false};
     std::wstring shimPath;
     bool testMissingWindow{false};
     bool testNoHandshake{false};
@@ -127,6 +133,7 @@ void printUsage(std::ostream& output) {
         << "  hydra_gate_c_api_probe --baseline-self-test\n\n"
         << "  hydra_gate_c_api_probe --polling-shim-self-test --shim <hydra_gate_c_shim.dll>\n\n"
         << "  hydra_gate_c_api_probe --cursor-focus-shim-self-test --shim <hydra_gate_c_shim.dll>\n\n"
+        << "  hydra_gate_c_api_probe --raw-input-shim-self-test --shim <hydra_gate_c_shim.dll>\n\n"
         << "The probe reads ordinary Win32 APIs and the direct Gate C adapter side\n"
         << "by side. The polling mode loads only the explicitly supplied HydraSeat\n"
         << "shim at startup and restores its process-local IAT before unload.\n";
@@ -203,6 +210,13 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
             options.pollingShim = true;
             options.cursorFocusShim = true;
             options.cursorFocusShimSelfTest = true;
+        } else if (argument == L"--raw-input-shim") {
+            options.pollingShim = true;
+            options.rawInputShim = true;
+        } else if (argument == L"--raw-input-shim-self-test") {
+            options.pollingShim = true;
+            options.rawInputShim = true;
+            options.rawInputShimSelfTest = true;
         } else if (argument == L"--shim" && index + 1 < argc) {
             options.shimPath = argv[++index];
         } else if (argument == L"--test-missing-window") {
@@ -222,7 +236,8 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
         options.seatId != 0 || options.tokenSet;
     if (!options.showHelp && !options.baselineSelfTest &&
         !options.pollingShimSelfTest &&
-        !options.cursorFocusShimSelfTest && !connectedMode) {
+        !options.cursorFocusShimSelfTest &&
+        !options.rawInputShimSelfTest && !connectedMode) {
         valid = false;
     }
     if (connectedMode &&
@@ -233,7 +248,8 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
     if (options.testMissingWindow && options.testNoHandshake) valid = false;
     if (options.pollingShim && options.shimPath.empty()) valid = false;
     if ((options.pollingShimSelfTest ||
-         options.cursorFocusShimSelfTest) && connectedMode) valid = false;
+         options.cursorFocusShimSelfTest ||
+         options.rawInputShimSelfTest) && connectedMode) valid = false;
     return options;
 }
 
@@ -248,6 +264,8 @@ public:
         HydraGateCShimResult(HYDRA_GATE_C_SHIM_CALL*)(void);
     using StatusFunction = HydraGateCShimResult(HYDRA_GATE_C_SHIM_CALL*)(
         HydraGateCShimStatusV1*);
+    using DispatchRawInputFunction =
+        HydraGateCShimResult(HYDRA_GATE_C_SHIM_CALL*)(void);
 
     ~ShimOwner() {
         if (m_module != nullptr) {
@@ -264,7 +282,8 @@ public:
     bool loadAndInstall(const std::wstring& path,
                         HydraGateCAdapterHandle adapter,
                         std::uint32_t seatId, HWND targetWindow,
-                        bool enableCursorFocus = false) {
+                        bool enableCursorFocus = false,
+                        bool enableRawInput = false) {
         if (m_module != nullptr || path.empty() || adapter == nullptr ||
             targetWindow == nullptr) {
             return false;
@@ -279,9 +298,11 @@ public:
         m_uninstall = resolve<UninstallFunction>(
             "hydra_gate_c_shim_uninstall");
         m_status = resolve<StatusFunction>("hydra_gate_c_shim_get_status");
+        m_dispatchRawInput = resolve<DispatchRawInputFunction>(
+            "hydra_gate_c_shim_dispatch_raw_input");
         if (m_apiVersion == nullptr || m_install == nullptr ||
             m_markUnavailable == nullptr || m_uninstall == nullptr ||
-            m_status == nullptr ||
+            m_status == nullptr || m_dispatchRawInput == nullptr ||
             m_apiVersion() != HYDRA_GATE_C_SHIM_API_VERSION) {
             FreeLibrary(m_module);
             m_module = nullptr;
@@ -292,13 +313,13 @@ public:
         config.api_version = HYDRA_GATE_C_SHIM_API_VERSION;
         config.seat_id = seatId;
         config.process_id = GetCurrentProcessId();
-        config.flags = enableCursorFocus
-            ? HYDRA_GATE_C_SHIM_ENABLE_CURSOR_FOCUS
-            : 0u;
+        config.flags =
+            (enableCursorFocus ? HYDRA_GATE_C_SHIM_ENABLE_CURSOR_FOCUS : 0u) |
+            (enableRawInput ? HYDRA_GATE_C_SHIM_ENABLE_RAW_INPUT : 0u);
         config.target_window = runtimeWindowValue(targetWindow);
-        m_expectedApiMask = enableCursorFocus
-            ? HYDRA_GATE_C_SHIM_ALL_API_MASK
-            : HYDRA_GATE_C_SHIM_POLLING_API_MASK;
+        m_expectedApiMask = HYDRA_GATE_C_SHIM_POLLING_API_MASK |
+            (enableCursorFocus ? HYDRA_GATE_C_SHIM_CURSOR_FOCUS_API_MASK : 0u) |
+            (enableRawInput ? HYDRA_GATE_C_SHIM_RAW_INPUT_API_MASK : 0u);
         const auto result = m_install(adapter, &config);
         m_installed = result == HYDRA_GATE_C_SHIM_OK ||
                       result == HYDRA_GATE_C_SHIM_ALREADY_INSTALLED;
@@ -330,6 +351,11 @@ public:
         if (m_installed && m_markUnavailable != nullptr) {
             (void)m_markUnavailable();
         }
+    }
+
+    bool dispatchRawInput() noexcept {
+        return m_installed && m_dispatchRawInput != nullptr &&
+               m_dispatchRawInput() == HYDRA_GATE_C_SHIM_OK;
     }
 
     bool uninstall() noexcept {
@@ -367,6 +393,7 @@ private:
     MarkUnavailableFunction m_markUnavailable{nullptr};
     UninstallFunction m_uninstall{nullptr};
     StatusFunction m_status{nullptr};
+    DispatchRawInputFunction m_dispatchRawInput{nullptr};
     bool m_installed{false};
     bool m_unloadSafe{true};
     std::uint32_t m_expectedApiMask{HYDRA_GATE_C_SHIM_ALL_API_MASK};
@@ -376,7 +403,9 @@ ProbeComparison captureComparison(HydraGateCAdapterHandle adapter,
                                   std::uint64_t sequence,
                                   std::uint32_t seatId,
                                   std::uint16_t probeVkey,
-                                  HWND targetWindow) {
+                                  HWND targetWindow,
+                                  const hydra::gatec::RawInputApiSnapshot*
+                                      rawInput = nullptr) {
     ProbeComparison comparison;
     comparison.sequence = sequence;
     comparison.monotonicTimestampMicros = monotonicMicros();
@@ -492,6 +521,7 @@ ProbeComparison captureComparison(HydraGateCAdapterHandle adapter,
             windows.virtual_capture_window;
     }
 
+    if (rawInput != nullptr) comparison.rawInput = *rawInput;
     hydra::gatec::updateProbeComparison(comparison);
     return comparison;
 }
@@ -806,6 +836,273 @@ int runLocalCursorFocusShimSelfTest(HINSTANCE instance,
     return EXIT_SUCCESS;
 }
 
+int runLocalRawInputShimSelfTest(HINSTANCE instance,
+                                 const std::wstring& shimPath) {
+    UINT nativeCountBefore = 0;
+    if (GetRegisteredRawInputDevices(
+            nullptr, &nativeCountBefore, sizeof(RAWINPUTDEVICE)) ==
+        static_cast<UINT>(-1)) {
+        return 80;
+    }
+    const HWND window = CreateWindowExW(
+        0, L"STATIC", L"HydraSeat local Raw Input shim test",
+        WS_OVERLAPPED, 0, 0, 64, 64,
+        nullptr, nullptr, instance, nullptr);
+    if (window == nullptr) return 81;
+    const HWND routeWindowB = CreateWindowExW(
+        0, L"STATIC", L"HydraSeat Raw route B", WS_OVERLAPPED,
+        0, 0, 32, 32, nullptr, nullptr, instance, nullptr);
+    if (routeWindowB == nullptr) {
+        DestroyWindow(window);
+        return 81;
+    }
+    AdapterOwner adapter;
+    ShimOwner shim;
+    if (!adapter || !shim.loadAndInstall(
+                        shimPath, adapter.get(), 1, window, false, true) ||
+        !shim.active()) {
+        DestroyWindow(routeWindowB);
+        DestroyWindow(window);
+        return 82;
+    }
+
+    UINT emptyRegistrationCount = 99;
+    bool passed = GetRegisteredRawInputDevices(
+        nullptr, &emptyRegistrationCount, sizeof(RAWINPUTDEVICE)) == 0 &&
+        emptyRegistrationCount == 0;
+
+    RAWINPUTDEVICE devices[2]{};
+    devices[0] = {HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_KEYBOARD,
+                  RIDEV_INPUTSINK | RIDEV_DEVNOTIFY, window};
+    devices[1] = {HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_MOUSE,
+                  RIDEV_INPUTSINK | RIDEV_DEVNOTIFY, window};
+    passed = passed && RegisterRawInputDevices(
+        devices, 2, sizeof(RAWINPUTDEVICE)) != FALSE;
+    UINT registeredCount = 0;
+    passed = passed && GetRegisteredRawInputDevices(
+        nullptr, &registeredCount, sizeof(RAWINPUTDEVICE)) == 0 &&
+        registeredCount == 2;
+    std::array<RAWINPUTDEVICE, 2> registered{};
+    UINT capacity = static_cast<UINT>(registered.size());
+    passed = passed && GetRegisteredRawInputDevices(
+        registered.data(), &capacity, sizeof(RAWINPUTDEVICE)) == 2 &&
+        capacity == 2 &&
+        std::all_of(registered.begin(), registered.end(), [](const auto& value) {
+            return value.dwFlags == RIDEV_INPUTSINK;
+        });
+    RAWINPUTDEVICE keyToWindowB{
+        HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_KEYBOARD,
+        RIDEV_INPUTSINK, routeWindowB};
+    passed = passed && RegisterRawInputDevices(
+        &keyToWindowB, 1, sizeof(keyToWindowB)) != FALSE;
+    capacity = static_cast<UINT>(registered.size());
+    passed = passed && GetRegisteredRawInputDevices(
+        registered.data(), &capacity, sizeof(RAWINPUTDEVICE)) == 2 &&
+        std::any_of(registered.begin(), registered.end(),
+                    [routeWindowB](const auto& value) {
+                        return value.usUsage == HID_USAGE_GENERIC_KEYBOARD &&
+                               value.hwndTarget == routeWindowB;
+                    }) &&
+        std::any_of(registered.begin(), registered.end(),
+                    [window](const auto& value) {
+                        return value.usUsage == HID_USAGE_GENERIC_MOUSE &&
+                               value.hwndTarget == window;
+                    });
+
+    InputEventMessage keyMessage;
+    keyMessage.kind = hydra::gatec::InputKind::Keyboard;
+    keyMessage.keyTransition = hydra::gatec::KeyTransition::Down;
+    keyMessage.vkey = 0x41;
+    keyMessage.scanCode = 0x1e;
+    auto key = toAdapterEvent(keyMessage);
+    passed = passed && hydra_gate_c_adapter_apply_input(
+        adapter.get(), 1, &key) == HYDRA_GATE_C_ADAPTER_OK &&
+        shim.dispatchRawInput();
+    MSG message{};
+    passed = passed && PeekMessageW(
+        &message, routeWindowB, WM_INPUT, WM_INPUT, PM_REMOVE) != FALSE;
+    MSG unexpected{};
+    passed = passed && PeekMessageW(
+        &unexpected, window, WM_INPUT, WM_INPUT, PM_NOREMOVE) == FALSE;
+    if (passed) {
+        UINT bytes = 0;
+        passed = GetRawInputData(
+            reinterpret_cast<HRAWINPUT>(message.lParam), RID_INPUT,
+            nullptr, &bytes, sizeof(RAWINPUTHEADER)) == 0 &&
+            bytes == sizeof(RAWINPUT);
+        SetLastError(ERROR_SUCCESS);
+        passed = passed && GetRawInputData(
+            reinterpret_cast<HRAWINPUT>(message.lParam), RID_INPUT,
+            nullptr, nullptr, sizeof(RAWINPUTHEADER)) ==
+                static_cast<UINT>(-1) &&
+            GetLastError() == ERROR_INVALID_PARAMETER;
+        UINT invalidBytes = bytes;
+        SetLastError(ERROR_SUCCESS);
+        passed = passed && GetRawInputData(
+            reinterpret_cast<HRAWINPUT>(message.lParam), RID_INPUT,
+            nullptr, &invalidBytes, sizeof(RAWINPUTHEADER) - 1u) ==
+                static_cast<UINT>(-1) &&
+            GetLastError() == ERROR_INVALID_PARAMETER;
+        invalidBytes = bytes;
+        SetLastError(ERROR_SUCCESS);
+        passed = passed && GetRawInputData(
+            reinterpret_cast<HRAWINPUT>(message.lParam), 0u, nullptr,
+            &invalidBytes, sizeof(RAWINPUTHEADER)) ==
+                static_cast<UINT>(-1) &&
+            GetLastError() == ERROR_INVALID_PARAMETER;
+        std::vector<std::byte> shortStorage(bytes - 1u, std::byte{0x5a});
+        const auto shortBefore = shortStorage;
+        UINT shortBytes = bytes - 1u;
+        SetLastError(ERROR_SUCCESS);
+        passed = passed && GetRawInputData(
+            reinterpret_cast<HRAWINPUT>(message.lParam), RID_INPUT,
+            shortStorage.data(), &shortBytes, sizeof(RAWINPUTHEADER)) ==
+                static_cast<UINT>(-1) &&
+            GetLastError() == ERROR_INSUFFICIENT_BUFFER &&
+            shortBytes == bytes && shortStorage == shortBefore;
+        std::vector<std::byte> storage(bytes);
+        UINT readBytes = bytes;
+        passed = passed && GetRawInputData(
+            reinterpret_cast<HRAWINPUT>(message.lParam), RID_INPUT,
+            storage.data(), &readBytes, sizeof(RAWINPUTHEADER)) == bytes;
+        if (passed) {
+            RAWINPUT raw{};
+            std::memcpy(&raw, storage.data(), sizeof(raw));
+            passed = raw.header.dwType == RIM_TYPEKEYBOARD &&
+                     raw.data.keyboard.VKey == 0x41 &&
+                     raw.data.keyboard.MakeCode == 0x1e;
+        }
+        UINT consumedBytes = bytes;
+        passed = passed && GetRawInputData(
+            reinterpret_cast<HRAWINPUT>(message.lParam), RID_INPUT,
+            storage.data(), &consumedBytes, sizeof(RAWINPUTHEADER)) ==
+                static_cast<UINT>(-1);
+    }
+
+    InputEventMessage mouseMessage;
+    mouseMessage.kind = hydra::gatec::InputKind::Mouse;
+    mouseMessage.deltaX = 5;
+    mouseMessage.deltaY = 7;
+    mouseMessage.mouseButtonFlags = RI_MOUSE_LEFT_BUTTON_DOWN |
+                                    RI_MOUSE_WHEEL;
+    mouseMessage.wheelDelta = 120;
+    auto mouseEvent = toAdapterEvent(mouseMessage);
+    passed = passed && hydra_gate_c_adapter_apply_input(
+        adapter.get(), 2, &mouseEvent) == HYDRA_GATE_C_ADAPTER_OK &&
+        shim.dispatchRawInput();
+    passed = passed && PeekMessageW(
+        &message, window, WM_INPUT, WM_INPUT, PM_REMOVE) != FALSE;
+    if (passed) {
+        UINT bytes = 0;
+        passed = GetRawInputBuffer(
+            nullptr, &bytes, sizeof(RAWINPUTHEADER)) == 0 &&
+            bytes == sizeof(RAWINPUT);
+        std::vector<std::byte> shortStorage(bytes - 1u, std::byte{0x6b});
+        const auto shortBefore = shortStorage;
+        UINT shortBytes = bytes - 1u;
+        passed = passed && GetRawInputBuffer(
+            reinterpret_cast<PRAWINPUT>(shortStorage.data()), &shortBytes,
+            sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1) &&
+            shortBytes == bytes && shortStorage == shortBefore;
+        std::vector<std::byte> storage(bytes);
+        UINT readBytes = bytes;
+        passed = passed && GetRawInputBuffer(
+            reinterpret_cast<PRAWINPUT>(storage.data()), &readBytes,
+            sizeof(RAWINPUTHEADER)) == 1;
+        if (passed) {
+            RAWINPUT raw{};
+            std::memcpy(&raw, storage.data(), sizeof(raw));
+            passed = raw.header.dwType == RIM_TYPEMOUSE &&
+                     raw.data.mouse.lLastX == 5 &&
+                     raw.data.mouse.lLastY == 7 &&
+                     (raw.data.mouse.usButtonFlags &
+                      RI_MOUSE_LEFT_BUTTON_DOWN) != 0;
+        }
+        UINT emptyBytes = 99;
+        passed = passed && GetRawInputBuffer(
+            nullptr, &emptyBytes, sizeof(RAWINPUTHEADER)) == 0 &&
+            emptyBytes == 0;
+    }
+
+    RAWINPUTDEVICE removeKeyboard{
+        HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_KEYBOARD,
+        RIDEV_REMOVE, nullptr};
+    passed = passed && RegisterRawInputDevices(
+        &removeKeyboard, 1, sizeof(removeKeyboard)) != FALSE;
+    auto removedKey = toAdapterEvent(keyMessage);
+    passed = passed && hydra_gate_c_adapter_apply_input(
+        adapter.get(), 3, &removedKey) == HYDRA_GATE_C_ADAPTER_OK &&
+        shim.dispatchRawInput() &&
+        PeekMessageW(&unexpected, routeWindowB, WM_INPUT, WM_INPUT,
+                     PM_NOREMOVE) == FALSE &&
+        PeekMessageW(&unexpected, window, WM_INPUT, WM_INPUT,
+                     PM_NOREMOVE) == FALSE;
+    auto retainedMouse = toAdapterEvent(mouseMessage);
+    passed = passed && hydra_gate_c_adapter_apply_input(
+        adapter.get(), 4, &retainedMouse) == HYDRA_GATE_C_ADAPTER_OK &&
+        shim.dispatchRawInput() &&
+        PeekMessageW(&message, window, WM_INPUT, WM_INPUT, PM_REMOVE) != FALSE;
+    if (passed) {
+        UINT retainedBytes = 0;
+        passed = GetRawInputBuffer(
+            nullptr, &retainedBytes, sizeof(RAWINPUTHEADER)) == 0 &&
+            retainedBytes == sizeof(RAWINPUT);
+        std::vector<std::byte> retainedStorage(retainedBytes);
+        UINT retainedCapacity = retainedBytes;
+        passed = passed && GetRawInputBuffer(
+            reinterpret_cast<PRAWINPUT>(retainedStorage.data()),
+            &retainedCapacity, sizeof(RAWINPUTHEADER)) == 1;
+    }
+    UINT remainingCount = 0;
+    passed = passed && GetRegisteredRawInputDevices(
+        nullptr, &remainingCount, sizeof(RAWINPUTDEVICE)) == 0 &&
+        remainingCount == 1;
+
+    passed = shim.uninstall() && passed;
+    DestroyWindow(routeWindowB);
+
+    bool destroyedTargetRejected = false;
+    const HWND doomedWindow = CreateWindowExW(
+        0, L"STATIC", L"HydraSeat destroyed Raw target", WS_OVERLAPPED,
+        0, 0, 32, 32, nullptr, nullptr, instance, nullptr);
+    AdapterOwner failureAdapter;
+    ShimOwner failureShim;
+    if (doomedWindow != nullptr && failureAdapter &&
+        failureShim.loadAndInstall(
+            shimPath, failureAdapter.get(), 2, window, false, true) &&
+        failureShim.active()) {
+        RAWINPUTDEVICE doomedRegistration{
+            HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_KEYBOARD,
+            RIDEV_INPUTSINK, doomedWindow};
+        const bool doomedRegistered = RegisterRawInputDevices(
+            &doomedRegistration, 1, sizeof(doomedRegistration)) != FALSE;
+        const bool destroyed = DestroyWindow(doomedWindow) != FALSE;
+        auto doomedEvent = toAdapterEvent(keyMessage);
+        const bool enqueued = hydra_gate_c_adapter_apply_input(
+            failureAdapter.get(), 1, &doomedEvent) ==
+            HYDRA_GATE_C_ADAPTER_OK;
+        destroyedTargetRejected = doomedRegistered && destroyed && enqueued &&
+            !failureShim.dispatchRawInput();
+        destroyedTargetRejected = failureShim.uninstall() &&
+            destroyedTargetRejected;
+    } else if (doomedWindow != nullptr) {
+        DestroyWindow(doomedWindow);
+    }
+    passed = passed && destroyedTargetRejected;
+    UINT nativeCountAfter = 0;
+    passed = passed && GetRegisteredRawInputDevices(
+        nullptr, &nativeCountAfter, sizeof(RAWINPUTDEVICE)) == 0 &&
+        nativeCountAfter == nativeCountBefore;
+    DestroyWindow(window);
+    if (!passed) return 83;
+    std::cout
+        << "HydraSeat Gate C Raw Input shim self-test passed: ordinary "
+           "registration, data, and buffer APIs consumed only bounded "
+           "synthetic packets, a destroyed HWND failed visibly, and "
+           "uninstall restored native registration.\n";
+    return EXIT_SUCCESS;
+}
+
 class ControlledProbe {
 public:
     explicit ControlledProbe(ProbeOptions options)
@@ -823,9 +1120,15 @@ public:
         if (m_options.pollingShim && !m_options.testMissingWindow &&
             !m_shim.loadAndInstall(m_options.shimPath, m_adapter.get(),
                                    m_options.seatId, m_hwnd.load(),
-                                   m_options.cursorFocusShim)) {
+                                   m_options.cursorFocusShim,
+                                   m_options.rawInputShim)) {
             destroyWindow();
             return 18;
+        }
+        if (m_options.rawInputShim && !m_options.testMissingWindow &&
+            !initializeRawInput()) {
+            destroyWindow();
+            return finish(28);
         }
         if (m_options.testNoHandshake) {
             Sleep(2000);
@@ -905,6 +1208,9 @@ private:
         case kStateChangedMessage:
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
+        case WM_INPUT:
+            handleRawInput(reinterpret_cast<HRAWINPUT>(lParam));
+            return 0;
         case WM_PAINT:
             paint(hwnd);
             return 0;
@@ -956,6 +1262,265 @@ private:
         }
     }
 
+    std::vector<RAWINPUTDEVICE> queryRawRegistrations(bool& succeeded) {
+        succeeded = false;
+        UINT count = 0;
+        SetLastError(ERROR_SUCCESS);
+        if (GetRegisteredRawInputDevices(
+                nullptr, &count, sizeof(RAWINPUTDEVICE)) ==
+            static_cast<UINT>(-1)) {
+            m_rawInputSnapshot.lastSystemError = GetLastError();
+            return {};
+        }
+        std::vector<RAWINPUTDEVICE> values(count);
+        UINT capacity = count;
+        if (count != 0 && GetRegisteredRawInputDevices(
+                              values.data(), &capacity,
+                              sizeof(RAWINPUTDEVICE)) ==
+                              static_cast<UINT>(-1)) {
+            m_rawInputSnapshot.lastSystemError = GetLastError();
+            return {};
+        }
+        values.resize(capacity);
+        succeeded = true;
+        return values;
+    }
+
+    bool initializeRawInput() {
+        m_rawInputSnapshot = {};
+        m_rawInputSnapshot.enabled = true;
+        const HWND windowA = m_hwnd.load();
+        if (windowA == nullptr) return false;
+        const HWND windowB = CreateWindowExW(
+            0, L"STATIC", L"HydraSeat Raw registration B", WS_OVERLAPPED,
+            0, 0, 32, 32, nullptr, nullptr, m_instance, nullptr);
+        const HWND windowC = CreateWindowExW(
+            0, L"STATIC", L"HydraSeat Raw registration C", WS_OVERLAPPED,
+            0, 0, 32, 32, nullptr, nullptr, m_instance, nullptr);
+        if (windowB == nullptr || windowC == nullptr) {
+            if (windowB != nullptr) DestroyWindow(windowB);
+            if (windowC != nullptr) DestroyWindow(windowC);
+            return false;
+        }
+        const auto registerOne = [](USHORT usage, DWORD flags,
+                                    HWND target) {
+            RAWINPUTDEVICE device{};
+            device.usUsagePage = HID_USAGE_PAGE_GENERIC;
+            device.usUsage = usage;
+            device.dwFlags = flags;
+            device.hwndTarget = target;
+            return RegisterRawInputDevices(
+                       &device, 1, sizeof(device)) != FALSE;
+        };
+        const auto removeOne = [&](USHORT usage) {
+            return registerOne(usage, RIDEV_REMOVE, nullptr);
+        };
+        const auto findUsage = [](const std::vector<RAWINPUTDEVICE>& values,
+                                  USHORT usage) -> const RAWINPUTDEVICE* {
+            const auto found = std::find_if(
+                values.begin(), values.end(), [usage](const auto& value) {
+                    return value.usUsagePage == HID_USAGE_PAGE_GENERIC &&
+                           value.usUsage == usage;
+                });
+            return found == values.end() ? nullptr : &*found;
+        };
+
+        bool ok = registerOne(
+            HID_USAGE_GENERIC_KEYBOARD,
+            RIDEV_INPUTSINK | RIDEV_DEVNOTIFY, windowA) &&
+            registerOne(HID_USAGE_GENERIC_MOUSE, RIDEV_DEVNOTIFY, windowA);
+        bool queried = false;
+        auto values = queryRawRegistrations(queried);
+        const auto* initialKeyboard = findUsage(
+            values, HID_USAGE_GENERIC_KEYBOARD);
+        const auto* initialMouse = findUsage(values, HID_USAGE_GENERIC_MOUSE);
+        ok = ok && queried && values.size() == 2 &&
+            initialKeyboard != nullptr && initialMouse != nullptr &&
+            initialKeyboard->dwFlags == RIDEV_INPUTSINK &&
+            initialMouse->dwFlags == 0;
+
+        ok = ok && registerOne(HID_USAGE_GENERIC_KEYBOARD, 0, windowB);
+        values = queryRawRegistrations(queried);
+        const auto* replacedKeyboard = findUsage(
+            values, HID_USAGE_GENERIC_KEYBOARD);
+        const auto* retainedMouse = findUsage(values, HID_USAGE_GENERIC_MOUSE);
+        ok = ok && queried && replacedKeyboard != nullptr &&
+            retainedMouse != nullptr &&
+            replacedKeyboard->hwndTarget == windowB &&
+            retainedMouse->hwndTarget == windowA;
+
+        ok = ok && removeOne(HID_USAGE_GENERIC_KEYBOARD);
+        values = queryRawRegistrations(queried);
+        ok = ok && queried && values.size() == 1 &&
+            findUsage(values, HID_USAGE_GENERIC_MOUSE) != nullptr;
+
+        ok = ok && registerOne(HID_USAGE_GENERIC_KEYBOARD, 0, windowB);
+        const auto destroyedValue = windowB;
+        ok = ok && DestroyWindow(windowB) != FALSE;
+        values = queryRawRegistrations(queried);
+        const auto* staleKeyboard = findUsage(
+            values, HID_USAGE_GENERIC_KEYBOARD);
+        ok = ok && queried && staleKeyboard != nullptr &&
+            staleKeyboard->hwndTarget == destroyedValue;
+
+        ok = ok && registerOne(HID_USAGE_GENERIC_KEYBOARD, 0, windowC);
+        values = queryRawRegistrations(queried);
+        const auto* freshKeyboard = findUsage(
+            values, HID_USAGE_GENERIC_KEYBOARD);
+        ok = ok && queried && freshKeyboard != nullptr &&
+            freshKeyboard->hwndTarget == windowC;
+
+        RAWINPUTDEVICE finalDevices[2]{};
+        finalDevices[0] = {HID_USAGE_PAGE_GENERIC,
+                           HID_USAGE_GENERIC_KEYBOARD,
+                           RIDEV_INPUTSINK | RIDEV_DEVNOTIFY, windowA};
+        finalDevices[1] = {HID_USAGE_PAGE_GENERIC,
+                           HID_USAGE_GENERIC_MOUSE,
+                           RIDEV_INPUTSINK | RIDEV_DEVNOTIFY, windowA};
+        ok = ok && RegisterRawInputDevices(
+                       finalDevices, 2, sizeof(RAWINPUTDEVICE)) != FALSE;
+        values = queryRawRegistrations(queried);
+        const auto* finalKeyboard = findUsage(
+            values, HID_USAGE_GENERIC_KEYBOARD);
+        const auto* finalMouse = findUsage(values, HID_USAGE_GENERIC_MOUSE);
+        ok = ok && queried && values.size() == 2 &&
+            finalKeyboard != nullptr && finalMouse != nullptr &&
+            finalKeyboard->hwndTarget == windowA &&
+            finalMouse->hwndTarget == windowA &&
+            finalKeyboard->dwFlags == RIDEV_INPUTSINK &&
+            finalMouse->dwFlags == RIDEV_INPUTSINK;
+        DestroyWindow(windowC);
+        m_rawInputSnapshot.registrationLifecyclePassed = ok;
+        m_rawInputSnapshot.registrationQueryPassed = queried;
+        m_rawInputSnapshot.registeredCount =
+            static_cast<std::uint32_t>(values.size());
+        if (!ok) {
+            ++m_rawInputSnapshot.apiFailures;
+            m_rawInputSnapshot.lastSystemError = GetLastError();
+        }
+        return ok;
+    }
+
+    void recordRawFailure() {
+        ++m_rawInputSnapshot.apiFailures;
+        m_rawInputSnapshot.lastSystemError = GetLastError();
+    }
+
+    void countRawPacket(const RAWINPUT& raw, bool fromBuffer) {
+        if (raw.header.dwType == RIM_TYPEKEYBOARD) {
+            const USHORT expected = m_options.seatId == 1 ? 0x41u : 0x42u;
+            if (raw.data.keyboard.VKey == expected) {
+                ++m_rawInputSnapshot.keyboardExpected;
+            } else {
+                ++m_rawInputSnapshot.keyboardCross;
+            }
+        } else if (raw.header.dwType == RIM_TYPEMOUSE) {
+            const bool expected = m_options.seatId == 1
+                ? ((raw.data.mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN) != 0 &&
+                   raw.data.mouse.lLastX == 5 &&
+                   raw.data.mouse.lLastY == 7 &&
+                   static_cast<SHORT>(raw.data.mouse.usButtonData) == 120)
+                : ((raw.data.mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN) != 0 &&
+                   raw.data.mouse.lLastX == -8 &&
+                   raw.data.mouse.lLastY == -9 &&
+                   static_cast<SHORT>(raw.data.mouse.usButtonData) == -120);
+            if (expected) {
+                ++m_rawInputSnapshot.mouseExpected;
+            } else {
+                ++m_rawInputSnapshot.mouseCross;
+            }
+        }
+        if (fromBuffer) ++m_rawInputSnapshot.bufferPackets;
+    }
+
+    void handleRawInput(HRAWINPUT handle) {
+        if (!m_options.rawInputShim) return;
+        UINT required = 0;
+        if (GetRawInputData(handle, RID_HEADER, nullptr, &required,
+                            sizeof(RAWINPUTHEADER)) ==
+                static_cast<UINT>(-1) ||
+            required != sizeof(RAWINPUTHEADER)) {
+            recordRawFailure();
+            return;
+        }
+        RAWINPUTHEADER header{};
+        UINT headerBytes = sizeof(header);
+        if (GetRawInputData(handle, RID_HEADER, &header, &headerBytes,
+                            sizeof(RAWINPUTHEADER)) != sizeof(header)) {
+            recordRawFailure();
+            return;
+        }
+        m_rawInputSnapshot.dataQueryPassed = true;
+        if (header.dwType == RIM_TYPEKEYBOARD) {
+            UINT bytes = 0;
+            if (GetRawInputData(handle, RID_INPUT, nullptr, &bytes,
+                                sizeof(RAWINPUTHEADER)) ==
+                    static_cast<UINT>(-1) ||
+                bytes < sizeof(RAWINPUTHEADER) ||
+                bytes > hydra::gatec::kVirtualRawMaximumPayloadBytes) {
+                recordRawFailure();
+                return;
+            }
+            std::vector<std::byte> storage(bytes);
+            UINT capacity = bytes;
+            if (GetRawInputData(handle, RID_INPUT, storage.data(), &capacity,
+                                sizeof(RAWINPUTHEADER)) != bytes ||
+                capacity != bytes) {
+                recordRawFailure();
+                return;
+            }
+            RAWINPUT raw{};
+            std::memcpy(&raw, storage.data(),
+                        (std::min)(storage.size(), sizeof(raw)));
+            countRawPacket(raw, false);
+            ++m_rawInputSnapshot.dataReads;
+            return;
+        }
+
+        UINT bufferBytes = 0;
+        if (GetRawInputBuffer(nullptr, &bufferBytes,
+                              sizeof(RAWINPUTHEADER)) ==
+                static_cast<UINT>(-1) ||
+            bufferBytes == 0 ||
+            bufferBytes > hydra::gatec::kVirtualRawMaximumPayloadBytes) {
+            recordRawFailure();
+            return;
+        }
+        std::vector<std::byte> storage(bufferBytes);
+        UINT capacity = bufferBytes;
+        const UINT packetCount = GetRawInputBuffer(
+            reinterpret_cast<PRAWINPUT>(storage.data()), &capacity,
+            sizeof(RAWINPUTHEADER));
+        if (packetCount == static_cast<UINT>(-1) || packetCount == 0) {
+            recordRawFailure();
+            return;
+        }
+        std::size_t offset = 0;
+        for (UINT index = 0; index < packetCount; ++index) {
+            if (offset + sizeof(RAWINPUTHEADER) > storage.size()) {
+                recordRawFailure();
+                return;
+            }
+            RAWINPUT raw{};
+            std::memcpy(&raw, storage.data() + offset,
+                        (std::min)(sizeof(raw), storage.size() - offset));
+            if (raw.header.dwSize < sizeof(RAWINPUTHEADER) ||
+                raw.header.dwSize > storage.size() - offset) {
+                recordRawFailure();
+                return;
+            }
+            countRawPacket(raw, true);
+            const auto next =
+                (static_cast<std::size_t>(raw.header.dwSize) + 7u) & ~7u;
+            if (next == 0 || next > storage.size() - offset) {
+                recordRawFailure();
+                return;
+            }
+            offset += next;
+        }
+        m_rawInputSnapshot.bufferReadPassed = true;
+    }
+
     bool connectAndHandshake() {
         std::string error;
         std::uint32_t systemError = 0;
@@ -984,11 +1549,13 @@ private:
             response.frame->sequence != 1 || !ack.accepted) {
             return false;
         }
-        const auto requiredCapabilities = m_options.cursorFocusShim
+        const auto requiredCapabilities = m_options.rawInputShim
+            ? hydra::gatec::kControlledRawInputProbeCapabilities
+            : (m_options.cursorFocusShim
             ? hydra::gatec::kControlledCursorFocusProbeCapabilities
             : (m_options.pollingShim
                    ? hydra::gatec::kControlledPollingProbeCapabilities
-                   : hydra::gatec::kControlledApiProbeCapabilities);
+                   : hydra::gatec::kControlledApiProbeCapabilities));
         if ((ack.grantedCapabilities &
              hydra::gatec::testCapabilityBits(requiredCapabilities)) !=
             hydra::gatec::testCapabilityBits(requiredCapabilities)) {
@@ -1034,6 +1601,9 @@ private:
             if (result != HYDRA_GATE_C_ADAPTER_OK) {
                 return sendError(frame.sequence,
                     1100u + static_cast<std::uint32_t>(result));
+            }
+            if (m_options.rawInputShim && !m_shim.dispatchRawInput()) {
+                return sendError(frame.sequence, 1108);
             }
             notifyStateChanged();
             return true;
@@ -1140,7 +1710,8 @@ private:
         }
         const auto comparison = captureComparison(
             m_adapter.get(), request->sequence, m_options.seatId,
-            request->probeVkey, window);
+            request->probeVkey, window,
+            m_options.rawInputShim ? &m_rawInputSnapshot : nullptr);
         if (m_options.pollingShim && !m_shim.active()) {
             std::scoped_lock lock(request->mutex);
             request->cancelled = true;
@@ -1248,6 +1819,7 @@ private:
         m_captureRequests;
     std::mutex m_lastComparisonMutex;
     std::optional<ProbeComparison> m_lastComparison;
+    hydra::gatec::RawInputApiSnapshot m_rawInputSnapshot;
 };
 
 #endif
@@ -1271,6 +1843,10 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (options.cursorFocusShimSelfTest) {
         return runLocalCursorFocusShimSelfTest(
+            GetModuleHandleW(nullptr), options.shimPath);
+    }
+    if (options.rawInputShimSelfTest) {
+        return runLocalRawInputShimSelfTest(
             GetModuleHandleW(nullptr), options.shimPath);
     }
     ControlledProbe probe(options);

@@ -70,6 +70,17 @@ hydra::gatec::ProbeComparison sampleComparison() {
     comparison.adapter.virtualCaptureWindowRuntimeValue =
         comparison.targetWindowRuntimeValue;
 
+    comparison.rawInput.enabled = true;
+    comparison.rawInput.registrationLifecyclePassed = true;
+    comparison.rawInput.registrationQueryPassed = true;
+    comparison.rawInput.dataQueryPassed = true;
+    comparison.rawInput.bufferReadPassed = true;
+    comparison.rawInput.registeredCount = 2;
+    comparison.rawInput.keyboardExpected = 1;
+    comparison.rawInput.mouseExpected = 1;
+    comparison.rawInput.dataReads = 1;
+    comparison.rawInput.bufferPackets = 1;
+
     hydra::gatec::updateProbeComparison(comparison);
     return comparison;
 }
@@ -80,7 +91,7 @@ void testRoundTrip() {
     const auto comparison = sampleComparison();
     const auto encoded = encodeProbeComparison(comparison);
     check(encoded.size() == kProbeSnapshotWireBytes,
-          "schema v1 snapshot has the declared fixed wire size");
+          "schema v3 snapshot has the declared fixed wire size");
     const auto decoded = decodeProbeComparison(encoded);
     check(decoded && decoded.comparison == comparison,
           "OS/adapter probe comparison round-trips exactly");
@@ -101,7 +112,7 @@ void testRoundTrip() {
 void testInvalidVersionAndSchemaFields() {
     using namespace hydra::gatec;
     auto encoded = encodeProbeComparison(sampleComparison());
-    encoded[4] = std::byte{3};
+    encoded[4] = std::byte{4};
     encoded[5] = std::byte{0};
     check(!decodeProbeComparison(encoded),
           "future snapshot schema versions are rejected");
@@ -115,6 +126,11 @@ void testInvalidVersionAndSchemaFields() {
     inconsistent.foregroundMatches = true;
     check(encodeProbeComparison(inconsistent).empty(),
           "inconsistent comparison flags are rejected before serialization");
+
+    auto disabledRawWithCounters = sampleComparison();
+    disabledRawWithCounters.rawInput.enabled = false;
+    check(encodeProbeComparison(disabledRawWithCounters).empty(),
+          "disabled raw snapshot cannot carry lifecycle flags or counters");
 }
 
 void testInvalidSizesAndMalformedFields() {

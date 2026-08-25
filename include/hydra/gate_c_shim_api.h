@@ -20,7 +20,7 @@
 extern "C" {
 #endif
 
-#define HYDRA_GATE_C_SHIM_API_VERSION 2u
+#define HYDRA_GATE_C_SHIM_API_VERSION 3u
 #define HYDRA_GATE_C_SHIM_CONFIG_V1_BYTES 24u
 #define HYDRA_GATE_C_SHIM_CONFIG_V2_BYTES 32u
 #define HYDRA_GATE_C_SHIM_STATUS_V1_BYTES 60u
@@ -39,9 +39,15 @@ extern "C" {
 #define HYDRA_GATE_C_SHIM_SET_CAPTURE_BIT 0x00000800u
 #define HYDRA_GATE_C_SHIM_RELEASE_CAPTURE_BIT 0x00001000u
 #define HYDRA_GATE_C_SHIM_CURSOR_FOCUS_API_MASK 0x00001ff8u
-#define HYDRA_GATE_C_SHIM_ALL_API_MASK 0x00001fffu
+#define HYDRA_GATE_C_SHIM_REGISTER_RAW_INPUT_DEVICES_BIT 0x00002000u
+#define HYDRA_GATE_C_SHIM_GET_REGISTERED_RAW_INPUT_DEVICES_BIT 0x00004000u
+#define HYDRA_GATE_C_SHIM_GET_RAW_INPUT_DATA_BIT 0x00008000u
+#define HYDRA_GATE_C_SHIM_GET_RAW_INPUT_BUFFER_BIT 0x00010000u
+#define HYDRA_GATE_C_SHIM_RAW_INPUT_API_MASK 0x0001e000u
+#define HYDRA_GATE_C_SHIM_ALL_API_MASK 0x0001ffffu
 #define HYDRA_GATE_C_SHIM_ENABLE_CURSOR_FOCUS 0x00000001u
-#define HYDRA_GATE_C_SHIM_CONFIG_FLAGS_MASK 0x00000001u
+#define HYDRA_GATE_C_SHIM_ENABLE_RAW_INPUT 0x00000002u
+#define HYDRA_GATE_C_SHIM_CONFIG_FLAGS_MASK 0x00000003u
 #define HYDRA_GATE_C_SHIM_MODULE_CURRENT_EXECUTABLE 1u
 
 typedef enum HydraGateCShimResult {
@@ -128,6 +134,14 @@ hydra_gate_c_shim_uninstall(void);
 
 HYDRA_GATE_C_SHIM_API HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL
 hydra_gate_c_shim_get_status(HydraGateCShimStatusV1* status);
+
+/*
+ * Called only by the HydraSeat-owned probe after it applies one authenticated
+ * Seat-local InputEvent to the adapter. It posts at most one synthetic
+ * WM_INPUT and never performs pipe or file I/O.
+ */
+HYDRA_GATE_C_SHIM_API HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL
+hydra_gate_c_shim_dispatch_raw_input(void);
 
 #ifdef __cplusplus
 }

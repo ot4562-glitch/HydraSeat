@@ -199,7 +199,7 @@ bool validate(const ProbeComparison& comparison, std::string& error) {
         error = "OS clip rectangle is invalid";
         return false;
     }
-    constexpr std::uint32_t kMaximumAdapterResult = 6;
+    constexpr std::uint32_t kMaximumAdapterResult = 7;
     if (comparison.adapter.snapshotResult > kMaximumAdapterResult ||
         comparison.adapter.keyStateResult > kMaximumAdapterResult ||
         comparison.adapter.keyboardStateResult > kMaximumAdapterResult ||
@@ -207,6 +207,26 @@ bool validate(const ProbeComparison& comparison, std::string& error) {
         comparison.adapter.mouseStateResult > kMaximumAdapterResult ||
         comparison.adapter.windowStateResult > kMaximumAdapterResult) {
         error = "adapter result code is invalid";
+        return false;
+    }
+    if (!comparison.rawInput.enabled &&
+        (comparison.rawInput.registrationLifecyclePassed ||
+         comparison.rawInput.registrationQueryPassed ||
+         comparison.rawInput.dataQueryPassed ||
+         comparison.rawInput.bufferReadPassed ||
+         comparison.rawInput.registeredCount != 0 ||
+         comparison.rawInput.keyboardExpected != 0 ||
+         comparison.rawInput.keyboardCross != 0 ||
+         comparison.rawInput.mouseExpected != 0 ||
+         comparison.rawInput.mouseCross != 0 ||
+         comparison.rawInput.dataReads != 0 ||
+         comparison.rawInput.bufferPackets != 0 ||
+         comparison.rawInput.apiFailures != 0 ||
+         comparison.rawInput.destroyedTargetFailures != 0 ||
+         comparison.rawInput.staleTokenFailures != 0 ||
+         comparison.rawInput.queueOverflowFailures != 0 ||
+         comparison.rawInput.lastSystemError != 0)) {
+        error = "disabled Raw Input snapshot contains observations";
         return false;
     }
     ProbeComparison expected = comparison;
@@ -362,6 +382,25 @@ std::vector<std::byte> encodeProbeComparison(
     writer.u64(comparison.adapter.logicalFocusWindowRuntimeValue);
     writer.u64(comparison.adapter.virtualCaptureWindowRuntimeValue);
 
+    writer.boolean(comparison.rawInput.enabled);
+    writer.boolean(comparison.rawInput.registrationLifecyclePassed);
+    writer.boolean(comparison.rawInput.registrationQueryPassed);
+    writer.boolean(comparison.rawInput.dataQueryPassed);
+    writer.boolean(comparison.rawInput.bufferReadPassed);
+    writer.padding(3);
+    writer.u32(comparison.rawInput.registeredCount);
+    writer.u32(comparison.rawInput.keyboardExpected);
+    writer.u32(comparison.rawInput.keyboardCross);
+    writer.u32(comparison.rawInput.mouseExpected);
+    writer.u32(comparison.rawInput.mouseCross);
+    writer.u32(comparison.rawInput.dataReads);
+    writer.u32(comparison.rawInput.bufferPackets);
+    writer.u32(comparison.rawInput.apiFailures);
+    writer.u32(comparison.rawInput.destroyedTargetFailures);
+    writer.u32(comparison.rawInput.staleTokenFailures);
+    writer.u32(comparison.rawInput.queueOverflowFailures);
+    writer.u32(comparison.rawInput.lastSystemError);
+
     writer.boolean(comparison.asyncDownMatches);
     writer.boolean(comparison.keyStateDownMatches);
     writer.boolean(comparison.keyboardStateDownMatches);
@@ -479,6 +518,24 @@ ProbeSnapshotDecodeResult decodeProbeComparison(
         !reader.u64(comparison.adapter.logicalActiveWindowRuntimeValue) ||
         !reader.u64(comparison.adapter.logicalFocusWindowRuntimeValue) ||
         !reader.u64(comparison.adapter.virtualCaptureWindowRuntimeValue) ||
+        !reader.boolean(comparison.rawInput.enabled) ||
+        !reader.boolean(comparison.rawInput.registrationLifecyclePassed) ||
+        !reader.boolean(comparison.rawInput.registrationQueryPassed) ||
+        !reader.boolean(comparison.rawInput.dataQueryPassed) ||
+        !reader.boolean(comparison.rawInput.bufferReadPassed) ||
+        !reader.padding(3) ||
+        !reader.u32(comparison.rawInput.registeredCount) ||
+        !reader.u32(comparison.rawInput.keyboardExpected) ||
+        !reader.u32(comparison.rawInput.keyboardCross) ||
+        !reader.u32(comparison.rawInput.mouseExpected) ||
+        !reader.u32(comparison.rawInput.mouseCross) ||
+        !reader.u32(comparison.rawInput.dataReads) ||
+        !reader.u32(comparison.rawInput.bufferPackets) ||
+        !reader.u32(comparison.rawInput.apiFailures) ||
+        !reader.u32(comparison.rawInput.destroyedTargetFailures) ||
+        !reader.u32(comparison.rawInput.staleTokenFailures) ||
+        !reader.u32(comparison.rawInput.queueOverflowFailures) ||
+        !reader.u32(comparison.rawInput.lastSystemError) ||
         !reader.boolean(comparison.asyncDownMatches) ||
         !reader.boolean(comparison.keyStateDownMatches) ||
         !reader.boolean(comparison.keyboardStateDownMatches) ||
