@@ -333,7 +333,7 @@ hydra_plan polled-keyboard-mouse-game --protoinput --hidhide --allow-injection -
   --trace hydra_gate_c_host.jsonl
 ```
 
-Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe 的 process-local polling shim 已通过 Windows 验证；cursor/clip/logical-focus/capture 扩展已 code-complete，但仍需 x64/x86 Windows 执行验证。当前不实现 remote injection、physical suppression 或第三方/商业 target 支持。
+Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe 的 process-local polling 与 cursor/clip/logical-focus/capture shim 已通过 x64/x86 Windows CI 验证。独立 Raw Input behavior probe 和 bounded trace/parser 已 code-complete，但 native x64/x86 observed trace 仍待验证。当前不实现 remote injection、physical suppression 或第三方/商业 target 支持。
 
 相关文档：
 

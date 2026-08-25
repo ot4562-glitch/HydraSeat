@@ -52,6 +52,19 @@ jobs:
         ctest --test-dir ${{ matrix.build_dir }}
         --build-config Release --output-on-failure
 
+    - name: Verify observed Raw Input registration trace
+      shell: pwsh
+      run: |
+        $trace = "${{ matrix.build_dir }}\raw-input-observed-${{ matrix.architecture }}.json"
+        if (-not (Test-Path -LiteralPath $trace)) { throw "Missing observed Raw Input trace: $trace" }
+
+    - name: Upload observed Raw Input registration trace
+      uses: actions/upload-artifact@v4
+      with:
+        name: raw-input-observed-${{ matrix.architecture }}
+        path: ${{ matrix.build_dir }}/raw-input-observed-${{ matrix.architecture }}.json
+        if-no-files-found: error
+
   gate-c-cross-architecture:
     runs-on: windows-latest
 

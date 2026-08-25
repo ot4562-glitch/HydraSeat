@@ -297,7 +297,7 @@ Controlled probes use the ordinary API calls and observe independent Seat-local 
 
 ## P3-RAW-01 — Controlled Raw Input behavior probe
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -340,6 +340,29 @@ P3-RAW-02 has a stable behavior specification and fixtures rather than assumptio
 **Suggested commit**
 
 `test: implement P3-RAW-01 Raw Input behavior probe`
+
+**Code-complete implementation note (2026-08-25)**
+
+- `hydra_gate_c_raw_input_probe.exe` is a separate HydraSeat-owned process; it
+  never shares Raw Input registration state with the production host or
+  `InputRouter`;
+- schema v1 is deterministic UTF-8 JSON with fixed-width runtime diagnostic
+  values, strict version/size/count checks, a synthetic parser fixture, and
+  separately generated observed-Windows traces;
+- native registration experiments cover keyboard/mouse foreground targets,
+  Window A-to-B replacement, independent usage mutation/removal,
+  `RIDEV_INPUTSINK`, `RIDEV_DEVNOTIFY`, their legal combination, destroyed
+  target observation, cleanup, and repeated process teardown;
+- `WM_INPUT` callbacks use pre-reserved bounded storage and one aligned fixed
+  scratch buffer. File serialization and optional stable device identity
+  resolution happen after callback processing;
+- `GetRawInputData` and `GetRawInputBuffer` record query/read sizes, errors,
+  headers, block offsets, pointer-width alignment, and explicit malformed or
+  overflow results without manufacturing a successful `HRAWINPUT`;
+- strict portable trace/parser and existing Gate C regression tests pass.
+  Native Windows/MSVC x64/x86 lifecycle execution and observed trace artifacts
+  remain pending, so this packet is not `VALIDATED` and P3-HW-01 remains
+  unchanged.
 
 ---
 

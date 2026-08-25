@@ -140,6 +140,19 @@ set_target_properties(hydra_gate_c_core PROPERTIES
 if(WIN32)
     target_link_libraries(hydra_gate_c_core PUBLIC Bcrypt.lib)
 endif()
+
+# P3-RAW-01 fixed-width, versioned, bounded trace/parser contract. This
+# library is portable and contains no Raw Input virtualization.
+add_library(hydra_raw_input_probe_trace STATIC
+    src/raw_input_probe_trace.cpp
+    include/hydra/raw_input_probe_trace.hpp
+)
+if(MSVC)
+    target_compile_options(hydra_raw_input_probe_trace PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_raw_input_probe_trace PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
 if(MSVC)
     target_compile_options(hydra_gate_c_core PRIVATE /W4 /permissive-)
 endif()
@@ -284,6 +297,25 @@ hydra_set_gate_c_output(hydra_gate_c_api_probe)
 if(WIN32)
     target_link_libraries(hydra_gate_c_api_probe PRIVATE User32.lib)
 endif()
+
+# P3-RAW-01 standalone controlled process. It observes only its own process's
+# native registration/message/data/buffer behavior and never installs hooks.
+add_executable(hydra_gate_c_raw_input_probe
+    src/gate_c_raw_input_probe.cpp
+)
+target_link_libraries(hydra_gate_c_raw_input_probe PRIVATE
+    hydra_raw_input_probe_trace hydra_hardware
+)
+hydra_set_gate_c_output(hydra_gate_c_raw_input_probe)
+if(WIN32)
+    target_link_libraries(hydra_gate_c_raw_input_probe PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_gate_c_raw_input_probe PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_gate_c_raw_input_probe PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
 if(MSVC)
     target_compile_options(hydra_gate_c_api_probe PRIVATE /W4 /permissive-)
 endif()
@@ -395,6 +427,26 @@ if(MSVC)
 endif()
 add_test(NAME GateCProbeSnapshotTests COMMAND gate_c_probe_snapshot_tests)
 
+# P3-RAW-01 portable trace/fixture and malformed data/buffer contract tests.
+add_executable(raw_input_probe_trace_tests
+    tests/test_raw_input_probe_trace.cpp
+)
+target_link_libraries(raw_input_probe_trace_tests PRIVATE
+    hydra_raw_input_probe_trace
+)
+target_compile_definitions(raw_input_probe_trace_tests PRIVATE
+    HYDRA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(raw_input_probe_trace_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(raw_input_probe_trace_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME RawInputProbeTraceTests COMMAND raw_input_probe_trace_tests)
+add_test(NAME RawInputProbeSelfTest
+         COMMAND hydra_gate_c_raw_input_probe --self-test)
+
 # C ABI adapter tests exercise independent process-local contexts and
 # GetAsyncKeyState/GetKeyboardState-style semantics without installing hooks.
 add_executable(gate_c_adapter_tests
@@ -488,6 +540,20 @@ if(WIN32)
                 --shim $<TARGET_FILE:hydra_gate_c_shim>
     )
     set_tests_properties(GateCCursorFocusShimProbeSelfTest PROPERTIES TIMEOUT 25)
+
+    add_test(
+        NAME RawInputRegistrationSelfTest
+        COMMAND hydra_gate_c_raw_input_probe --registration-self-test
+                --output
+                ${CMAKE_CURRENT_BINARY_DIR}/raw-input-observed-${HYDRA_GATE_C_ARCH_NAME}.json
+    )
+    set_tests_properties(RawInputRegistrationSelfTest PROPERTIES TIMEOUT 30)
+
+    add_test(
+        NAME RawInputProcessTeardownSelfTest
+        COMMAND hydra_gate_c_raw_input_probe --process-teardown-self-test
+    )
+    set_tests_properties(RawInputProcessTeardownSelfTest PROPERTIES TIMEOUT 50)
 endif()
 
 if(WIN32)

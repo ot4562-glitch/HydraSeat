@@ -34,6 +34,12 @@ Win32/x86 each passed 24/24 CTest, while the dedicated x64-host cross-architectu
 job passed both x64 and x86 ordinary-API, no-cross-Seat, teardown, polling-regression,
 and host-native global-state-preservation paths.
 
+P3-RAW-01 is `CODE_COMPLETE` on `test/p3-raw-01-behavior-probe`. It adds a
+standalone controlled Raw Input behavior process plus a bounded schema-v1
+trace/parser contract. Strict portable tests pass; native Windows x64/x86
+registration lifecycle execution and observed trace artifacts remain pending.
+This is observation only and does not add Raw Input interposition.
+
 This is not a general game hook or a completed Gate C implementation. The
 controlled targets still call HydraSeat's adapter API directly; only the
 explicitly launched API probe may opt into the polling/cursor-focus shim. Commercial games
@@ -108,6 +114,40 @@ Visible probe mode shows the last OS and adapter observations side by side. A
 foreground mismatch is expected before interposition: two adapters may both
 report virtual foreground while Windows still has only one real foreground
 window.
+
+### `hydra_gate_c_raw_input_probe.exe`
+
+The P3-RAW-01 probe is an independent HydraSeat-owned process. It never runs
+beside `InputRouter` or the production Gate C host in the same process, because
+Raw Input registrations are process state.
+
+Its registration self-test creates controlled Window A and Window B and
+records:
+
+- keyboard and mouse foreground registrations;
+- per-usage Window A-to-B target replacement;
+- independent keyboard/mouse targets and usage-local removal;
+- `RIDEV_INPUTSINK`, `RIDEV_DEVNOTIFY`, and their legal combination;
+- registration state after destroying a registered target window, followed by
+  replacement and removal through a valid surviving window;
+- bounded best-effort cleanup and idempotent teardown.
+
+The observe mode has a hard 30-second maximum. Its window procedure records
+`WM_INPUT` and `WM_INPUT_DEVICE_CHANGE` into pre-reserved bounded memory using
+one aligned 64-KiB scratch buffer. It performs no pipe or file I/O and no
+unbounded allocation in the callback. UTF-8 serialization and optional
+hDevice-to-path/stable-ID resolution happen afterward.
+
+`HRAWINPUT`, `RAWINPUTHEADER::hDevice`, HWND, and HANDLE values are serialized
+only as fixed-width `runtime_value` diagnostics. They are not physical identity.
+The committed fixture is marked `synthetic_parser_fixture`; native CI traces
+are marked `observed_windows_api` and are uploaded per architecture.
+The buffer scratch space is always 8-byte aligned, and the trace records whether
+block traversal used native alignment or the documented WOW64 8-byte rule; see
+Microsoft's [`GetRawInputBuffer` contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getrawinputbuffer).
+The executable uses the normal `gate-c/x86` or `gate-c/x64` output directory,
+but it is not launched by the Gate C host selector. Therefore the validated
+eight-entry target/adapter/API-probe/shim manifest remains unchanged.
 
 ### `hydra_gate_c_shim.dll`
 
@@ -452,7 +492,44 @@ state, no partial output, fail-closed error reporting, native-state
 preservation, exact unpatch, and `ShowCursor` deferral. The host test launches
 two probes with distinct cursor/clip/logical-focus/capture state and requires
 the host-native cursor, clip, foreground, and capture observations to remain
-unchanged. Native x64/x86 and x64-host-to-x64/x86 execution remains pending.
+unchanged. Native x64/x86 and x64-host-to-x64/x86 execution passed in Windows
+CI run `32792381573`.
+
+### Raw Input behavior probe tests
+
+Portable trace and malformed-contract coverage:
+
+```powershell
+ctest --test-dir build --build-config Release -R RawInputProbe --output-on-failure
+```
+
+Native registration and teardown coverage:
+
+```powershell
+.\build-x64\gate-c\x64\hydra_gate_c_raw_input_probe.exe `
+  --registration-self-test --output raw-input-observed-x64.json
+
+.\build-x64\gate-c\x64\hydra_gate_c_raw_input_probe.exe `
+  --process-teardown-self-test
+```
+
+The native matrix runs the equivalent commands in Win32/x86. The registration
+test requires successful documented replacement/removal behavior but treats the
+post-destroyed-HWND snapshot as an observation rather than an assumed result.
+The process test starts two job-contained children that each prove a new process
+has no inherited keyboard/mouse registration, register both usages, and exit
+without stack cleanup. A timeout terminates and waits for the contained child.
+
+Manual bounded observation is available as:
+
+```powershell
+.\hydra_gate_c_raw_input_probe.exe --observe `
+  --duration 10 --output raw-input-observed-manual.json
+```
+
+No physical event is required for automated CI. `physical_input_observed=false`
+and `device_change_observed=false` mean that no qualifying event was seen; they
+do not fail registration lifecycle validation.
 
 ### Target self-test
 
@@ -611,21 +688,26 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] Windows/MSVC execution of the x86/x64 architecture matrix and x64-host-to-x86-target/probe self-tests (`32727711605`)
 - [x] P3-API-02 polling shim source, fixed C ABI, transactional IAT engine, architecture manifest, native x64/x86 tests, and cross-architecture ordinary-polling proof (`32780563364`)
 - [x] P3-API-03 cursor/clip/logical-focus/capture shim, adapter ABI v2, native x64/x86 24/24 CTest, cross-architecture two-probe isolation, and host-native global-state preservation (`32792381573`)
+- [x] P3-RAW-01 standalone probe source, bounded trace/parser contract, explicit synthetic fixture, strict portable tests, and declared x64/x86 lifecycle/teardown CTest coverage
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
-- [ ] Controlled Raw Input consumer that calls `RegisterRawInputDevices` / `GetRawInputData`
+- [ ] Native x64/x86 P3-RAW-01 registration/data/buffer lifecycle run and retained observed trace artifacts
+- [ ] Physical keyboard/mouse `WM_INPUT` and actual device-change trace (P3-HW-01)
+- [ ] Controlled Raw Input virtualization consumer (P3-RAW-02; blocked)
 - [ ] Adapter crash/watchdog recovery acceptance
 - [ ] Commercial non-anti-cheat game profile experiment
 - [ ] Physical device cloaking/suppression
 
 ## Next implementation step
 
-P3-API-03 is `VALIDATED` by run `32792381573`. The next controlled slice is
-P3-RAW-01: record actual `RegisterRawInputDevices`, `WM_INPUT`,
-`GetRawInputData`, and `GetRawInputBuffer` behavior and produce stable fixtures
-before implementing any Raw Input interposition in P3-RAW-02.
+P3-RAW-01 is `CODE_COMPLETE`. The next action is native Windows x64/x86
+execution of `RawInputRegistrationSelfTest` and
+`RawInputProcessTeardownSelfTest`, retention and review of both observed trace
+artifacts, and truthful packet validation. P3-RAW-02 remains blocked until that
+evidence replaces assumptions about registration replacement/removal and the
+destroyed-window path.
 
 The two-probe process test releases Probe B's virtual capture while asserting
 that Probe A retains its own capture, then shuts down Probe A and re-queries

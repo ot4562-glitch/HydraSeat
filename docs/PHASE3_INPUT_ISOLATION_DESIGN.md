@@ -510,6 +510,7 @@ Only after Gate E may Phase 3 be marked complete.
 | Gate C x86/x64 manifest, PE, and ABI matrix | Yes | CI pending | No | Controlled process only |
 | Two-process synthetic state separation | Partial | Yes | No | Controlled process only |
 | Bounded per-target writer queues | Partial | Yes | Gate C physical acceptance pending | Controlled process only |
+| Raw Input behavior trace/parser | Yes | Declared, x64/x86 pending | P3-HW-01 | Controlled probe only |
 | Raw Input API virtualization | No | Pending | Pending | Controlled probe only |
 | Polling API interposition | Yes | CI pending | No | Controlled probe only |
 | Cursor/focus API interposition | No | Pending | Pending | Controlled probe only |
@@ -618,6 +619,32 @@ anti-cheat targets remain out of scope. See
 8. Strict portable component tests pass, and Windows CI run `32792381573`
    validates x64/x86 24/24 CTest plus x64-host-to-x64/x86 ordinary-API,
    no-cross-Seat, teardown, polling-regression, and global-state-preservation execution.
+
+### Gate C controlled Raw Input behavior-probe slice
+
+1. `hydra_gate_c_raw_input_probe` is a standalone controlled process and never
+   shares process-level registration state with `InputRouter` or the production
+   Gate C host.
+2. Controlled Window A/Window B experiments record keyboard/mouse foreground
+   registration, per-usage target replacement, independent registration,
+   `RIDEV_INPUTSINK`, `RIDEV_DEVNOTIFY`, removal, and the destroyed-target path.
+3. Schema v1 uses deterministic UTF-8 JSON, fixed-width runtime diagnostic
+   values, strict old/future version rejection, and hard limits for events,
+   registrations, packet bytes, buffered packets, and fixture bytes.
+4. `WM_INPUT` and `WM_INPUT_DEVICE_CHANGE` use a pre-reserved bounded callback
+   ledger and aligned fixed scratch buffer. Serialization and optional stable
+   identity resolution occur after message processing.
+5. `GetRawInputData` records header/input query and read sizes independently;
+   pure contract tests reject zero, truncated, oversized, inconsistent,
+   unknown-type, API-sentinel, and query/read-disagreement cases.
+6. `GetRawInputBuffer` uses native pointer fields plus an explicitly recorded
+   block alignment (including the documented WOW64 8-byte rule), with byte,
+   progress, overflow, and packet-count checks.
+7. The committed fixture is explicitly synthetic. Native x64/x86 CTest creates
+   and uploads separate observed-Windows traces, but that execution remains
+   pending; physical input and hot-plug evidence remain P3-HW-01.
+8. No registration/data hook, synthetic handle/message, virtual queue, physical
+   suppression, or third-party process work is present.
 
 ## Related documents
 
