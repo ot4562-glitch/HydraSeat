@@ -525,6 +525,7 @@ Only after Gate E may Phase 3 be marked complete.
 | Raw Input API virtualization | Yes | Windows x64/x86 + cross-architecture validated (`32806163164`) | P3-HW-01 physical trace pending | HydraSeat-owned controlled probe only |
 | Controlled normalized XInput state/remapping | Yes | Remediation Windows x64/x86 36/36 + cross-architecture validated (`32832036967`, head `b351afdd`); old `32816241577` is pre-fix only | Physical controller evidence pending | Direct adapter facade; no ordinary XInput hook |
 | Controlled DirectInput visibility/order policy | Yes | Fork PR #16 run `32840474306`: native x64/x86 full CTest passes controlled policy/two-probe and read-only DirectInput 8 observation; portable strict-GCC regressions also pass | Physical controller/game evidence pending | HydraSeat-owned policy/probe only; no system DLL replacement or production interposition |
+| Input latency/queue/bleed metrics harness | Yes | Fork PR #18 run `32857666855`: native x64/x86 43/43 CTest, metrics CLI/report tests and instrumented Gate C host pass; strict GCC/schema/portable 24/24 also pass | Physical latency/zero-bleed/overhead evidence pending under D-027 | Bounded nonblocking recorder; host physical/enqueue/dequeue/write only; receiver identity remains unknown until target apply/query evidence, so zero cross counters alone are not zero-bleed proof |
 | Polling API interposition | Yes | CI pending | No | Controlled probe only |
 | Cursor/focus API interposition | No | Pending | Pending | Controlled probe only |
 | HidHide session lifecycle | No | Yes | Yes | No |

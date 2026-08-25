@@ -209,6 +209,14 @@ incomplete until recovery, physical acceptance, and later declared
 compatibility gates pass. No commercial-process injection, physical
 suppression, or anti-cheat interaction is implemented.
 
+#### P3-MET-01 input metrics boundary
+
+`hydra_input_metrics` is a process-local, fixed-capacity metrics component used by later Phase 3 acceptance gates. Its latency-sensitive producer API is `tryRecord()`: the ring is preallocated, the call performs no file/pipe/network I/O or allocation, and it never waits for another thread. Contention rejects the telemetry sample and increments an explicit counter; a full ring rotates the oldest sample and records that loss. Snapshot sorting, percentile calculation, schema encoding, and file output are off the input path.
+
+Schema v1 correlates samples with the original input sequence and records physical observation, route enqueue/dequeue/write, explicit route drop, target apply/query hooks, rollback, queue depth/high-water/drop counters, Seat/process ownership, event class, and optional CPU/memory hooks. Queue-drop totals de-duplicate each cumulative counter by `(Seat, target process)` writer queue. Default privacy is redacted: key/button detail IDs are zeroed before storage while Key/Button/Movement/Wheel class remains measurable. Diagnostic detail retention requires an explicit host option.
+
+The current `hydra_gate_c_host` instruments physical observation and its bounded per-target enqueue/dequeue/write path. Host routing stages record expected Seat/target identity but leave actual receiver identity unknown. Only target apply/query stages can increment `receiver_verified_events` and contribute verified cross-Seat/process evidence. The host does **not** fabricate target timestamps or assume a cross-process monotonic-clock relationship; future receiver timestamps must first be normalized into the recorder clock domain. Consequently `cross_* = 0` with `receiver_verified_events = 0` is not zero-bleed evidence, and a live host report intentionally leaves end-to-end latency empty until a controlled/physical acceptance path provides receiver-stage evidence. Physical latency, zero-bleed, CPU/memory overhead, and game support remain D-027 manual evidence rather than claims from the metrics harness itself.
+
 #### `hydra_gate_c_raw_input_probe`
 
 P3-RAW-01 keeps native Raw Input behavior measurement outside the production

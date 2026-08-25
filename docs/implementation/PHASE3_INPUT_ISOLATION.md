@@ -653,7 +653,7 @@ Implemented independently from the packet specification and official Microsoft D
 
 ## P3-MET-01 — Input latency, queue, and bleed metrics
 
-**State:** READY
+**State:** VALIDATED
 
 **Goal**
 
@@ -696,6 +696,24 @@ Provide objective metrics used by all later physical/application/game gates.
 **Done when**
 
 P3-HW/E packets can produce a reproducible report with p50/p95/p99 and zero-bleed counters.
+
+**Implementation evidence (2026-08-25)**
+
+- `InputMetricsRecorder` preallocates a bounded process-local ring (default 4096, maximum 16384 samples). `tryRecord()` performs no allocation, file/pipe I/O, sleep, or blocking lock; recorder contention is rejected and counted, while a full ring rotates the oldest sample and counts the loss;
+- schema-v1 stages cover physical observation, route enqueue/dequeue/write, explicit route drop, target apply/query hooks, rollback, and host resource hooks. `RawInputEvent.sequence` is the live host correlation ID and all latency timestamps use monotonic microseconds;
+- `hydra_gate_c_host` records physical/enqueue/dequeue/write and queue depth/high-water/drop counters on the existing bounded writer path, then builds and writes the JSON report only after the router/writers have stopped and rollback has completed. Cumulative queue drops are de-duplicated per `(Seat, target process)` writer queue, not per Seat alone;
+- host queue/write samples carry expected Seat/target identity but leave `receivingSeatId`/`receivingProcessId` unknown. Only target apply/query samples may verify actual receiver identity, so `cross_* = 0` is not zero-bleed evidence when `receiver_verified_events = 0`;
+- target apply/query timestamps are intentionally not fabricated or added to the Gate C protocol in this packet. Missing target stages remain explicit and produce no end-to-end percentile until P3-HW/E supplies validated receiver-stage evidence. Any future cross-process timestamps must be normalized into the recorder's monotonic clock domain before report generation;
+- redacted mode is the default and removes key/button identity while preserving Key/Button/Movement/Wheel class; `--metrics-diagnostic` explicitly enables detail IDs for a diagnostic run;
+- `schemas/input_metrics_trace_v1.schema.json` and `schemas/input_metrics_report_v1.schema.json` define the machine-readable contracts, and the `hydra_input_metrics` CLI emits a deterministic receiver-verified fixture report;
+- the report calculates nearest-rank p50/p95/p99/max for each available stage pair, end-to-end and rollback, plus missing-stage, receiver-evidence, verified cross-Seat/process, queue loss/high-water, recorder loss, event-class, and CPU/memory hook summaries;
+- strict GCC 15 `-Werror` tests pass; metrics CTest passes 3/3; selected Phase 3 portable regressions pass 24/24; both JSON schemas parse and the fixture report validates against the report schema;
+- fork PR #18 run `32857666855` validates branch head `55953b2205d0bb1f9f929c542fcb837a543e0824`: native x64 and Win32/x86 each pass 43/43 CTest, explicitly including `InputMetricsTests`, `InputMetricsCliSelfTest`, and `InputMetricsFixtureReport`; both architectures build the instrumented `hydra_gate_c_host`, and the existing Gate C cross-architecture job remains green;
+- a Linux whole-project build still hits the pre-existing Windows-only `reset_input.cpp` `<windows.h>` target; the packet-scoped and selected Phase 3 targets build cleanly. Physical receiver-stage/latency/zero-bleed evidence remains manual/later work and is not implied by the automated Windows pass.
+
+**Manual/physical limits**
+
+No physical latency, zero-bleed, CPU/memory overhead, game, device-cloaking, or controller performance claim is made by this packet. D-027 keeps those acceptance measurements manual and they remain work for P3-HW/E and later compatibility gates.
 
 **Suggested commit**
 
