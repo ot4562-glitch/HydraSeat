@@ -3,9 +3,9 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-RAW-01 — Controlled Raw Input behavior probe**
-- Current validated fork-main baseline: `6eec298f7b0e83bdba277030fbce5f1f37cb8812` (merged P3-API-03 documentation baseline)
-- Current validated Windows CI evidence: fork-main run `32793819841`; x64/x86 24/24 CTest, roadmap/current-packet validation, and dedicated x64-host-to-x64/x86 polling + cursor/focus cross-architecture jobs passed
+- Current default packet: **P3-RAW-02 — Controlled Raw Input virtualization shim**
+- Current validated implementation head: `ec704d4` (P3-RAW-01 branch; final merge SHA pending)
+- Current validated Windows CI evidence: run `32800513365`; native x64/x86 28/28 CTest, retained observed Raw Input registration traces, repeated process teardown, and the existing Gate C cross-architecture job passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -38,8 +38,8 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-API-01 | VALIDATED | P3-STATE-01 | Controlled Win32 API probe baseline — Windows/MSVC run `32722277035`; 15/15 tests including both API probe self-tests passed |
 | P3-API-02 Startup-loaded polling shim for controlled probe | VALIDATED | P3-API-01, P3-ARCH-01 | Windows run `32780563364`: native x64/x86 polling-shim CTest plus x64-host-to-x64/x86 ordinary-API two-probe isolation passed |
 | P3-API-03 Cursor/focus/capture shim for controlled probe | VALIDATED | P3-API-02 | Windows run `32792381573`: x64/x86 24/24 CTest plus x64-host-to-x64/x86 Seat-local cursor/clip/logical focus/capture and host-native global-state preservation passed |
-| P3-RAW-01 Raw Input registration/data probe | CODE_COMPLETE | P3-API-01 | Standalone bounded trace/parser and native lifecycle harness are implemented; Windows x64/x86 execution and observed trace artifacts are pending |
-| P3-RAW-02 Raw Input virtualization shim | BLOCKED | P3-RAW-01, P3-API-02 | Two probes receive only their Seat synthetic Raw Input stream |
+| P3-RAW-01 Raw Input registration/data probe | VALIDATED | P3-API-01 | Windows run `32800513365`: native x64/x86 28/28 CTest, retained observed registration traces, replacement/remove/destroyed-HWND evidence, and repeated process teardown passed |
+| P3-RAW-02 Raw Input virtualization shim | READY | P3-RAW-01, P3-API-02 | Next packet: two HydraSeat-owned probes receive only their Seat synthetic Raw Input stream through ordinary registration/data APIs |
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
 | P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
 | P3-HW-01 Gate A/B/C physical acceptance runner | READY | P3-QUEUE-01 | User-run two-keyboard/two-pointing-device traces and report |
@@ -69,7 +69,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | Gate B physical Seat routing | PENDING | Saved profile, per-Seat route counters/target notifications, shared/unassigned failure |
 | Gate C physical controlled-process routing | PENDING | Two physical input sets driving two controlled target adapter states |
 | Gate C polling API interposition | VALIDATED (CONTROLLED CI) | HydraSeat-owned x64/x86 probes call the three ordinary polling APIs through the opt-in shim; physical/game acceptance is still separate |
-| Gate C Raw Input API behavior baseline | CODE_COMPLETE (WINDOWS CI PENDING) | Standalone registration/data/buffer probe and synthetic parser fixture exist; native x64/x86 observed traces are not yet recorded |
+| Gate C Raw Input API behavior baseline | VALIDATED (CONTROLLED CI) | Run `32800513365` retained native x64/x86 registration traces and validated replacement/remove/destroyed-HWND/process teardown; physical `WM_INPUT` and hot-plug remain P3-HW-01 |
 | Gate C watchdog/crash recovery | NOT IMPLEMENTED | Forced host/target/adapter failure and clean restoration |
 | Gate D device cloaking | NOT IMPLEMENTED | Guarded session-cloak experiment with spare input and automatic rollback |
 | Gate E two-game zero bleed | NOT IMPLEMENTED | Two distinct profile entries and objective cross-Seat metrics |
@@ -153,30 +153,35 @@ Next packet: P3-RAW-01 is READY for a controlled Raw Input behavior probe; P3-RA
 
 ### 2026-08-25 — P3-RAW-01
 
-State: CODE_COMPLETE
-Branch/commit: `test/p3-raw-01-behavior-probe`; implementation commit is the commit containing this evidence record
-Windows CI: not run; the local machine has no Windows C++ toolchain, and native x64/x86 registration lifecycle evidence remains pending
+State: VALIDATED
+Branch/commit: `test/p3-raw-01-behavior-probe`; validated implementation head `ec704d4`
+Windows CI: run `32800513365` passed native x64 and Win32/x86 28/28 CTest, retained both observed registration trace artifacts, and kept the existing Gate C cross-architecture job green
 Automated tests:
 - strict WSL GCC build passed with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion` for the new trace/parser library, trace tests, and portable probe self-test
 - trace tests cover round trip, old/future schema rejection, truncation, fixture/event/registration/packet bounds, invalid UTF-8, deterministic registration ordering, fixed-width runtime handles, registration contracts, Raw Input data size/query/read failures, and bounded raw-buffer traversal
 - existing portable Gate C protocol/state, architecture selector, probe snapshot, adapter C++/C11 ABI, polling shim, cursor/focus shim, and host self-tests passed
-- declared Windows CTest coverage runs native registration/replacement/remove/destroyed-HWND lifecycle and a two-cycle job-contained process teardown test in both x64 and Win32/x86 jobs; each job uploads its real observed registration trace separately
+- Windows x64/x86 traces agree that registration replacement is last-wins per usage, removal deletes only that usage, `RIDEV_INPUTSINK` is echoed by `GetRegisteredRawInputDevices`, and accepted `RIDEV_DEVNOTIFY` is not echoed in returned flags
+- both traces retain a destroyed target HWND runtime value until a fresh valid registration replaces it; process teardown passed twice without prior-process registration dependence
+- x64 observed `RAWINPUTHEADER`/`RAWINPUT` sizes 24/48 bytes; Win32/x86 observed 16/40 bytes and records the WOW64-compatible 8-byte raw-buffer alignment contract
 Manual evidence: pending in P3-HW-01 for physical keyboard/mouse `WM_INPUT`, actual hot-plug ordering, and composite HID behavior; the committed fixture is explicitly synthetic
-Known limitations: no Raw Input hook, synthetic HRAWINPUT/WM_INPUT, virtual queue/token table, physical suppression, third-party process, or game support exists; native Windows results are not claimed before CI runs
+Known limitations: no Raw Input hook, synthetic HRAWINPUT/WM_INPUT, virtual queue/token table, physical suppression, third-party process, or game support exists; CI observed neither physical `WM_INPUT` nor device change, so those remain P3-HW-01
 Rollback result: the standalone probe tracks only its own keyboard/mouse registrations, records bounded best-effort removal, makes cleanup idempotent, destroys owned windows, and contains teardown children in a kill-on-close Job Object
-Next packet: keep P3-RAW-02 BLOCKED until P3-RAW-01 native x64/x86 observed traces are reviewed and this packet is VALIDATED
+Next packet: P3-RAW-02 is READY; implement controlled Raw Input virtualization only against the validated P3-RAW-01 behavior contract and keep P3-HW-01 physical evidence separate
 
 ## Next Codex task
 
 Use:
 
 ```text
-Validate P3-RAW-01 exactly as specified in
+Implement P3-RAW-02 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Run the native Windows x64/x86 registration lifecycle and process teardown
-tests, retain both observed trace artifacts, and review replacement/removal and
-destroyed-HWND results before changing the packet to VALIDATED. Do not implement
-P3-RAW-02, device suppression, third-party injection, game support, or
+Use the validated P3-RAW-01 Windows behavior evidence as the compatibility
+contract: per-usage last-registration-wins replacement, usage-local removal,
+`RIDEV_DEVNOTIFY` accepted-but-not-echoed registration flags, retained destroyed
+HWND runtime values until replacement, and the x64/x86 size/alignment contracts.
+Preserve the validated P3-API-02/P3-API-03 capability boundaries. Limit all
+interposition to HydraSeat-owned controlled probes; do not add physical device
+suppression/cloaking, third-party injection, game support, anti-cheat, DRM, or
 protected-process work.
 ```

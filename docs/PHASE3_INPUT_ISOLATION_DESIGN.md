@@ -510,8 +510,8 @@ Only after Gate E may Phase 3 be marked complete.
 | Gate C x86/x64 manifest, PE, and ABI matrix | Yes | CI pending | No | Controlled process only |
 | Two-process synthetic state separation | Partial | Yes | No | Controlled process only |
 | Bounded per-target writer queues | Partial | Yes | Gate C physical acceptance pending | Controlled process only |
-| Raw Input behavior trace/parser | Yes | Declared, x64/x86 pending | P3-HW-01 | Controlled probe only |
-| Raw Input API virtualization | No | Pending | Pending | Controlled probe only |
+| Raw Input behavior trace/parser | Yes | Windows x64/x86 validated (`32800513365`) | P3-HW-01 physical trace pending | Controlled probe only |
+| Raw Input API virtualization | No | P3-RAW-02 READY | Pending | Controlled probe only |
 | Polling API interposition | Yes | CI pending | No | Controlled probe only |
 | Cursor/focus API interposition | No | Pending | Pending | Controlled probe only |
 | HidHide session lifecycle | No | Yes | Yes | No |
@@ -640,9 +640,12 @@ anti-cheat targets remain out of scope. See
 6. `GetRawInputBuffer` uses native pointer fields plus an explicitly recorded
    block alignment (including the documented WOW64 8-byte rule), with byte,
    progress, overflow, and packet-count checks.
-7. The committed fixture is explicitly synthetic. Native x64/x86 CTest creates
-   and uploads separate observed-Windows traces, but that execution remains
-   pending; physical input and hot-plug evidence remain P3-HW-01.
+7. The committed fixture is explicitly synthetic. Windows CI run `32800513365`
+   validates native x64/x86 28/28 CTest and retains separate observed-Windows
+   traces. The traces agree on per-usage replacement/removal, accepted-but-not-
+   echoed `RIDEV_DEVNOTIFY`, retained destroyed-HWND runtime values until valid
+   replacement, architecture-specific structure sizes, and 8-byte buffer alignment.
+   Physical input and hot-plug evidence remain P3-HW-01.
 8. No registration/data hook, synthetic handle/message, virtual queue, physical
    suppression, or third-party process work is present.
 

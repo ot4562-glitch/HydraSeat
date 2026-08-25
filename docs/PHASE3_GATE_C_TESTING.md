@@ -34,10 +34,13 @@ Win32/x86 each passed 24/24 CTest, while the dedicated x64-host cross-architectu
 job passed both x64 and x86 ordinary-API, no-cross-Seat, teardown, polling-regression,
 and host-native global-state-preservation paths.
 
-P3-RAW-01 is `CODE_COMPLETE` on `test/p3-raw-01-behavior-probe`. It adds a
-standalone controlled Raw Input behavior process plus a bounded schema-v1
-trace/parser contract. Strict portable tests pass; native Windows x64/x86
-registration lifecycle execution and observed trace artifacts remain pending.
+P3-RAW-01 is `VALIDATED` on `test/p3-raw-01-behavior-probe` by Windows CI
+run `32800513365`. Native x64 and Win32/x86 each passed 28/28 CTest, both
+observed registration traces were retained and reviewed, repeated process
+teardown passed, and the existing Gate C cross-architecture job stayed green.
+The traces agree on last-registration-wins replacement, usage-local removal,
+`RIDEV_INPUTSINK` echo, accepted-but-not-echoed `RIDEV_DEVNOTIFY`, and a
+registered destroyed HWND remaining as a runtime value until valid replacement.
 This is observation only and does not add Raw Input interposition.
 
 This is not a general game hook or a completed Gate C implementation. The
@@ -688,26 +691,25 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] Windows/MSVC execution of the x86/x64 architecture matrix and x64-host-to-x86-target/probe self-tests (`32727711605`)
 - [x] P3-API-02 polling shim source, fixed C ABI, transactional IAT engine, architecture manifest, native x64/x86 tests, and cross-architecture ordinary-polling proof (`32780563364`)
 - [x] P3-API-03 cursor/clip/logical-focus/capture shim, adapter ABI v2, native x64/x86 24/24 CTest, cross-architecture two-probe isolation, and host-native global-state preservation (`32792381573`)
-- [x] P3-RAW-01 standalone probe source, bounded trace/parser contract, explicit synthetic fixture, strict portable tests, and declared x64/x86 lifecycle/teardown CTest coverage
+- [x] P3-RAW-01 standalone probe, bounded trace/parser contract, explicit synthetic fixture, native x64/x86 28/28 CTest, retained/reviewed observed registration traces, and process teardown evidence (`32800513365`)
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
-- [ ] Native x64/x86 P3-RAW-01 registration/data/buffer lifecycle run and retained observed trace artifacts
 - [ ] Physical keyboard/mouse `WM_INPUT` and actual device-change trace (P3-HW-01)
-- [ ] Controlled Raw Input virtualization consumer (P3-RAW-02; blocked)
+- [ ] Controlled Raw Input virtualization consumer (P3-RAW-02; ready)
 - [ ] Adapter crash/watchdog recovery acceptance
 - [ ] Commercial non-anti-cheat game profile experiment
 - [ ] Physical device cloaking/suppression
 
 ## Next implementation step
 
-P3-RAW-01 is `CODE_COMPLETE`. The next action is native Windows x64/x86
-execution of `RawInputRegistrationSelfTest` and
-`RawInputProcessTeardownSelfTest`, retention and review of both observed trace
-artifacts, and truthful packet validation. P3-RAW-02 remains blocked until that
-evidence replaces assumptions about registration replacement/removal and the
-destroyed-window path.
+P3-RAW-01 is `VALIDATED` by Windows run `32800513365`. P3-RAW-02 is now
+READY and must use the retained x64/x86 observed behavior as its contract:
+last-registration-wins per usage, usage-local removal, accepted-but-not-echoed
+`RIDEV_DEVNOTIFY`, retained destroyed-HWND runtime values until replacement,
+and the architecture-specific structure sizes with 8-byte raw-buffer alignment.
+Physical `WM_INPUT` and device-change evidence remains P3-HW-01.
 
 The two-probe process test releases Probe B's virtual capture while asserting
 that Probe A retains its own capture, then shuts down Probe A and re-queries

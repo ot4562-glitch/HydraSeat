@@ -214,9 +214,12 @@ The window procedure uses pre-reserved bounded memory and performs no pipe or
 file I/O. Runtime HWND/HANDLE/HRAWINPUT/hDevice values are fixed-width
 diagnostics, never stable identity; existing Phase 1 helpers may attach an
 optional device path and stable ID after callback processing. The committed
-parser fixture is explicitly synthetic, while native CI generates separate
-observed x86/x64 traces. This component observes behavior only and supplies no
-Raw Input virtualization or isolation capability.
+parser fixture is explicitly synthetic. Windows run `32800513365` retained and
+validated separate x86/x64 observed traces: replacement is last-wins per usage,
+removal is usage-local, accepted `RIDEV_DEVNOTIFY` is not echoed in registered
+flags, and a destroyed target HWND remains as a runtime value until valid
+replacement. This component observes behavior only and supplies no Raw Input
+virtualization or isolation capability.
 
 See [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
 

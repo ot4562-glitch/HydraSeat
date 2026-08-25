@@ -297,7 +297,7 @@ Controlled probes use the ordinary API calls and observe independent Seat-local 
 
 ## P3-RAW-01 — Controlled Raw Input behavior probe
 
-**State:** CODE_COMPLETE
+**State:** VALIDATED
 
 **Goal**
 
@@ -360,15 +360,25 @@ P3-RAW-02 has a stable behavior specification and fixtures rather than assumptio
   headers, block offsets, pointer-width alignment, and explicit malformed or
   overflow results without manufacturing a successful `HRAWINPUT`;
 - strict portable trace/parser and existing Gate C regression tests pass.
-  Native Windows/MSVC x64/x86 lifecycle execution and observed trace artifacts
-  remain pending, so this packet is not `VALIDATED` and P3-HW-01 remains
-  unchanged.
+- Windows CI run `32800513365` validates native x64 and Win32/x86 28/28 CTest,
+  repeated process teardown, and retained observed registration traces while the
+  existing Gate C cross-architecture job remains green;
+- both architectures observed the same registration contract: target replacement
+  is last-registration-wins per usage, removal deletes only that usage,
+  `RIDEV_INPUTSINK` is echoed by `GetRegisteredRawInputDevices`, while an accepted
+  `RIDEV_DEVNOTIFY` request is not echoed in the returned flags;
+- destroying the registered target HWND leaves its runtime value in the process's
+  registration snapshot until a fresh valid registration replaces it. x64 records
+  a 24-byte `RAWINPUTHEADER`/48-byte `RAWINPUT`; Win32/x86 records 16/40 bytes and
+  both paths use the documented 8-byte Raw Input buffer alignment policy;
+- CI observed no physical `WM_INPUT` or device change. Those remain P3-HW-01
+  evidence and are not implied by this packet's `VALIDATED` state.
 
 ---
 
 ## P3-RAW-02 — Controlled Raw Input virtualization shim
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 
