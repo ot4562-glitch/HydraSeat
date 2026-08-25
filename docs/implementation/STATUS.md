@@ -238,7 +238,7 @@ Next packet: P3-HW-01 is READY and becomes the default packet. Implement only th
 ### 2026-08-26 — P3-HW-01
 
 State: CODE_COMPLETE
-Branch/commit: `test/p3-hw-01-hardware-acceptance`; implementation commit pending at this evidence-writing point
+Branch/commit: `test/p3-hw-01-hardware-acceptance`; implementation commit `fadea30` (`test: implement P3-HW-01 hardware acceptance runner`)
 Windows CI: pending. CI must prove the x64/x86 build/regression suite plus `Phase3HardwareAcceptanceParserTests` and Windows PowerShell 5 `Phase3HardwareAcceptanceRunnerSelfTest`; CI cannot supply physical Gate A/B/C evidence.
 Automated/local evidence:
 - PowerShell 5 runner self-test passes and exercises schema parsing, a two-Seat schema-v2 fixture, four exclusive keyboard/mouse identities, source-profile SHA immutability, and derived shared/ambiguous profile creation;
