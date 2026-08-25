@@ -4,8 +4,8 @@
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
 - Current default packet: **P3-CTRL-01 — XInput controlled state and slot remapping**
-- Current validated fork-main baseline: `e45c86d83b440c8a1653dba01084cc3ea6ea1b71` (merged P3-RAW-01 documentation baseline)
-- Current validated Windows CI evidence: fork-main run `32801563240`; x64/x86 28/28 CTest, roadmap/current-packet validation, observed Raw Input trace verification/upload, and the existing Gate C cross-architecture job passed
+- Current validated fork-main baseline: `d22ca244dc8a3b1429cb5866ee3f7e4103eb57e3` (merged P3-RAW-02)
+- Current validated Windows CI evidence: fork-main run `32807199628`; native x64/x86 full CTest, roadmap/current-packet validation, observed Raw Input trace verification/upload, and the dedicated x64-host-to-x64/x86 Gate C matrix passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
