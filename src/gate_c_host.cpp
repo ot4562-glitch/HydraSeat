@@ -68,6 +68,7 @@ struct HostOptions {
     bool pollingShimSelfTest{false};
     bool cursorFocusShimSelfTest{false};
     bool rawInputShimSelfTest{false};
+    bool xinputSelfTest{false};
     bool protocolErrorSelfTest{false};
     bool showHelp{false};
 };
@@ -82,6 +83,7 @@ void printUsage(std::ostream& output) {
         << "  hydra_gate_c_host --baseline-self-test --target <hydra_gate_c_api_probe.exe>\n"
         << "  hydra_gate_c_host --polling-shim-self-test --target <hydra_gate_c_api_probe.exe>\n"
         << "                     --shim <hydra_gate_c_shim.dll>\n"
+        << "  hydra_gate_c_host --xinput-self-test --target <hydra_gate_c_api_probe.exe>\n"
         << "  hydra_gate_c_host --cursor-focus-shim-self-test --target <hydra_gate_c_api_probe.exe>\n"
         << "                     --shim <hydra_gate_c_shim.dll>\n"
         << "  hydra_gate_c_host --raw-input-shim-self-test --target <hydra_gate_c_api_probe.exe>\n"
@@ -218,6 +220,8 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
             options.cursorFocusShimSelfTest = true;
         } else if (argument == L"--raw-input-shim-self-test") {
             options.rawInputShimSelfTest = true;
+        } else if (argument == L"--xinput-self-test") {
+            options.xinputSelfTest = true;
         } else if (argument == L"--protocol-error-self-test") {
             options.protocolErrorSelfTest = true;
         } else if (argument == L"--help" || argument == L"-h") {
@@ -232,6 +236,7 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
         static_cast<int>(options.pollingShimSelfTest) +
         static_cast<int>(options.cursorFocusShimSelfTest) +
         static_cast<int>(options.rawInputShimSelfTest) +
+        static_cast<int>(options.xinputSelfTest) +
         static_cast<int>(options.protocolErrorSelfTest);
     if (selfTestModes > 1) {
         return false;
@@ -525,7 +530,8 @@ public:
                 m_options.baselineSelfTest ||
                 m_options.pollingShimSelfTest ||
                 m_options.cursorFocusShimSelfTest ||
-                m_options.rawInputShimSelfTest);
+                m_options.rawInputShimSelfTest ||
+                m_options.xinputSelfTest);
         }
         if ((m_options.pollingShimSelfTest ||
              m_options.cursorFocusShimSelfTest ||
@@ -540,7 +546,8 @@ public:
             const auto kind = (m_options.baselineSelfTest ||
                                m_options.pollingShimSelfTest ||
                                m_options.cursorFocusShimSelfTest ||
-                               m_options.rawInputShimSelfTest)
+                               m_options.rawInputShimSelfTest ||
+                               m_options.xinputSelfTest)
                 ? hydra::gatec::GateCArtifactKind::ApiProbe
                 : hydra::gatec::GateCArtifactKind::ControlledTarget;
             const auto selected = hydra::gatec::resolveGateCArtifacts(
@@ -620,6 +627,9 @@ public:
         if (m_options.rawInputShimSelfTest) {
             return runApiProbeBaselineSelfTest(true, false, true);
         }
+        if (m_options.xinputSelfTest) {
+            return runXInputSelfTest();
+        }
         if (m_options.protocolErrorSelfTest) {
             return runProtocolErrorSelfTest();
         }
@@ -673,6 +683,8 @@ private:
         } else if (m_options.pollingShimSelfTest) {
             commandLine += L" --polling-shim --shim " +
                            quoteArgument(m_options.shimPath);
+        } else if (m_options.xinputSelfTest) {
+            commandLine += L" --xinput-controlled";
         }
 
         STARTUPINFOW startup{};
@@ -754,16 +766,28 @@ private:
         HelloAckMessage ack;
         ack.accepted = true;
         ack.serverProcessId = GetCurrentProcessId();
-        ack.grantedCapabilities = hydra::gatec::testCapabilityBits(
-            requireOwnedWindow
-                ? (m_options.rawInputShimSelfTest
-                       ? hydra::gatec::kControlledRawInputProbeCapabilities
-                       : (m_options.cursorFocusShimSelfTest
-                       ? hydra::gatec::kControlledCursorFocusProbeCapabilities
-                       : (m_options.pollingShimSelfTest
-                              ? hydra::gatec::kControlledPollingProbeCapabilities
-                              : hydra::gatec::kControlledApiProbeCapabilities)))
-                : hydra::gatec::kControlledTargetCapabilities);
+        auto grantedCapabilities =
+            hydra::gatec::kControlledTargetCapabilities;
+        if (requireOwnedWindow) {
+            if (m_options.xinputSelfTest) {
+                grantedCapabilities =
+                    hydra::gatec::kControlledXInputProbeCapabilities;
+            } else if (m_options.rawInputShimSelfTest) {
+                grantedCapabilities =
+                    hydra::gatec::kControlledRawInputProbeCapabilities;
+            } else if (m_options.cursorFocusShimSelfTest) {
+                grantedCapabilities =
+                    hydra::gatec::kControlledCursorFocusProbeCapabilities;
+            } else if (m_options.pollingShimSelfTest) {
+                grantedCapabilities =
+                    hydra::gatec::kControlledPollingProbeCapabilities;
+            } else {
+                grantedCapabilities =
+                    hydra::gatec::kControlledApiProbeCapabilities;
+            }
+        }
+        ack.grantedCapabilities =
+            hydra::gatec::testCapabilityBits(grantedCapabilities);
         if (!session.channel.writeFrame(
                 hydra::gatec::encodeHelloAck(1, ack), kIoTimeoutMs,
                 &error, &systemError)) {
@@ -867,6 +891,40 @@ private:
             return std::nullopt;
         }
         return std::move(decoded.comparison);
+    }
+
+    bool sendControllerUpdate(
+        TargetSession& session,
+        const hydra::gatec::ControllerUpdateMessage& update) {
+        const auto sequence = session.nextSequence++;
+        return session.channel.writeFrame(
+            hydra::gatec::encodeControllerUpdate(sequence, update),
+            kIoTimeoutMs);
+    }
+
+    std::optional<hydra::gatec::ControllerSnapshotMessage>
+    queryController(TargetSession& session,
+                    const hydra::gatec::ControllerQueryMessage& query) {
+        const auto sequence = session.nextSequence++;
+        if (!session.channel.writeFrame(
+                hydra::gatec::encodeControllerQuery(sequence, query),
+                kIoTimeoutMs)) {
+            return std::nullopt;
+        }
+        const auto response = session.channel.readFrame(kIoTimeoutMs);
+        if (!response || !response.frame ||
+            response.frame->type != MessageType::ControllerSnapshot ||
+            response.frame->sequence != sequence) {
+            return std::nullopt;
+        }
+        hydra::gatec::ControllerSnapshotMessage snapshot;
+        if (!hydra::gatec::decodeControllerSnapshot(
+                *response.frame, snapshot) ||
+            snapshot.seatId != session.seatId ||
+            snapshot.logicalSlot != query.logicalSlot) {
+            return std::nullopt;
+        }
+        return snapshot;
     }
 
     bool sendShutdown(TargetSession& session) {
@@ -1454,6 +1512,361 @@ private:
                    "capture observations beside independent Seat adapter state; "
                    "failure and repeated teardown paths left no child process.\n";
         }
+        return EXIT_SUCCESS;
+    }
+
+    int runXInputSelfTest() {
+        using namespace hydra::gatec;
+        constexpr ControllerSourceIdentity sourceA{
+            ControllerSourceKind::Synthetic, 0u,
+            0x58494e5055544101ull};
+        constexpr ControllerSourceIdentity sourceB{
+            ControllerSourceKind::Synthetic, 1u,
+            0x58494e5055544202ull};
+
+        NormalizedXInputGamepad stateA;
+        stateA.buttons = 0x1100u;
+        stateA.leftTrigger = 20u;
+        stateA.rightTrigger = 200u;
+        stateA.thumbLX = -12000;
+        stateA.thumbLY = 9000;
+        stateA.thumbRX = -321;
+        stateA.thumbRY = 654;
+        NormalizedXInputGamepad stateB;
+        stateB.buttons = 0x2200u;
+        stateB.leftTrigger = 180u;
+        stateB.rightTrigger = 5u;
+        stateB.thumbLX = 123;
+        stateB.thumbLY = -456;
+        stateB.thumbRX = 16000;
+        stateB.thumbRY = -7000;
+
+        NormalizedXInputCapabilities capabilitiesA;
+        capabilitiesA.subtype = 1u;
+        capabilitiesA.flags = 1u;
+        capabilitiesA.gamepad.buttons = 0xffffu;
+        capabilitiesA.gamepad.leftTrigger = 255u;
+        capabilitiesA.gamepad.rightTrigger = 255u;
+        capabilitiesA.vibrationSupported = true;
+        capabilitiesA.leftMotorMaximum = 65535u;
+        capabilitiesA.rightMotorMaximum = 60000u;
+        auto capabilitiesB = capabilitiesA;
+        capabilitiesB.subtype = 2u;
+        capabilitiesB.flags = 2u;
+        capabilitiesB.rightMotorMaximum = 50000u;
+        const NormalizedXInputBattery batteryA{
+            true, XInputBatteryDeviceType::Gamepad,
+            XInputBatteryType::Alkaline, XInputBatteryLevel::Full};
+        const NormalizedXInputBattery batteryB{
+            true, XInputBatteryDeviceType::Gamepad,
+            XInputBatteryType::Wired, XInputBatteryLevel::Low};
+
+        std::uint64_t seat1StateExpected = 0;
+        std::uint64_t seat1StateCross = 0;
+        std::uint64_t seat1CapabilityExpected = 0;
+        std::uint64_t seat1CapabilityCross = 0;
+        std::uint64_t seat1BatteryExpected = 0;
+        std::uint64_t seat1BatteryCross = 0;
+        std::uint64_t seat1VibrationExpected = 0;
+        std::uint64_t seat1VibrationCross = 0;
+        std::uint64_t seat2StateExpected = 0;
+        std::uint64_t seat2StateCross = 0;
+        std::uint64_t seat2CapabilityExpected = 0;
+        std::uint64_t seat2CapabilityCross = 0;
+        std::uint64_t seat2BatteryExpected = 0;
+        std::uint64_t seat2BatteryCross = 0;
+        std::uint64_t seat2VibrationExpected = 0;
+        std::uint64_t seat2VibrationCross = 0;
+        std::uint64_t apiFailures = 0;
+        std::uint64_t staleAccepted = 0;
+
+        const auto update = [](
+            std::uint32_t seatId, ControllerUpdateKind kind,
+            const ControllerSourceIdentity& source,
+            std::uint64_t generation) {
+            ControllerUpdateMessage value;
+            value.seatId = seatId;
+            value.kind = kind;
+            value.logicalSlot = 0u;
+            value.source = source;
+            value.sourceGeneration = generation;
+            return value;
+        };
+
+        const auto runCycle = [&]() {
+            std::vector<TargetSession> sessions(2);
+            sessions[0].seatId = 1u;
+            sessions[1].seatId = 2u;
+            if (!launchTarget(sessions[0], true, {},
+                              kHandshakeTimeoutMs, true) ||
+                !launchTarget(sessions[1], true, {},
+                              kHandshakeTimeoutMs, true)) {
+                ++apiFailures;
+                cleanupSessions(sessions, true);
+                return false;
+            }
+
+            auto mapA = update(1u, ControllerUpdateKind::Map,
+                               sourceA, 10u);
+            auto mapB = update(2u, ControllerUpdateKind::Map,
+                               sourceB, 20u);
+            auto inputA = update(1u, ControllerUpdateKind::State,
+                                 sourceA, 10u);
+            inputA.gamepad = stateA;
+            auto inputB = update(2u, ControllerUpdateKind::State,
+                                 sourceB, 20u);
+            inputB.gamepad = stateB;
+            auto capA = update(1u, ControllerUpdateKind::Capabilities,
+                               sourceA, 10u);
+            capA.capabilities = capabilitiesA;
+            auto capB = update(2u, ControllerUpdateKind::Capabilities,
+                               sourceB, 20u);
+            capB.capabilities = capabilitiesB;
+            auto batA = update(1u, ControllerUpdateKind::Battery,
+                               sourceA, 10u);
+            batA.battery = batteryA;
+            auto batB = update(2u, ControllerUpdateKind::Battery,
+                               sourceB, 20u);
+            batB.battery = batteryB;
+            const bool sent =
+                sendControllerUpdate(sessions[0], mapA) &&
+                sendControllerUpdate(sessions[1], mapB) &&
+                sendControllerUpdate(sessions[0], inputA) &&
+                sendControllerUpdate(sessions[1], inputB) &&
+                sendControllerUpdate(sessions[0], capA) &&
+                sendControllerUpdate(sessions[1], capB) &&
+                sendControllerUpdate(sessions[0], batA) &&
+                sendControllerUpdate(sessions[1], batB);
+            ControllerQueryMessage queryA;
+            queryA.seatId = 1u;
+            ControllerQueryMessage queryB;
+            queryB.seatId = 2u;
+            const auto first = sent
+                ? queryController(sessions[0], queryA)
+                : std::nullopt;
+            const auto second = sent
+                ? queryController(sessions[1], queryB)
+                : std::nullopt;
+            if (!first || !second) {
+                ++apiFailures;
+                cleanupSessions(sessions, true);
+                return false;
+            }
+
+            const bool firstStateExpected =
+                first->stateResult == VirtualXInputResult::Success &&
+                first->state.mapping.source == sourceA &&
+                first->state.gamepad == stateA;
+            const bool secondStateExpected =
+                second->stateResult == VirtualXInputResult::Success &&
+                second->state.mapping.source == sourceB &&
+                second->state.gamepad == stateB;
+            seat1StateExpected += firstStateExpected ? 1u : 0u;
+            seat2StateExpected += secondStateExpected ? 1u : 0u;
+            seat1StateCross +=
+                (first->state.mapping.source == sourceB ||
+                 first->state.gamepad == stateB) ? 1u : 0u;
+            seat2StateCross +=
+                (second->state.mapping.source == sourceA ||
+                 second->state.gamepad == stateA) ? 1u : 0u;
+
+            const bool firstCapabilityExpected =
+                first->capabilitiesResult ==
+                    VirtualXInputResult::Success &&
+                first->capabilities.mapping.source == sourceA &&
+                first->capabilities.capabilities == capabilitiesA;
+            const bool secondCapabilityExpected =
+                second->capabilitiesResult ==
+                    VirtualXInputResult::Success &&
+                second->capabilities.mapping.source == sourceB &&
+                second->capabilities.capabilities == capabilitiesB;
+            seat1CapabilityExpected +=
+                firstCapabilityExpected ? 1u : 0u;
+            seat2CapabilityExpected +=
+                secondCapabilityExpected ? 1u : 0u;
+            seat1CapabilityCross +=
+                first->capabilities.mapping.source == sourceB ? 1u : 0u;
+            seat2CapabilityCross +=
+                second->capabilities.mapping.source == sourceA ? 1u : 0u;
+
+            const bool firstBatteryExpected =
+                first->batteryResult == VirtualXInputResult::Success &&
+                first->battery.mapping.source == sourceA &&
+                first->battery.battery == batteryA;
+            const bool secondBatteryExpected =
+                second->batteryResult == VirtualXInputResult::Success &&
+                second->battery.mapping.source == sourceB &&
+                second->battery.battery == batteryB;
+            seat1BatteryExpected += firstBatteryExpected ? 1u : 0u;
+            seat2BatteryExpected += secondBatteryExpected ? 1u : 0u;
+            seat1BatteryCross +=
+                first->battery.mapping.source == sourceB ? 1u : 0u;
+            seat2BatteryCross +=
+                second->battery.mapping.source == sourceA ? 1u : 0u;
+
+            auto vibrationA = queryA;
+            vibrationA.kind = ControllerQueryKind::Vibration;
+            vibrationA.expectedMappingGeneration =
+                first->state.mapping.mappingGeneration;
+            vibrationA.expectedSourceGeneration = 10u;
+            vibrationA.leftMotor = 100u;
+            vibrationA.rightMotor = 200u;
+            auto vibrationB = queryB;
+            vibrationB.kind = ControllerQueryKind::Vibration;
+            vibrationB.expectedMappingGeneration =
+                second->state.mapping.mappingGeneration;
+            vibrationB.expectedSourceGeneration = 20u;
+            vibrationB.leftMotor = 500u;
+            vibrationB.rightMotor = 600u;
+            const auto routedA = queryController(sessions[0], vibrationA);
+            const auto routedB = queryController(sessions[1], vibrationB);
+            if (!routedA || !routedB) {
+                ++apiFailures;
+                cleanupSessions(sessions, true);
+                return false;
+            }
+            seat1VibrationExpected +=
+                routedA->vibrationResult == VirtualXInputResult::Success &&
+                routedA->vibration.source == sourceA ? 1u : 0u;
+            seat2VibrationExpected +=
+                routedB->vibrationResult == VirtualXInputResult::Success &&
+                routedB->vibration.source == sourceB ? 1u : 0u;
+            seat1VibrationCross +=
+                routedA->vibration.source == sourceB ? 1u : 0u;
+            seat2VibrationCross +=
+                routedB->vibration.source == sourceA ? 1u : 0u;
+
+            auto disconnectA = update(
+                1u, ControllerUpdateKind::Disconnect, sourceA, 10u);
+            const bool disconnected =
+                sendControllerUpdate(sessions[0], disconnectA);
+            const auto afterDisconnect = disconnected
+                ? queryController(sessions[0], queryA)
+                : std::nullopt;
+            const auto unaffectedSecond = disconnected
+                ? queryController(sessions[1], queryB)
+                : std::nullopt;
+            const bool disconnectCleared = afterDisconnect &&
+                afterDisconnect->stateResult ==
+                    VirtualXInputResult::Disconnected &&
+                !afterDisconnect->state.connected &&
+                afterDisconnect->state.gamepad ==
+                    NormalizedXInputGamepad{} &&
+                afterDisconnect->capabilitiesResult ==
+                    VirtualXInputResult::Disconnected &&
+                afterDisconnect->batteryResult ==
+                    VirtualXInputResult::Disconnected;
+            const bool secondUnaffected = unaffectedSecond &&
+                unaffectedSecond->stateResult ==
+                    VirtualXInputResult::Success &&
+                unaffectedSecond->state.mapping.source == sourceB &&
+                unaffectedSecond->state.gamepad == stateB;
+
+            auto reconnectA = inputA;
+            reconnectA.sourceGeneration = 11u;
+            auto reconnectCapA = capA;
+            reconnectCapA.sourceGeneration = 11u;
+            auto reconnectBatteryA = batA;
+            reconnectBatteryA.sourceGeneration = 11u;
+            const bool reconnected = disconnectCleared && secondUnaffected &&
+                sendControllerUpdate(sessions[0], reconnectA) &&
+                sendControllerUpdate(sessions[0], reconnectCapA) &&
+                sendControllerUpdate(sessions[0], reconnectBatteryA);
+            const auto afterReconnect = reconnected
+                ? queryController(sessions[0], queryA)
+                : std::nullopt;
+            const bool reconnectGenerationPassed = afterReconnect &&
+                afterReconnect->stateResult ==
+                    VirtualXInputResult::Success &&
+                afterReconnect->state.mapping.sourceGeneration == 11u &&
+                afterReconnect->state.gamepad == stateA;
+
+            auto staleVibration = vibrationA;
+            const auto staleRoute = reconnectGenerationPassed
+                ? queryController(sessions[0], staleVibration)
+                : std::nullopt;
+            if (staleRoute && staleRoute->vibrationResult ==
+                                  VirtualXInputResult::Success) {
+                ++staleAccepted;
+            }
+            auto freshVibration = vibrationA;
+            freshVibration.expectedSourceGeneration = 11u;
+            freshVibration.leftMotor = 0u;
+            freshVibration.rightMotor = 0u;
+            const auto freshRoute = staleRoute
+                ? queryController(sessions[0], freshVibration)
+                : std::nullopt;
+            const bool generationRacePassed = staleRoute && freshRoute &&
+                staleRoute->vibrationResult ==
+                    VirtualXInputResult::StaleGeneration &&
+                freshRoute->vibrationResult ==
+                    VirtualXInputResult::Success &&
+                freshRoute->vibration.source == sourceA &&
+                freshRoute->vibration.leftMotor == 0u &&
+                freshRoute->vibration.rightMotor == 0u;
+
+            const bool passed = firstStateExpected && secondStateExpected &&
+                firstCapabilityExpected && secondCapabilityExpected &&
+                firstBatteryExpected && secondBatteryExpected &&
+                routedA->vibrationResult == VirtualXInputResult::Success &&
+                routedB->vibrationResult == VirtualXInputResult::Success &&
+                disconnectCleared && secondUnaffected &&
+                reconnectGenerationPassed && generationRacePassed;
+            const bool cleaned = cleanupSessions(sessions, !passed);
+            return passed && cleaned &&
+                !sessions[0].process.running() &&
+                !sessions[1].process.running();
+        };
+
+        const bool passed = runCycle() && runCycle() &&
+            seat1StateExpected > 0 && seat2StateExpected > 0 &&
+            seat1CapabilityExpected > 0 &&
+            seat2CapabilityExpected > 0 &&
+            seat1BatteryExpected > 0 && seat2BatteryExpected > 0 &&
+            seat1VibrationExpected > 0 &&
+            seat2VibrationExpected > 0 &&
+            seat1StateCross == 0 && seat2StateCross == 0 &&
+            seat1CapabilityCross == 0 &&
+            seat2CapabilityCross == 0 &&
+            seat1BatteryCross == 0 && seat2BatteryCross == 0 &&
+            seat1VibrationCross == 0 &&
+            seat2VibrationCross == 0 && apiFailures == 0 &&
+            staleAccepted == 0;
+        std::cout
+            << "{\"event\":\"p3_ctrl_01_acceptance\""
+            << ",\"seat1_state_expected\":" << seat1StateExpected
+            << ",\"seat1_state_cross\":" << seat1StateCross
+            << ",\"seat1_capability_expected\":"
+            << seat1CapabilityExpected
+            << ",\"seat1_capability_cross\":"
+            << seat1CapabilityCross
+            << ",\"seat1_battery_expected\":"
+            << seat1BatteryExpected
+            << ",\"seat1_battery_cross\":" << seat1BatteryCross
+            << ",\"seat1_vibration_expected\":"
+            << seat1VibrationExpected
+            << ",\"seat1_vibration_cross\":"
+            << seat1VibrationCross
+            << ",\"seat2_state_expected\":" << seat2StateExpected
+            << ",\"seat2_state_cross\":" << seat2StateCross
+            << ",\"seat2_capability_expected\":"
+            << seat2CapabilityExpected
+            << ",\"seat2_capability_cross\":"
+            << seat2CapabilityCross
+            << ",\"seat2_battery_expected\":"
+            << seat2BatteryExpected
+            << ",\"seat2_battery_cross\":" << seat2BatteryCross
+            << ",\"seat2_vibration_expected\":"
+            << seat2VibrationExpected
+            << ",\"seat2_vibration_cross\":"
+            << seat2VibrationCross
+            << ",\"api_failures\":" << apiFailures
+            << ",\"stale_accepted\":" << staleAccepted << "}\n";
+        if (!passed) return 70;
+        std::cout
+            << "HydraSeat Gate C controlled XInput process self-test passed: "
+               "two process-local logical slot 0 mappings retained distinct "
+               "state, capabilities, battery, vibration, and reconnect generations.\n";
         return EXIT_SUCCESS;
     }
 

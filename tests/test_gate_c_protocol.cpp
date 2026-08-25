@@ -227,6 +227,173 @@ void testProtocolRejectsMalformedFrames() {
           "non-hex session token is rejected");
 }
 
+void testControllerProtocol() {
+    using namespace hydra::gatec;
+
+    ControllerUpdateMessage mapping;
+    mapping.seatId = 1u;
+    mapping.kind = ControllerUpdateKind::Map;
+    mapping.logicalSlot = 0u;
+    mapping.source = {ControllerSourceKind::Synthetic, 0u, 0x1111u};
+    mapping.sourceGeneration = 5u;
+    std::string error;
+    ControllerUpdateMessage decodedUpdate;
+    auto frame = decodeOrFail(
+        encodeControllerUpdate(20u, mapping),
+        "controller mapping frame decodes");
+    check(decodeControllerUpdate(frame, decodedUpdate, &error) &&
+              decodedUpdate == mapping && frame.sequence == 20u,
+          "controller mapping round-trips with fixed-width source identity");
+
+    auto state = mapping;
+    state.kind = ControllerUpdateKind::State;
+    state.gamepad.buttons = 0x1100u;
+    state.gamepad.leftTrigger = 20u;
+    state.gamepad.rightTrigger = 200u;
+    state.gamepad.thumbLX = -12000;
+    state.gamepad.thumbLY = 9000;
+    frame = decodeOrFail(encodeControllerUpdate(21u, state),
+                         "controller state frame decodes");
+    check(decodeControllerUpdate(frame, decodedUpdate, &error) &&
+              decodedUpdate == state,
+          "normalized controller state round-trips without raw XINPUT structs");
+
+    auto capabilities = mapping;
+    capabilities.kind = ControllerUpdateKind::Capabilities;
+    capabilities.capabilities.subtype = 1u;
+    capabilities.capabilities.flags = 2u;
+    capabilities.capabilities.gamepad.buttons = 0xffffu;
+    capabilities.capabilities.vibrationSupported = true;
+    capabilities.capabilities.leftMotorMaximum = 65535u;
+    capabilities.capabilities.rightMotorMaximum = 60000u;
+    frame = decodeOrFail(encodeControllerUpdate(22u, capabilities),
+                         "controller capabilities frame decodes");
+    check(decodeControllerUpdate(frame, decodedUpdate, &error) &&
+              decodedUpdate == capabilities,
+          "controller capabilities round-trip with explicit vibration support");
+
+    auto battery = mapping;
+    battery.kind = ControllerUpdateKind::Battery;
+    battery.battery = {true, XInputBatteryDeviceType::Gamepad,
+                       XInputBatteryType::Alkaline,
+                       XInputBatteryLevel::Full};
+    frame = decodeOrFail(encodeControllerUpdate(23u, battery),
+                         "controller battery frame decodes");
+    check(decodeControllerUpdate(frame, decodedUpdate, &error) &&
+              decodedUpdate == battery,
+          "controller battery contract round-trips exactly");
+
+    ControllerQueryMessage query;
+    query.seatId = 1u;
+    query.logicalSlot = 0u;
+    ControllerQueryMessage decodedQuery;
+    frame = decodeOrFail(encodeControllerQuery(24u, query),
+                         "controller snapshot query decodes");
+    check(decodeControllerQuery(frame, decodedQuery, &error) &&
+              decodedQuery == query,
+          "controller snapshot query round-trips");
+    query.kind = ControllerQueryKind::Vibration;
+    query.expectedMappingGeneration = 2u;
+    query.expectedSourceGeneration = 5u;
+    query.leftMotor = 123u;
+    query.rightMotor = 456u;
+    frame = decodeOrFail(encodeControllerQuery(25u, query),
+                         "controller vibration query decodes");
+    check(decodeControllerQuery(frame, decodedQuery, &error) &&
+              decodedQuery == query,
+          "controller vibration request carries both generations");
+
+    ControllerSnapshotMessage snapshot;
+    snapshot.seatId = 1u;
+    snapshot.logicalSlot = 0u;
+    snapshot.stateResult = VirtualXInputResult::Success;
+    snapshot.capabilitiesResult = VirtualXInputResult::Success;
+    snapshot.batteryResult = VirtualXInputResult::Success;
+    snapshot.vibrationResult = VirtualXInputResult::Success;
+    snapshot.state.mapping = {0u, mapping.source, 5u, 2u};
+    snapshot.state.connected = true;
+    snapshot.state.packetNumber = 9u;
+    snapshot.state.gamepad = state.gamepad;
+    snapshot.capabilities.mapping = snapshot.state.mapping;
+    snapshot.capabilities.capabilities = capabilities.capabilities;
+    snapshot.battery.mapping = snapshot.state.mapping;
+    snapshot.battery.battery = battery.battery;
+    snapshot.vibration.logicalSlot = 0u;
+    snapshot.vibration.source = mapping.source;
+    snapshot.vibration.sourceGeneration = 5u;
+    snapshot.vibration.mappingGeneration = 2u;
+    snapshot.vibration.commandSequence = 25u;
+    snapshot.vibration.routeCount = 1u;
+    snapshot.vibration.leftMotor = 123u;
+    snapshot.vibration.rightMotor = 456u;
+    ControllerSnapshotMessage decodedSnapshot;
+    frame = decodeOrFail(encodeControllerSnapshot(25u, snapshot),
+                         "controller snapshot response decodes");
+    check(decodeControllerSnapshot(frame, decodedSnapshot, &error) &&
+              decodedSnapshot == snapshot,
+          "controller state/capabilities/battery/vibration snapshot round-trips consistently");
+
+    auto malformed = encodeControllerUpdate(30u, mapping);
+    malformed[kFrameHeaderBytes + 4u] = std::byte{0xff};
+    frame = decodeOrFail(malformed,
+                         "malformed controller enum frame is structural");
+    check(!decodeControllerUpdate(frame, decodedUpdate, &error),
+          "malformed controller update enum is rejected");
+    malformed = encodeControllerUpdate(30u, mapping);
+    malformed[kFrameHeaderBytes + 5u] = std::byte{4};
+    frame = decodeOrFail(malformed,
+                         "invalid controller slot frame is structural");
+    check(!decodeControllerUpdate(frame, decodedUpdate, &error),
+          "controller logical slot 4 is rejected");
+    malformed = encodeControllerUpdate(30u, mapping);
+    malformed[kFrameHeaderBytes + 6u] = std::byte{1};
+    frame = decodeOrFail(malformed,
+                         "nonzero controller reserved frame is structural");
+    check(!decodeControllerUpdate(frame, decodedUpdate, &error),
+          "controller reserved fields must be zero");
+    auto invalidSource = mapping;
+    invalidSource.source.sourceKey = 0u;
+    frame = decodeOrFail(encodeControllerUpdate(31u, invalidSource),
+                         "zero source-key frame is structural");
+    check(!decodeControllerUpdate(frame, decodedUpdate, &error),
+          "zero controller source key is rejected");
+    invalidSource = mapping;
+    invalidSource.sourceGeneration = 0u;
+    frame = decodeOrFail(encodeControllerUpdate(32u, invalidSource),
+                         "zero source-generation frame is structural");
+    check(!decodeControllerUpdate(frame, decodedUpdate, &error),
+          "zero controller source generation is rejected");
+    ControllerUpdateMessage malformedUnmap;
+    malformedUnmap.seatId = 1u;
+    malformedUnmap.kind = ControllerUpdateKind::Unmap;
+    malformedUnmap.source.runtimeXInputSlotHint = 0u;
+    frame = decodeOrFail(encodeControllerUpdate(32u, malformedUnmap),
+                         "noncanonical controller unmap frame is structural");
+    check(!decodeControllerUpdate(frame, decodedUpdate, &error),
+          "controller unmap rejects hidden source fields");
+    auto truncated = encodeControllerUpdate(33u, mapping);
+    truncated.pop_back();
+    check(!decodeFrame(truncated), "truncated controller frame is rejected");
+
+    auto inconsistent = snapshot;
+    inconsistent.capabilities.mapping.source.sourceKey = 0x2222u;
+    frame = decodeOrFail(encodeControllerSnapshot(34u, inconsistent),
+                         "inconsistent controller snapshot is structural");
+    check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
+          "state/capabilities source mismatch is rejected");
+    auto staleDisconnected = snapshot;
+    staleDisconnected.stateResult = VirtualXInputResult::Disconnected;
+    staleDisconnected.state.connected = false;
+    frame = decodeOrFail(encodeControllerSnapshot(35u, staleDisconnected),
+                         "stale disconnected snapshot is structural");
+    check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
+          "disconnected controller snapshot cannot retain gamepad state");
+    check(controllerSeatAuthorityMatches(1u, 1u) &&
+              !controllerSeatAuthorityMatches(1u, 2u) &&
+              !controllerSeatAuthorityMatches(0u, 0u),
+          "controller messages require the authenticated Seat authority");
+}
+
 void testSessionTokenGeneration() {
     const auto token = hydra::gatec::generateSessionToken();
     check(token.has_value(), "session token generation succeeds");
@@ -319,6 +486,7 @@ void testVirtualInputState() {
 int main() {
     testProtocolRoundTrips();
     testProtocolRejectsMalformedFrames();
+    testControllerProtocol();
     testSessionTokenGeneration();
     testVirtualInputState();
     std::cout << "Gate C protocol and virtual input-state tests passed.\n";

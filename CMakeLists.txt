@@ -121,6 +121,22 @@ if(MSVC)
     target_compile_options(hydra_hardware PRIVATE /W4 /permissive-)
 endif()
 
+# P3-CTRL-01 bounded, process-local normalized XInput state. This component
+# contains no physical polling and performs no ordinary XInput API hooking.
+add_library(hydra_virtual_xinput STATIC
+    src/virtual_xinput_state.cpp
+    include/hydra/virtual_xinput_state.hpp
+)
+set_target_properties(hydra_virtual_xinput PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+if(MSVC)
+    target_compile_options(hydra_virtual_xinput PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_virtual_xinput PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # Phase 3 controlled-process protocol and virtual input-state core.
 add_library(hydra_gate_c_core STATIC
     src/gate_c_architecture.cpp
@@ -134,6 +150,7 @@ add_library(hydra_gate_c_core STATIC
     include/hydra/gate_c_transport.hpp
     include/hydra/virtual_input_state.hpp
 )
+target_link_libraries(hydra_gate_c_core PUBLIC hydra_virtual_xinput)
 set_target_properties(hydra_gate_c_core PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
@@ -479,6 +496,20 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME VirtualRawInputTests COMMAND virtual_raw_input_tests)
 
+# P3-CTRL-01 normalized XInput logical-slot, generation, metadata, battery,
+# and vibration-route component tests.
+add_executable(virtual_xinput_state_tests
+    tests/test_virtual_xinput_state.cpp
+)
+target_link_libraries(virtual_xinput_state_tests PRIVATE hydra_virtual_xinput)
+if(MSVC)
+    target_compile_options(virtual_xinput_state_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(virtual_xinput_state_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME VirtualXInputStateTests COMMAND virtual_xinput_state_tests)
+
 # C ABI adapter tests exercise independent process-local contexts and
 # GetAsyncKeyState/GetKeyboardState-style semantics without installing hooks.
 add_executable(gate_c_adapter_tests
@@ -490,6 +521,21 @@ if(MSVC)
     target_compile_options(gate_c_adapter_tests PRIVATE /W4 /permissive-)
 endif()
 add_test(NAME GateCAdapterTests COMMAND gate_c_adapter_tests)
+
+add_executable(gate_c_xinput_adapter_tests
+    tests/test_gate_c_xinput_adapter.cpp
+)
+target_link_libraries(gate_c_xinput_adapter_tests PRIVATE
+    hydra_gate_c_adapter)
+hydra_set_gate_c_output(gate_c_xinput_adapter_tests)
+if(MSVC)
+    target_compile_options(gate_c_xinput_adapter_tests PRIVATE
+        /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(gate_c_xinput_adapter_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME GateCXInputAdapterTests COMMAND gate_c_xinput_adapter_tests)
 
 add_executable(gate_c_adapter_c_smoke
     tests/test_gate_c_adapter_c.c
@@ -598,6 +644,12 @@ if(WIN32)
     set_tests_properties(GateCRawInputShimProbeSelfTest PROPERTIES TIMEOUT 25)
 
     add_test(
+        NAME GateCXInputProbeSelfTest
+        COMMAND hydra_gate_c_api_probe --xinput-self-test
+    )
+    set_tests_properties(GateCXInputProbeSelfTest PROPERTIES TIMEOUT 15)
+
+    add_test(
         NAME RawInputRegistrationSelfTest
         COMMAND hydra_gate_c_raw_input_probe --registration-self-test
                 --output
@@ -657,6 +709,13 @@ if(WIN32)
                 --shim $<TARGET_FILE:hydra_gate_c_shim>
     )
     set_tests_properties(GateCRawInputShimProcessSelfTest PROPERTIES TIMEOUT 75)
+
+    add_test(
+        NAME GateCXInputProcessSelfTest
+        COMMAND hydra_gate_c_host --xinput-self-test
+                --target $<TARGET_FILE:hydra_gate_c_api_probe>
+    )
+    set_tests_properties(GateCXInputProcessSelfTest PROPERTIES TIMEOUT 75)
 else()
     add_test(NAME GateCHostPortableSelfTest COMMAND hydra_gate_c_host --self-test)
 endif()

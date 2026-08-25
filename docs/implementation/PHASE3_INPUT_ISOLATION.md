@@ -505,7 +505,7 @@ The compatibility planner may truthfully advertise x86 controlled adapter availa
 
 ## P3-CTRL-01 — XInput controlled state and slot remapping
 
-**State:** READY
+**State:** VALIDATED
 
 **Goal**
 
@@ -515,7 +515,7 @@ Add process-local XInput state to the controlled adapter and prove two targets c
 
 - `include/hydra/virtual_xinput_state.hpp`
 - `src/virtual_xinput_state.cpp`
-- adapter C ABI v2 or compatible extension functions;
+- adapter C ABI v4 extension functions;
 - Gate C protocol controller messages;
 - controlled XInput probe;
 - tests.
@@ -548,6 +548,24 @@ Add process-local XInput state to the controlled adapter and prove two targets c
 
 Controlled targets have independent, queryable XInput-style state and the planner has a tested capability boundary.
 
+**Implementation evidence (2026-08-25)**
+
+- a bounded four-slot `VirtualXInputContext` owns normalized state, metadata,
+  packet numbers, mappings, source/mapping generations, and vibration routes;
+- adapter ABI v4 and separate fixed-width little-endian controller messages
+  preserve the x86/x64 contract without serializing Windows XInput structs;
+- synthetic two-context/component tests and 14/14 portable Gate C regressions
+  pass under strict GCC warnings;
+- review fixed source ownership so the session-scoped opaque source key remains
+  the identity even if its optional runtime XInput slot hint changes; changing
+  that routing hint requires an explicit remap and mapping-generation advance;
+- Windows run `32816241577` passes native x64, Win32/x86, and x64-host-to-x64/x86
+  controlled process acceptance. Both architecture legs report state/capability/
+  battery/vibration expected counters of 2, every cross counter at 0,
+  `api_failures=0`, and `stale_accepted=0`;
+- ordinary XInput API interposition and physical controller polling/mutation stay
+  out of scope.
+
 **Suggested commit**
 
 `feat: implement P3-CTRL-01 virtual XInput state`
@@ -556,7 +574,7 @@ Controlled targets have independent, queryable XInput-style state and the planne
 
 ## P3-CTRL-02 — DirectInput enumeration and visibility adapter
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 

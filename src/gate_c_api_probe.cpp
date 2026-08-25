@@ -99,6 +99,125 @@ private:
     return result;
 }
 
+HydraGateCAdapterXInputMappingV4 toAdapterMapping(
+    const hydra::gatec::ControllerUpdateMessage& message) noexcept {
+    HydraGateCAdapterXInputMappingV4 result{};
+    result.struct_size = sizeof(result);
+    result.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    result.logical_slot = message.logicalSlot;
+    result.source_kind = static_cast<std::uint8_t>(message.source.kind);
+    result.runtime_xinput_slot_hint =
+        message.source.runtimeXInputSlotHint;
+    result.source_key = message.source.sourceKey;
+    result.source_generation = message.sourceGeneration;
+    return result;
+}
+
+HydraGateCAdapterXInputSourceStateV4 toAdapterXInputState(
+    const hydra::gatec::ControllerUpdateMessage& message) noexcept {
+    HydraGateCAdapterXInputSourceStateV4 result{};
+    result.struct_size = sizeof(result);
+    result.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    result.source_kind = static_cast<std::uint8_t>(message.source.kind);
+    result.runtime_xinput_slot_hint =
+        message.source.runtimeXInputSlotHint;
+    result.source_key = message.source.sourceKey;
+    result.source_generation = message.sourceGeneration;
+    result.buttons = message.gamepad.buttons;
+    result.left_trigger = message.gamepad.leftTrigger;
+    result.right_trigger = message.gamepad.rightTrigger;
+    result.thumb_lx = message.gamepad.thumbLX;
+    result.thumb_ly = message.gamepad.thumbLY;
+    result.thumb_rx = message.gamepad.thumbRX;
+    result.thumb_ry = message.gamepad.thumbRY;
+    return result;
+}
+
+HydraGateCAdapterXInputSourceCapabilitiesV4 toAdapterXInputCapabilities(
+    const hydra::gatec::ControllerUpdateMessage& message) noexcept {
+    HydraGateCAdapterXInputSourceCapabilitiesV4 result{};
+    result.struct_size = sizeof(result);
+    result.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    result.source_kind = static_cast<std::uint8_t>(message.source.kind);
+    result.runtime_xinput_slot_hint =
+        message.source.runtimeXInputSlotHint;
+    result.type = static_cast<std::uint8_t>(message.capabilities.type);
+    result.subtype = message.capabilities.subtype;
+    result.vibration_supported =
+        message.capabilities.vibrationSupported ? 1u : 0u;
+    result.source_key = message.source.sourceKey;
+    result.source_generation = message.sourceGeneration;
+    result.flags = message.capabilities.flags;
+    result.buttons = message.capabilities.gamepad.buttons;
+    result.left_trigger = message.capabilities.gamepad.leftTrigger;
+    result.right_trigger = message.capabilities.gamepad.rightTrigger;
+    result.thumb_lx = message.capabilities.gamepad.thumbLX;
+    result.thumb_ly = message.capabilities.gamepad.thumbLY;
+    result.thumb_rx = message.capabilities.gamepad.thumbRX;
+    result.thumb_ry = message.capabilities.gamepad.thumbRY;
+    result.left_motor_maximum = message.capabilities.leftMotorMaximum;
+    result.right_motor_maximum = message.capabilities.rightMotorMaximum;
+    return result;
+}
+
+HydraGateCAdapterXInputSourceBatteryV4 toAdapterXInputBattery(
+    const hydra::gatec::ControllerUpdateMessage& message) noexcept {
+    HydraGateCAdapterXInputSourceBatteryV4 result{};
+    result.struct_size = sizeof(result);
+    result.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    result.source_kind = static_cast<std::uint8_t>(message.source.kind);
+    result.runtime_xinput_slot_hint =
+        message.source.runtimeXInputSlotHint;
+    result.available = message.battery.available ? 1u : 0u;
+    result.device_type = static_cast<std::uint8_t>(
+        message.battery.deviceType);
+    result.battery_type = static_cast<std::uint8_t>(
+        message.battery.batteryType);
+    result.battery_level = static_cast<std::uint8_t>(
+        message.battery.batteryLevel);
+    result.source_key = message.source.sourceKey;
+    result.source_generation = message.sourceGeneration;
+    return result;
+}
+
+HydraGateCAdapterXInputSourceV4 toAdapterXInputSource(
+    const hydra::gatec::ControllerUpdateMessage& message) noexcept {
+    HydraGateCAdapterXInputSourceV4 result{};
+    result.struct_size = sizeof(result);
+    result.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    result.source_kind = static_cast<std::uint8_t>(message.source.kind);
+    result.runtime_xinput_slot_hint =
+        message.source.runtimeXInputSlotHint;
+    result.source_key = message.source.sourceKey;
+    result.source_generation = message.sourceGeneration;
+    return result;
+}
+
+hydra::gatec::VirtualXInputResult toVirtualXInputResult(
+    HydraGateCAdapterResult result) noexcept {
+    using hydra::gatec::VirtualXInputResult;
+    switch (result) {
+    case HYDRA_GATE_C_ADAPTER_OK:
+        return VirtualXInputResult::Success;
+    case HYDRA_GATE_C_ADAPTER_STALE_SEQUENCE:
+        return VirtualXInputResult::StaleSequence;
+    case HYDRA_GATE_C_ADAPTER_XINPUT_DISCONNECTED:
+        return VirtualXInputResult::Disconnected;
+    case HYDRA_GATE_C_ADAPTER_XINPUT_STALE_GENERATION:
+        return VirtualXInputResult::StaleGeneration;
+    case HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_CONFLICT:
+        return VirtualXInputResult::DuplicateSource;
+    case HYDRA_GATE_C_ADAPTER_XINPUT_INVALID_SLOT:
+        return VirtualXInputResult::InvalidLogicalSlot;
+    case HYDRA_GATE_C_ADAPTER_XINPUT_MAPPING_MISMATCH:
+        return VirtualXInputResult::MappingGenerationMismatch;
+    case HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT:
+        return VirtualXInputResult::InvalidArgument;
+    default:
+        return VirtualXInputResult::InvalidState;
+    }
+}
+
 [[maybe_unused]] std::uint64_t monotonicMicros() noexcept {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
@@ -118,6 +237,8 @@ struct ProbeOptions {
     bool cursorFocusShimSelfTest{false};
     bool rawInputShim{false};
     bool rawInputShimSelfTest{false};
+    bool xinputControlled{false};
+    bool xinputSelfTest{false};
     std::wstring shimPath;
     bool testMissingWindow{false};
     bool testNoHandshake{false};
@@ -134,6 +255,7 @@ void printUsage(std::ostream& output) {
         << "  hydra_gate_c_api_probe --polling-shim-self-test --shim <hydra_gate_c_shim.dll>\n\n"
         << "  hydra_gate_c_api_probe --cursor-focus-shim-self-test --shim <hydra_gate_c_shim.dll>\n\n"
         << "  hydra_gate_c_api_probe --raw-input-shim-self-test --shim <hydra_gate_c_shim.dll>\n\n"
+        << "  hydra_gate_c_api_probe --xinput-self-test\n\n"
         << "The probe reads ordinary Win32 APIs and the direct Gate C adapter side\n"
         << "by side. The polling mode loads only the explicitly supplied HydraSeat\n"
         << "shim at startup and restores its process-local IAT before unload.\n";
@@ -217,6 +339,10 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
             options.pollingShim = true;
             options.rawInputShim = true;
             options.rawInputShimSelfTest = true;
+        } else if (argument == L"--xinput-controlled") {
+            options.xinputControlled = true;
+        } else if (argument == L"--xinput-self-test") {
+            options.xinputSelfTest = true;
         } else if (argument == L"--shim" && index + 1 < argc) {
             options.shimPath = argv[++index];
         } else if (argument == L"--test-missing-window") {
@@ -237,7 +363,8 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
     if (!options.showHelp && !options.baselineSelfTest &&
         !options.pollingShimSelfTest &&
         !options.cursorFocusShimSelfTest &&
-        !options.rawInputShimSelfTest && !connectedMode) {
+        !options.rawInputShimSelfTest && !options.xinputSelfTest &&
+        !connectedMode) {
         valid = false;
     }
     if (connectedMode &&
@@ -247,9 +374,12 @@ ProbeOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
     }
     if (options.testMissingWindow && options.testNoHandshake) valid = false;
     if (options.pollingShim && options.shimPath.empty()) valid = false;
+    if (options.xinputControlled && options.pollingShim) valid = false;
     if ((options.pollingShimSelfTest ||
          options.cursorFocusShimSelfTest ||
-         options.rawInputShimSelfTest) && connectedMode) valid = false;
+         options.rawInputShimSelfTest || options.xinputSelfTest) &&
+        connectedMode) valid = false;
+    if (options.xinputControlled && !connectedMode) valid = false;
     return options;
 }
 
@@ -1103,6 +1233,100 @@ int runLocalRawInputShimSelfTest(HINSTANCE instance,
     return EXIT_SUCCESS;
 }
 
+int runLocalXInputSelfTest() {
+    AdapterOwner adapter;
+    if (!adapter || hydra_gate_c_adapter_api_version() != 4u) return 90;
+    hydra::gatec::ControllerUpdateMessage update;
+    update.seatId = 1u;
+    update.kind = hydra::gatec::ControllerUpdateKind::Map;
+    update.logicalSlot = 0u;
+    update.source = {hydra::gatec::ControllerSourceKind::Synthetic,
+                     0u, 0x58494e5055544101ull};
+    update.sourceGeneration = 1u;
+    auto mapping = toAdapterMapping(update);
+    if (hydra_gate_c_adapter_xinput_map_slot(
+            adapter.get(), 1u, &mapping) != HYDRA_GATE_C_ADAPTER_OK) {
+        return 91;
+    }
+    update.kind = hydra::gatec::ControllerUpdateKind::State;
+    update.gamepad.buttons = 0x1100u;
+    update.gamepad.leftTrigger = 20u;
+    update.gamepad.rightTrigger = 200u;
+    update.gamepad.thumbLX = -12000;
+    update.gamepad.thumbLY = 9000;
+    const auto state = toAdapterXInputState(update);
+    if (hydra_gate_c_adapter_xinput_apply_state(
+            adapter.get(), 2u, &state) != HYDRA_GATE_C_ADAPTER_OK) {
+        return 92;
+    }
+    update.kind = hydra::gatec::ControllerUpdateKind::Capabilities;
+    update.gamepad = {};
+    update.capabilities.subtype = 1u;
+    update.capabilities.vibrationSupported = true;
+    update.capabilities.leftMotorMaximum = 65535u;
+    update.capabilities.rightMotorMaximum = 65535u;
+    const auto capabilities = toAdapterXInputCapabilities(update);
+    if (hydra_gate_c_adapter_xinput_apply_capabilities(
+            adapter.get(), 3u, &capabilities) !=
+        HYDRA_GATE_C_ADAPTER_OK) {
+        return 93;
+    }
+    update.kind = hydra::gatec::ControllerUpdateKind::Battery;
+    update.capabilities = {};
+    update.battery = {
+        true, hydra::gatec::XInputBatteryDeviceType::Gamepad,
+        hydra::gatec::XInputBatteryType::Alkaline,
+        hydra::gatec::XInputBatteryLevel::Full};
+    const auto battery = toAdapterXInputBattery(update);
+    if (hydra_gate_c_adapter_xinput_apply_battery(
+            adapter.get(), 4u, &battery) != HYDRA_GATE_C_ADAPTER_OK) {
+        return 94;
+    }
+    HydraGateCAdapterXInputStateV4 queried{};
+    queried.struct_size = sizeof(queried);
+    queried.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    if (hydra_gate_c_adapter_xinput_get_state(
+            adapter.get(), 0u, &queried) != HYDRA_GATE_C_ADAPTER_OK ||
+        queried.source_key != update.source.sourceKey ||
+        queried.buttons != 0x1100u || queried.packet_number == 0u) {
+        return 95;
+    }
+    HydraGateCAdapterXInputVibrationV4 vibration{};
+    vibration.struct_size = sizeof(vibration);
+    vibration.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    vibration.logical_slot = 0u;
+    vibration.source_generation = queried.source_generation;
+    vibration.mapping_generation = queried.mapping_generation;
+    vibration.left_motor = 100u;
+    vibration.right_motor = 200u;
+    if (hydra_gate_c_adapter_xinput_route_vibration(
+            adapter.get(), 5u, &vibration) != HYDRA_GATE_C_ADAPTER_OK ||
+        vibration.source_key != update.source.sourceKey ||
+        vibration.route_count != 1u) {
+        return 96;
+    }
+    const auto disconnect = toAdapterXInputSource(update);
+    if (hydra_gate_c_adapter_xinput_disconnect(
+            adapter.get(), 6u, &disconnect) != HYDRA_GATE_C_ADAPTER_OK) {
+        return 97;
+    }
+    queried = {};
+    queried.struct_size = sizeof(queried);
+    queried.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    if (hydra_gate_c_adapter_xinput_get_state(
+            adapter.get(), 0u, &queried) !=
+            HYDRA_GATE_C_ADAPTER_XINPUT_DISCONNECTED ||
+        queried.buttons != 0u || queried.left_trigger != 0u ||
+        queried.thumb_lx != 0) {
+        return 98;
+    }
+    std::cout
+        << "HydraSeat Gate C controlled XInput facade self-test passed: "
+           "logical slot mapping, normalized state, metadata, vibration route, "
+           "and disconnect clearing used only adapter ABI v4.\n";
+    return EXIT_SUCCESS;
+}
+
 class ControlledProbe {
 public:
     explicit ControlledProbe(ProbeOptions options)
@@ -1549,13 +1773,15 @@ private:
             response.frame->sequence != 1 || !ack.accepted) {
             return false;
         }
-        const auto requiredCapabilities = m_options.rawInputShim
+        const auto requiredCapabilities = m_options.xinputControlled
+            ? hydra::gatec::kControlledXInputProbeCapabilities
+            : (m_options.rawInputShim
             ? hydra::gatec::kControlledRawInputProbeCapabilities
             : (m_options.cursorFocusShim
             ? hydra::gatec::kControlledCursorFocusProbeCapabilities
             : (m_options.pollingShim
                    ? hydra::gatec::kControlledPollingProbeCapabilities
-                   : hydra::gatec::kControlledApiProbeCapabilities));
+                   : hydra::gatec::kControlledApiProbeCapabilities)));
         if ((ack.grantedCapabilities &
              hydra::gatec::testCapabilityBits(requiredCapabilities)) !=
             hydra::gatec::testCapabilityBits(requiredCapabilities)) {
@@ -1586,6 +1812,176 @@ private:
         if (const HWND window = m_hwnd.load(); window != nullptr) {
             PostMessageW(window, WM_CLOSE, 0, 0);
         }
+    }
+
+    bool controllerMappingMatches(
+        const hydra::gatec::ControllerUpdateMessage& message) {
+        HydraGateCAdapterXInputStateV4 state{};
+        state.struct_size = sizeof(state);
+        state.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+        const auto result = hydra_gate_c_adapter_xinput_get_state(
+            m_adapter.get(), message.logicalSlot, &state);
+        return (result == HYDRA_GATE_C_ADAPTER_OK ||
+                result == HYDRA_GATE_C_ADAPTER_XINPUT_DISCONNECTED) &&
+               state.source_kind ==
+                   static_cast<std::uint8_t>(message.source.kind) &&
+               state.runtime_xinput_slot_hint ==
+                   message.source.runtimeXInputSlotHint &&
+               state.source_key == message.source.sourceKey;
+    }
+
+    HydraGateCAdapterResult applyControllerUpdate(
+        std::uint64_t sequence,
+        const hydra::gatec::ControllerUpdateMessage& message) {
+        using hydra::gatec::ControllerUpdateKind;
+        if (message.kind == ControllerUpdateKind::Map) {
+            auto value = toAdapterMapping(message);
+            return hydra_gate_c_adapter_xinput_map_slot(
+                m_adapter.get(), sequence, &value);
+        }
+        if (message.kind == ControllerUpdateKind::Unmap) {
+            return hydra_gate_c_adapter_xinput_unmap_slot(
+                m_adapter.get(), sequence, message.logicalSlot);
+        }
+        if (!controllerMappingMatches(message)) {
+            return HYDRA_GATE_C_ADAPTER_XINPUT_MAPPING_MISMATCH;
+        }
+        if (message.kind == ControllerUpdateKind::State) {
+            const auto value = toAdapterXInputState(message);
+            return hydra_gate_c_adapter_xinput_apply_state(
+                m_adapter.get(), sequence, &value);
+        }
+        if (message.kind == ControllerUpdateKind::Capabilities) {
+            const auto value = toAdapterXInputCapabilities(message);
+            return hydra_gate_c_adapter_xinput_apply_capabilities(
+                m_adapter.get(), sequence, &value);
+        }
+        if (message.kind == ControllerUpdateKind::Battery) {
+            const auto value = toAdapterXInputBattery(message);
+            return hydra_gate_c_adapter_xinput_apply_battery(
+                m_adapter.get(), sequence, &value);
+        }
+        if (message.kind == ControllerUpdateKind::Disconnect) {
+            const auto value = toAdapterXInputSource(message);
+            return hydra_gate_c_adapter_xinput_disconnect(
+                m_adapter.get(), sequence, &value);
+        }
+        return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+    }
+
+    hydra::gatec::ControllerSnapshotMessage controllerSnapshot(
+        std::uint64_t sequence,
+        const hydra::gatec::ControllerQueryMessage& query) {
+        using namespace hydra::gatec;
+        ControllerSnapshotMessage result;
+        result.seatId = m_options.seatId;
+        result.logicalSlot = query.logicalSlot;
+
+        if (query.kind == ControllerQueryKind::Vibration) {
+            HydraGateCAdapterXInputVibrationV4 vibration{};
+            vibration.struct_size = sizeof(vibration);
+            vibration.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+            vibration.logical_slot = query.logicalSlot;
+            vibration.source_generation =
+                query.expectedSourceGeneration;
+            vibration.mapping_generation =
+                query.expectedMappingGeneration;
+            vibration.left_motor = query.leftMotor;
+            vibration.right_motor = query.rightMotor;
+            const auto vibrationResult =
+                hydra_gate_c_adapter_xinput_route_vibration(
+                    m_adapter.get(), sequence, &vibration);
+            result.vibrationResult =
+                toVirtualXInputResult(vibrationResult);
+            if (vibrationResult == HYDRA_GATE_C_ADAPTER_OK) {
+                result.vibration.logicalSlot = vibration.logical_slot;
+                result.vibration.source = {
+                    static_cast<ControllerSourceKind>(
+                        vibration.source_kind),
+                    vibration.runtime_xinput_slot_hint,
+                    vibration.source_key};
+                result.vibration.sourceGeneration =
+                    vibration.source_generation;
+                result.vibration.mappingGeneration =
+                    vibration.mapping_generation;
+                result.vibration.commandSequence =
+                    vibration.command_sequence;
+                result.vibration.routeCount = vibration.route_count;
+                result.vibration.leftMotor = vibration.left_motor;
+                result.vibration.rightMotor = vibration.right_motor;
+            }
+        } else {
+            result.vibrationResult = VirtualXInputResult::Disconnected;
+        }
+
+        HydraGateCAdapterXInputStateV4 state{};
+        state.struct_size = sizeof(state);
+        state.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+        const auto stateResult = hydra_gate_c_adapter_xinput_get_state(
+            m_adapter.get(), query.logicalSlot, &state);
+        result.stateResult = toVirtualXInputResult(stateResult);
+        if (stateResult == HYDRA_GATE_C_ADAPTER_OK ||
+            stateResult == HYDRA_GATE_C_ADAPTER_XINPUT_DISCONNECTED) {
+            result.state.mapping.logicalSlot = state.logical_slot;
+            result.state.mapping.source = {
+                static_cast<ControllerSourceKind>(state.source_kind),
+                state.runtime_xinput_slot_hint, state.source_key};
+            result.state.mapping.sourceGeneration =
+                state.source_generation;
+            result.state.mapping.mappingGeneration =
+                state.mapping_generation;
+            result.state.connected = state.connected != 0;
+            result.state.packetNumber = state.packet_number;
+            result.state.gamepad = {
+                state.buttons, state.left_trigger, state.right_trigger,
+                state.thumb_lx, state.thumb_ly, state.thumb_rx,
+                state.thumb_ry};
+        }
+
+        HydraGateCAdapterXInputCapabilitiesV4 capabilities{};
+        capabilities.struct_size = sizeof(capabilities);
+        capabilities.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+        const auto capabilitiesResult =
+            hydra_gate_c_adapter_xinput_get_capabilities(
+                m_adapter.get(), query.logicalSlot, &capabilities);
+        result.capabilitiesResult =
+            toVirtualXInputResult(capabilitiesResult);
+        if (capabilitiesResult == HYDRA_GATE_C_ADAPTER_OK) {
+            result.capabilities.mapping = result.state.mapping;
+            result.capabilities.capabilities.type =
+                static_cast<XInputCapabilityType>(capabilities.type);
+            result.capabilities.capabilities.subtype =
+                capabilities.subtype;
+            result.capabilities.capabilities.flags = capabilities.flags;
+            result.capabilities.capabilities.gamepad = {
+                capabilities.buttons, capabilities.left_trigger,
+                capabilities.right_trigger, capabilities.thumb_lx,
+                capabilities.thumb_ly, capabilities.thumb_rx,
+                capabilities.thumb_ry};
+            result.capabilities.capabilities.vibrationSupported =
+                capabilities.vibration_supported != 0;
+            result.capabilities.capabilities.leftMotorMaximum =
+                capabilities.left_motor_maximum;
+            result.capabilities.capabilities.rightMotorMaximum =
+                capabilities.right_motor_maximum;
+        }
+
+        HydraGateCAdapterXInputBatteryV4 battery{};
+        battery.struct_size = sizeof(battery);
+        battery.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+        const auto batteryResult =
+            hydra_gate_c_adapter_xinput_get_battery(
+                m_adapter.get(), query.logicalSlot, &battery);
+        result.batteryResult = toVirtualXInputResult(batteryResult);
+        if (batteryResult == HYDRA_GATE_C_ADAPTER_OK) {
+            result.battery.mapping = result.state.mapping;
+            result.battery.battery = {
+                battery.available != 0,
+                static_cast<XInputBatteryDeviceType>(battery.device_type),
+                static_cast<XInputBatteryType>(battery.battery_type),
+                static_cast<XInputBatteryLevel>(battery.battery_level)};
+        }
+        return result;
     }
 
     bool processFrame(const DecodedFrame& frame) {
@@ -1652,6 +2048,43 @@ private:
                 MessageType::ProbeSnapshot, frame.sequence, payload);
             if (payload.empty() || response.empty()) {
                 return sendError(frame.sequence, 1402);
+            }
+            return m_channel.writeFrame(response, kIoTimeoutMs);
+        }
+        if (frame.type == MessageType::ControllerUpdate) {
+            hydra::gatec::ControllerUpdateMessage message;
+            if (!m_options.xinputControlled ||
+                !hydra::gatec::decodeControllerUpdate(
+                    frame, message, &error) ||
+                !hydra::gatec::controllerSeatAuthorityMatches(
+                    m_options.seatId, message.seatId)) {
+                return sendError(frame.sequence, 1501);
+            }
+            const auto result = applyControllerUpdate(
+                frame.sequence, message);
+            if (result != HYDRA_GATE_C_ADAPTER_OK) {
+                return sendError(
+                    frame.sequence,
+                    1500u + static_cast<std::uint32_t>(result));
+            }
+            notifyStateChanged();
+            return true;
+        }
+        if (frame.type == MessageType::ControllerQuery) {
+            hydra::gatec::ControllerQueryMessage query;
+            if (!m_options.xinputControlled ||
+                !hydra::gatec::decodeControllerQuery(
+                    frame, query, &error) ||
+                !hydra::gatec::controllerSeatAuthorityMatches(
+                    m_options.seatId, query.seatId)) {
+                return sendError(frame.sequence, 1502);
+            }
+            const auto snapshot = controllerSnapshot(
+                frame.sequence, query);
+            const auto response = hydra::gatec::encodeControllerSnapshot(
+                frame.sequence, snapshot);
+            if (response.empty()) {
+                return sendError(frame.sequence, 1503);
             }
             return m_channel.writeFrame(response, kIoTimeoutMs);
         }
@@ -1848,6 +2281,9 @@ int wmain(int argc, wchar_t** argv) {
     if (options.rawInputShimSelfTest) {
         return runLocalRawInputShimSelfTest(
             GetModuleHandleW(nullptr), options.shimPath);
+    }
+    if (options.xinputSelfTest) {
+        return runLocalXInputSelfTest();
     }
     ControlledProbe probe(options);
     return probe.run(GetModuleHandleW(nullptr), SW_SHOWNORMAL);

@@ -667,6 +667,25 @@ BackendDescriptor directInputAdapterBackend(bool available) {
     return result;
 }
 
+BackendDescriptor controlledXInputAdapterBackend(bool available) {
+    auto result = makeDescriptor(
+        "hydra.controlled-xinput-adapter",
+        L"HydraSeat controlled XInput adapter",
+        Capability::XInputSlotRemapping,
+        available ? BackendAvailability::Available
+                  : BackendAvailability::Unavailable,
+        BackendRisk::Low,
+        90);
+    result.reversible = true;
+    result.sessionScoped = true;
+    if (!available) {
+        result.unavailableReason =
+            L"The controlled adapter ABI v4 is not active for this target; "
+             "controller detection alone is not XInput isolation.";
+    }
+    return result;
+}
+
 std::vector<BackendDescriptor> builtInIsolationBackends(
     const BackendEnvironment& environment) {
     return {
@@ -676,6 +695,8 @@ std::vector<BackendDescriptor> builtInIsolationBackends(
         hidHideSessionBackend(environment.hidHideAvailable),
         directInputAdapterBackend(
             environment.directInputAdapterAvailable),
+        controlledXInputAdapterBackend(
+            environment.controlledXInputAdapterAvailable),
     };
 }
 
@@ -744,6 +765,11 @@ std::vector<GameCompatibilityProfile> compatibilityProfileTemplates() {
         kObservationCapabilities |
         Capability::XInputSlotRemapping |
         Capability::PhysicalInputSuppression;
+    xinput.preferredBackends = {
+        "hydra.controlled-xinput-adapter",
+        "external.protoinput",
+        "hydra.raw-input-host",
+    };
 
     GameCompatibilityProfile direct = raw;
     direct.id = "directinput-controller-game";

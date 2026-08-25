@@ -27,6 +27,33 @@ _Static_assert(sizeof(HydraGateCAdapterRawRegistrationEntryV3) ==
 _Static_assert(sizeof(HydraGateCAdapterRawDeliveryV3) ==
                    HYDRA_GATE_C_ADAPTER_RAW_DELIVERY_V3_BYTES,
                "Gate C raw delivery ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterXInputSourceV4) ==
+                   HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_V4_BYTES,
+               "Gate C XInput source ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterXInputMappingV4) ==
+                   HYDRA_GATE_C_ADAPTER_XINPUT_MAPPING_V4_BYTES,
+               "Gate C XInput mapping ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterXInputSourceStateV4) ==
+                   HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_STATE_V4_BYTES,
+               "Gate C XInput source state ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterXInputStateV4) ==
+                   HYDRA_GATE_C_ADAPTER_XINPUT_STATE_V4_BYTES,
+               "Gate C XInput state ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterXInputSourceCapabilitiesV4) ==
+                   HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_CAPABILITIES_V4_BYTES,
+               "Gate C XInput source capabilities ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterXInputCapabilitiesV4) ==
+                   HYDRA_GATE_C_ADAPTER_XINPUT_CAPABILITIES_V4_BYTES,
+               "Gate C XInput capabilities ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterXInputSourceBatteryV4) ==
+                   HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_BATTERY_V4_BYTES,
+               "Gate C XInput source battery ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterXInputBatteryV4) ==
+                   HYDRA_GATE_C_ADAPTER_XINPUT_BATTERY_V4_BYTES,
+               "Gate C XInput battery ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterXInputVibrationV4) ==
+                   HYDRA_GATE_C_ADAPTER_XINPUT_VIBRATION_V4_BYTES,
+               "Gate C XInput vibration ABI size changed");
 
 int main(void) {
     if (hydra_gate_c_adapter_api_version() !=
@@ -116,6 +143,45 @@ int main(void) {
         raw_count != 1u) {
         hydra_gate_c_adapter_destroy(handle);
         return 10;
+    }
+
+    HydraGateCAdapterXInputMappingV4 mapping = {0};
+    mapping.struct_size = (uint32_t)sizeof(mapping);
+    mapping.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    mapping.logical_slot = 0u;
+    mapping.source_kind = HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_SYNTHETIC;
+    mapping.runtime_xinput_slot_hint = 0u;
+    mapping.source_key = 0x1111u;
+    mapping.source_generation = 1u;
+    if (hydra_gate_c_adapter_xinput_map_slot(
+            handle, 1u, &mapping) != HYDRA_GATE_C_ADAPTER_OK ||
+        mapping.mapping_generation == 0u) {
+        hydra_gate_c_adapter_destroy(handle);
+        return 11;
+    }
+    HydraGateCAdapterXInputSourceStateV4 xinput_state = {0};
+    xinput_state.struct_size = (uint32_t)sizeof(xinput_state);
+    xinput_state.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    xinput_state.source_kind = HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_SYNTHETIC;
+    xinput_state.runtime_xinput_slot_hint = 0u;
+    xinput_state.source_key = 0x1111u;
+    xinput_state.source_generation = 1u;
+    xinput_state.buttons = 0x1000u;
+    if (hydra_gate_c_adapter_xinput_apply_state(
+            handle, 2u, &xinput_state) != HYDRA_GATE_C_ADAPTER_OK) {
+        hydra_gate_c_adapter_destroy(handle);
+        return 12;
+    }
+    HydraGateCAdapterXInputStateV4 queried_xinput = {0};
+    queried_xinput.struct_size = (uint32_t)sizeof(queried_xinput);
+    queried_xinput.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    if (hydra_gate_c_adapter_xinput_get_state(
+            handle, 0u, &queried_xinput) != HYDRA_GATE_C_ADAPTER_OK ||
+        queried_xinput.connected != 1u ||
+        queried_xinput.buttons != 0x1000u ||
+        queried_xinput.source_key != 0x1111u) {
+        hydra_gate_c_adapter_destroy(handle);
+        return 13;
     }
 
     hydra_gate_c_adapter_destroy(handle);

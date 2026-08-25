@@ -240,6 +240,7 @@ struct BackendEnvironment {
     bool protoInputAvailable{false};
     bool hidHideAvailable{false};
     bool directInputAdapterAvailable{false};
+    bool controlledXInputAdapterAvailable{false};
 };
 
 struct GameCompatibilityProfile {
@@ -300,6 +301,7 @@ BackendDescriptor legacyMessageRouterBackend();
 BackendDescriptor protoInputBackend(bool available = false);
 BackendDescriptor hidHideSessionBackend(bool available = false);
 BackendDescriptor directInputAdapterBackend(bool available = false);
+BackendDescriptor controlledXInputAdapterBackend(bool available = false);
 std::vector<BackendDescriptor> builtInIsolationBackends(
     const BackendEnvironment& environment = {});
 

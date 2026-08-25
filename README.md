@@ -405,8 +405,12 @@ Important boundary:
   Windows-validated in controlled x64/x86 CI;
 - the same shim has an explicit, separate Raw Input capability for only
   `RegisterRawInputDevices`, `GetRegisteredRawInputDevices`,
-  `GetRawInputData`, and `GetRawInputBuffer`; it is CODE_COMPLETE with
-  portable tests, while native x64/x86 validation is pending;
+  `GetRawInputData`, and `GetRawInputBuffer`; it is Windows-validated on native
+  x64/x86 and the x64-host-to-x64/x86 controlled matrix;
+- adapter ABI v4 now has a bounded four-slot normalized XInput-style state,
+  logical-slot/source mapping, capabilities, battery, disconnect/reconnect
+  generations, and source-only vibration routing; this controlled synthetic
+  slice is `CODE_COMPLETE`, with native Windows process acceptance pending;
 - the standalone Raw Input behavior probe and bounded trace/parser are
   Windows-validated on x64/x86 run `32800513365`;
 - no detour, remote injection, driver control, physical suppression, or
@@ -434,7 +438,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-CTRL-01 — XInput controlled state and slot remapping
+P3-CTRL-02 — DirectInput enumeration and visibility adapter
 ```
 
 Start every coding task by reading:

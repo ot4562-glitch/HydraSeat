@@ -255,6 +255,36 @@ transaction; Windows run `32806163164` validates native x64/x86 and
 x64-host-to-x64/x86 ordinary-API/two-process acceptance with zero controlled
 cross-Seat and Raw Input failure counters.
 
+#### Controlled XInput-style state
+
+P3-CTRL-01 adds a separate `VirtualXInputContext` to each adapter instance. It
+owns exactly four logical slots. A mapping distinguishes the target-visible
+logical slot, a session-scoped opaque profile/synthetic source key, and an
+optional 0..3 runtime XInput slot hint. The hint is never persisted or treated
+as stable physical identity.
+
+State, capabilities, battery, mapping, and vibration contracts use normalized
+fixed-width fields. Packet numbers advance only when connection or gamepad
+state meaningfully changes and wrap modulo 2^32. Disconnect clears gamepad,
+metadata, and vibration state; a newer source generation is required to
+reconnect, and vibration requests must match both source and mapping generation.
+The adapter returns only a validated vibration source route and never calls a
+physical `XInputSetState` backend.
+
+Controller updates, queries, and snapshots are separate bounded little-endian
+Gate C messages with Seat authority and monotonic mutation sequences. The
+controlled host test launches two HydraSeat-owned probes whose logical slot 0
+maps to distinct synthetic sources and records expected/cross counters. Windows
+run `32816241577` validates native x64/x86 and x64-host-to-x64/x86 execution;
+both architecture legs report state/capability/battery/vibration expected=2,
+every cross counter=0, `api_failures=0`, and `stale_accepted=0`. Source ownership
+uses the opaque source key rather than the optional runtime slot hint; a changed
+routing hint requires explicit remap and mapping-generation advance. No
+ordinary XInput API hook, DLL proxy, DirectInput, Raw HID/SDL virtualization, or
+physical polling worker is part of this slice. A future polling worker must
+remain outside the Raw Input window procedure and feed normalized source state
+through this boundary.
+
 See [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
 
 ### 6. Compatibility Profile and Planner

@@ -32,6 +32,24 @@ static_assert(sizeof(HydraGateCAdapterClipRectV2) ==
               HYDRA_GATE_C_ADAPTER_CLIP_RECT_V2_BYTES);
 static_assert(sizeof(HydraGateCAdapterWindowStateV2) ==
               HYDRA_GATE_C_ADAPTER_WINDOW_STATE_V2_BYTES);
+static_assert(sizeof(HydraGateCAdapterXInputSourceV4) ==
+              HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_V4_BYTES);
+static_assert(sizeof(HydraGateCAdapterXInputMappingV4) ==
+              HYDRA_GATE_C_ADAPTER_XINPUT_MAPPING_V4_BYTES);
+static_assert(sizeof(HydraGateCAdapterXInputSourceStateV4) ==
+              HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_STATE_V4_BYTES);
+static_assert(sizeof(HydraGateCAdapterXInputStateV4) ==
+              HYDRA_GATE_C_ADAPTER_XINPUT_STATE_V4_BYTES);
+static_assert(sizeof(HydraGateCAdapterXInputSourceCapabilitiesV4) ==
+              HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_CAPABILITIES_V4_BYTES);
+static_assert(sizeof(HydraGateCAdapterXInputCapabilitiesV4) ==
+              HYDRA_GATE_C_ADAPTER_XINPUT_CAPABILITIES_V4_BYTES);
+static_assert(sizeof(HydraGateCAdapterXInputSourceBatteryV4) ==
+              HYDRA_GATE_C_ADAPTER_XINPUT_SOURCE_BATTERY_V4_BYTES);
+static_assert(sizeof(HydraGateCAdapterXInputBatteryV4) ==
+              HYDRA_GATE_C_ADAPTER_XINPUT_BATTERY_V4_BYTES);
+static_assert(sizeof(HydraGateCAdapterXInputVibrationV4) ==
+              HYDRA_GATE_C_ADAPTER_XINPUT_VIBRATION_V4_BYTES);
 
 void check(bool condition, std::string_view message) {
     if (!condition) {
