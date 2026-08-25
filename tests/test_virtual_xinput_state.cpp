@@ -87,6 +87,36 @@ void testSlotsMappingAndPacketSemantics() {
               source(1u, 0u) != source(1u, 3u),
           "opaque source identity is independent from its runtime slot hint");
 
+    VirtualXInputContext hintContext;
+    const auto hintedA = source(88u, 0u);
+    const auto movedHintA = source(88u, 1u);
+    VirtualXInputMapping hintBefore;
+    VirtualXInputMapping hintAfter;
+    check(hintContext.mapLogicalSlot(1u, 0u, hintedA, 1u) ==
+              VirtualXInputResult::Success &&
+              hintContext.applySourceState(2u, hintedA, 1u, stateA()) ==
+                  VirtualXInputResult::Success &&
+              hintContext.getMapping(0u, hintBefore) ==
+                  VirtualXInputResult::Success,
+          "a source starts with explicit runtime routing metadata");
+    check(hintContext.applySourceCapabilities(
+              3u, movedHintA, 1u, capabilitiesA()) ==
+              VirtualXInputResult::InvalidState &&
+              hintContext.applySourceBattery(4u, movedHintA, 1u, batteryA()) ==
+              VirtualXInputResult::InvalidState &&
+              hintContext.applySourceState(5u, movedHintA, 1u, stateA()) ==
+              VirtualXInputResult::InvalidState,
+          "runtime slot metadata changes require an explicit remap");
+    check(hintContext.mapLogicalSlot(6u, 0u, movedHintA, 1u) ==
+              VirtualXInputResult::Success &&
+              hintContext.getMapping(0u, hintAfter) ==
+                  VirtualXInputResult::Success &&
+              hintAfter.source == movedHintA &&
+              hintAfter.mappingGeneration == hintBefore.mappingGeneration + 1u &&
+              hintContext.applySourceState(7u, movedHintA, 1u, stateA()) ==
+                  VirtualXInputResult::Success,
+          "explicit remap refreshes routing metadata and mapping generation");
+
     VirtualXInputContext packetContext;
     const auto a = source(101u, 0u);
     check(packetContext.mapLogicalSlot(1u, 0u, a, 10u) ==

@@ -199,6 +199,9 @@ VirtualXInputResult VirtualXInputContext::applySourceState(
     }
     auto* slot = findSource(source);
     if (slot == nullptr) return VirtualXInputResult::NotMapped;
+    if (slot->mapping.source != source) {
+        return VirtualXInputResult::InvalidState;
+    }
     const auto generationResult =
         validateGeneration(*slot, sourceGeneration, true);
     if (generationResult != VirtualXInputResult::Success) {
@@ -240,6 +243,9 @@ VirtualXInputResult VirtualXInputContext::applySourceCapabilities(
     }
     auto* slot = findSource(source);
     if (slot == nullptr) return VirtualXInputResult::NotMapped;
+    if (slot->mapping.source != source) {
+        return VirtualXInputResult::InvalidState;
+    }
     const auto generationResult =
         validateGeneration(*slot, sourceGeneration, false);
     if (generationResult != VirtualXInputResult::Success) {
@@ -268,6 +274,9 @@ VirtualXInputResult VirtualXInputContext::applySourceBattery(
     }
     auto* slot = findSource(source);
     if (slot == nullptr) return VirtualXInputResult::NotMapped;
+    if (slot->mapping.source != source) {
+        return VirtualXInputResult::InvalidState;
+    }
     const auto generationResult =
         validateGeneration(*slot, sourceGeneration, false);
     if (generationResult != VirtualXInputResult::Success) {
