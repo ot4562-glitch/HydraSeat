@@ -532,6 +532,13 @@ Add process-local XInput state to the controlled adapter and prove two targets c
 **Invariants**
 
 - target index mapping is profile-defined;
+- stable source identity is source kind plus opaque source key; runtime XInput
+  slot hint changes are explicit mapping metadata changes, not new identities;
+- explicit same-source remaps never decrease source generation or bypass the
+  post-disconnect newer-generation barrier, while different stable sources use
+  independent generation namespaces;
+- controller snapshot failures are canonical empty values and successful
+  capability/battery/vibration metadata requires the connected state mapping;
 - vibration never reaches the wrong physical controller;
 - disconnect clears stale buttons;
 - no controller is claimed supported solely from detection.
@@ -559,16 +566,30 @@ Controlled targets have independent, queryable XInput-style state and the planne
 - review fixed source ownership so the session-scoped opaque source key remains
   the identity even if its optional runtime XInput slot hint changes; changing
   that routing hint requires an explicit remap and mapping-generation advance;
-- Windows run `32816241577` passes native x64, Win32/x86, and x64-host-to-x64/x86
-  controlled process acceptance. Both architecture legs report state/capability/
+- Windows run `32816241577` historically passed the pre-remediation native x64,
+  Win32/x86, and x64-host-to-x64/x86 controlled process acceptance. Both
+  architecture legs report state/capability/
   battery/vibration expected counters of 2, every cross counter at 0,
   `api_failures=0`, and `stale_accepted=0`;
 - ordinary XInput API interposition and physical controller polling/mutation stay
   out of scope.
+- correctness remediation enforces generation monotonicity across explicit
+  routing-hint remaps and canonical failure metadata in controller snapshots;
+- strict GCC 15 `-Werror` builds and 20/20 selected portable CTest regressions
+  pass after first reproducing both defects with failing tests;
+- fork PR #15 run `32832036967` validates remediation head
+  `b351afdd60236b953d913b8488a5e350f705faec` against fork `main`: native x64
+  and Win32/x86 each pass 36/36 CTest, including `GateCProtocolTests`,
+  `VirtualXInputStateTests`, `GateCXInputAdapterTests`, the C ABI smoke test,
+  and controlled XInput probe/process tests;
+- the x64-host-to-x64 and x64-host-to-x86 XInput legs each report Seat 1/Seat 2
+  state/capability/battery/vibration expected=2, every cross counter=0,
+  `api_failures=0`, and `stale_accepted=0`; repeated session cleanup leaves no
+  controlled child running. Historical run `32816241577` remains pre-fix only.
 
 **Suggested commit**
 
-`feat: implement P3-CTRL-01 virtual XInput state`
+`fix: harden P3-CTRL-01 controller generation invariants`
 
 ---
 
@@ -584,6 +605,9 @@ Provide a clean-room, process-local controlled DirectInput enumeration/order/vis
 
 - P3-CTRL-01
 - P3-ARCH-01
+
+P3-CTRL-01 remediation is freshly Windows-validated by run `32832036967`, and
+P3-ARCH-01 is already validated. DirectInput work may now start only as this separate packet.
 
 **Create/modify**
 

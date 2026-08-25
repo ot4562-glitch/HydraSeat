@@ -407,10 +407,12 @@ Important boundary:
   `RegisterRawInputDevices`, `GetRegisteredRawInputDevices`,
   `GetRawInputData`, and `GetRawInputBuffer`; it is Windows-validated on native
   x64/x86 and the x64-host-to-x64/x86 controlled matrix;
-- adapter ABI v4 now has a bounded four-slot normalized XInput-style state,
+- adapter ABI v4 has bounded four-slot normalized XInput-style state,
   logical-slot/source mapping, capabilities, battery, disconnect/reconnect
-  generations, and source-only vibration routing; this controlled synthetic
-  slice is `CODE_COMPLETE`, with native Windows process acceptance pending;
+  generations, and source-only vibration routing. The generation/snapshot
+  remediation is `VALIDATED`: fork PR #15 run `32832036967` passed native x64
+  and Win32/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance
+  for remediation head `b351afdd`; historical run `32816241577` is pre-fix only;
 - the standalone Raw Input behavior probe and bounded trace/parser are
   Windows-validated on x64/x86 run `32800513365`;
 - no detour, remote injection, driver control, physical suppression, or

@@ -397,6 +397,120 @@ void testDisconnectReconnectAndReset() {
           "reset removes all mappings and controller state deterministically");
 }
 
+void testExplicitRemapGenerationInvariants() {
+    VirtualXInputContext context;
+    const auto hint0 = source(6006u, 0u);
+    const auto hint1 = source(6006u, 1u);
+    const auto hint2 = source(6006u, 2u);
+    check(context.mapLogicalSlot(1u, 0u, hint0, 10u) ==
+              VirtualXInputResult::Success &&
+              context.applySourceState(2u, hint0, 10u, stateA()) ==
+                  VirtualXInputResult::Success &&
+              context.applySourceCapabilities(
+                  3u, hint0, 10u, capabilitiesA()) ==
+                  VirtualXInputResult::Success,
+          "same-source remap fixture starts connected at generation 10");
+    VirtualXInputMapping original;
+    check(context.getMapping(0u, original) == VirtualXInputResult::Success,
+          "original mapping is queryable");
+    VirtualXInputVibrationRequest originalRequest{
+        0u, 10u, 20u, original.mappingGeneration, 10u};
+    VirtualXInputVibrationRoute originalRoute;
+    check(context.routeVibration(4u, originalRequest, originalRoute) ==
+              VirtualXInputResult::Success,
+          "pre-remap vibration route is established");
+
+    check(context.mapLogicalSlot(5u, 0u, hint1, 9u) ==
+              VirtualXInputResult::StaleGeneration &&
+              context.lastAppliedSequence() == 4u,
+          "explicit hint remap cannot resurrect a stale generation or consume sequence");
+    VirtualXInputMapping unchanged;
+    VirtualXInputState queried;
+    VirtualXInputVibrationRoute retainedRoute;
+    check(context.getMapping(0u, unchanged) == VirtualXInputResult::Success &&
+              unchanged == original &&
+              context.getState(0u, queried) == VirtualXInputResult::Success &&
+              queried.gamepad == stateA() &&
+              context.getLastVibration(0u, retainedRoute) ==
+                  VirtualXInputResult::Success &&
+              retainedRoute == originalRoute,
+          "rejected stale remap leaves mapping, state, and vibration unchanged");
+
+    check(context.mapLogicalSlot(5u, 0u, hint1, 10u) ==
+              VirtualXInputResult::Success,
+          "same-generation explicit hint remap is accepted while connected");
+    VirtualXInputMapping sameGenerationRemap;
+    check(context.getMapping(0u, sameGenerationRemap) ==
+              VirtualXInputResult::Success &&
+              sameGenerationRemap.source == hint1 &&
+              sameGenerationRemap.sourceGeneration == 10u &&
+              sameGenerationRemap.mappingGeneration ==
+                  original.mappingGeneration + 1u &&
+              context.getState(0u, queried) ==
+                  VirtualXInputResult::Disconnected &&
+              queried.gamepad == NormalizedXInputGamepad{} &&
+              context.getLastVibration(0u, retainedRoute) ==
+                  VirtualXInputResult::Disconnected,
+          "accepted hint remap advances mapping generation and clears connection state");
+    check(context.routeVibration(6u, originalRequest, retainedRoute) ==
+              VirtualXInputResult::Disconnected,
+          "pre-remap vibration cannot route after same-generation metadata remap");
+
+    check(context.applySourceState(6u, hint1, 10u, stateB()) ==
+              VirtualXInputResult::Success &&
+              context.mapLogicalSlot(7u, 0u, hint2, 11u) ==
+                  VirtualXInputResult::Success,
+          "same stable source may explicitly remap to a newer generation");
+    VirtualXInputMapping newerRemap;
+    check(context.getMapping(0u, newerRemap) ==
+              VirtualXInputResult::Success &&
+              newerRemap.source == hint2 &&
+              newerRemap.sourceGeneration == 11u &&
+              newerRemap.mappingGeneration ==
+                  sameGenerationRemap.mappingGeneration + 1u &&
+              context.applySourceState(8u, hint2, 10u, stateA()) ==
+                  VirtualXInputResult::StaleGeneration &&
+              context.lastAppliedSequence() == 7u,
+          "newer explicit remap makes generation-10 updates stale without consuming sequence");
+
+    VirtualXInputVibrationRequest generation10Request{
+        0u, 30u, 40u, sameGenerationRemap.mappingGeneration, 10u};
+    check(context.applySourceState(8u, hint2, 11u, stateA()) ==
+              VirtualXInputResult::Success &&
+              context.routeVibration(9u, generation10Request,
+                                     retainedRoute) ==
+                  VirtualXInputResult::MappingGenerationMismatch &&
+              context.lastAppliedSequence() == 8u &&
+              context.disconnectSource(9u, hint2, 11u) ==
+                  VirtualXInputResult::Success &&
+              context.mapLogicalSlot(10u, 0u, hint1, 11u) ==
+                  VirtualXInputResult::StaleGeneration &&
+              context.lastAppliedSequence() == 9u,
+          "disconnect requires a newer generation even through a changed hint remap");
+    check(context.mapLogicalSlot(10u, 0u, hint1, 12u) ==
+              VirtualXInputResult::Success,
+          "post-disconnect explicit remap accepts the required newer generation");
+
+    const auto different = source(7007u, 3u);
+    VirtualXInputMapping beforeDifferent;
+    check(context.getMapping(0u, beforeDifferent) ==
+              VirtualXInputResult::Success &&
+              context.mapLogicalSlot(11u, 0u, different, 1u) ==
+                  VirtualXInputResult::Success,
+          "a genuinely different stable source has an independent generation namespace");
+    VirtualXInputMapping afterDifferent;
+    check(context.getMapping(0u, afterDifferent) ==
+              VirtualXInputResult::Success &&
+              afterDifferent.source == different &&
+              afterDifferent.sourceGeneration == 1u &&
+              afterDifferent.mappingGeneration ==
+                  beforeDifferent.mappingGeneration + 1u &&
+              context.getState(0u, queried) ==
+                  VirtualXInputResult::Disconnected &&
+              queried.gamepad == NormalizedXInputGamepad{},
+          "different-source remap advances mapping generation and clears old state");
+}
+
 void testValidationBoundaries() {
     ControllerSourceIdentity invalidSource{};
     invalidSource.sourceKey = 0u;
@@ -427,6 +541,7 @@ int main() {
     testContextIsolationAndExtrema();
     testCapabilitiesBatteryAndVibration();
     testDisconnectReconnectAndReset();
+    testExplicitRemapGenerationInvariants();
     testValidationBoundaries();
     std::cout << "Virtual XInput state tests passed.\n";
     return EXIT_SUCCESS;

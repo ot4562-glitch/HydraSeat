@@ -261,7 +261,13 @@ P3-CTRL-01 adds a separate `VirtualXInputContext` to each adapter instance. It
 owns exactly four logical slots. A mapping distinguishes the target-visible
 logical slot, a session-scoped opaque profile/synthetic source key, and an
 optional 0..3 runtime XInput slot hint. The hint is never persisted or treated
-as stable physical identity.
+as stable physical identity. Stable source identity is exactly source kind plus
+source key. An explicit remap of that same identity must never decrease source
+generation and must honor the post-disconnect newer-generation requirement;
+changing only the runtime hint is metadata refresh, not a new generation
+namespace. An accepted hint refresh advances mapping generation and clears
+connection state, metadata, and vibration intent. A genuinely different stable
+source starts an independent source-generation namespace.
 
 State, capabilities, battery, mapping, and vibration contracts use normalized
 fixed-width fields. Packet numbers advance only when connection or gamepad
@@ -272,14 +278,23 @@ The adapter returns only a validated vibration source route and never calls a
 physical `XInputSetState` backend.
 
 Controller updates, queries, and snapshots are separate bounded little-endian
-Gate C messages with Seat authority and monotonic mutation sequences. The
+Gate C messages with Seat authority and monotonic mutation sequences. Snapshot
+decoding has one canonical matrix: connected success retains a valid mapping
+and state; disconnected state retains only its valid mapping, packet number,
+and zero gamepad; not-mapped state is empty except for the outer logical slot;
+capability/battery failures carry empty mapping/default metadata; vibration
+failure carries no route; and every metadata success requires the same mapping
+as a connected successful state. The
 controlled host test launches two HydraSeat-owned probes whose logical slot 0
-maps to distinct synthetic sources and records expected/cross counters. Windows
-run `32816241577` validates native x64/x86 and x64-host-to-x64/x86 execution;
-both architecture legs report state/capability/battery/vibration expected=2,
-every cross counter=0, `api_failures=0`, and `stale_accepted=0`. Source ownership
-uses the opaque source key rather than the optional runtime slot hint; a changed
-routing hint requires explicit remap and mapping-generation advance. No
+maps to distinct synthetic sources and records expected/cross counters. The
+generation/snapshot remediation is Windows-validated by fork PR #15 run
+`32832036967` for head `b351afdd`: native x64 and Win32/x86 pass 36/36 CTest,
+and both x64-host-to-x64/x86 controller legs report Seat 1/Seat 2
+state/capability/battery/vibration expected=2, every cross counter=0,
+`api_failures=0`, and `stale_accepted=0`, with repeated child cleanup required
+for success. Source ownership uses the opaque source key rather than the
+optional runtime slot hint. Historical run `32816241577` is pre-remediation
+evidence only. No
 ordinary XInput API hook, DLL proxy, DirectInput, Raw HID/SDL virtualization, or
 physical polling worker is part of this slice. A future polling worker must
 remain outside the Raw Input window procedure and feed normalized source state

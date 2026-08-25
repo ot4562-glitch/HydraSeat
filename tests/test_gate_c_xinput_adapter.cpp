@@ -184,6 +184,23 @@ void testAbiMigrationAndIndependentContexts() {
               first, 6u, &stale) ==
               HYDRA_GATE_C_ADAPTER_XINPUT_STALE_GENERATION,
           "stale source generation fails closed at the C boundary");
+    auto staleRemap = mapping(0xaaaau, 9u, 1u);
+    check(hydra_gate_c_adapter_xinput_map_slot(
+              first, 6u, &staleRemap) ==
+              HYDRA_GATE_C_ADAPTER_XINPUT_STALE_GENERATION,
+          "explicit C ABI hint remap cannot resurrect a stale stable source");
+    HydraGateCAdapterXInputStateV4 afterRejectedRemap{};
+    afterRejectedRemap.struct_size = sizeof(afterRejectedRemap);
+    afterRejectedRemap.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    check(hydra_gate_c_adapter_xinput_get_state(
+              first, 0u, &afterRejectedRemap) ==
+                  HYDRA_GATE_C_ADAPTER_OK &&
+              afterRejectedRemap.runtime_xinput_slot_hint == 0u &&
+              afterRejectedRemap.source_generation == 10u &&
+              afterRejectedRemap.mapping_generation ==
+                  firstQuery.mapping_generation &&
+              afterRejectedRemap.buttons == 0x1100u,
+          "rejected C ABI remap preserves mapping metadata and controller state");
     HydraGateCAdapterXInputSourceV4 disconnect{};
     disconnect.struct_size = sizeof(disconnect);
     disconnect.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;

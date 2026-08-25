@@ -5,7 +5,7 @@
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
 - Current default packet: **P3-CTRL-02 — DirectInput enumeration and visibility adapter**
 - Current validated fork-main baseline: `e2f01da08173e5150d9e9e729197847df4588a31` (merged P3-CTRL-01)
-- Current validated Windows CI evidence: fork-main run `32817021965` passed native x64/x86 full CTest, roadmap/current-packet validation, and the x64-host-to-x64/x86 controlled Gate C matrix; P3-CTRL-01 branch validation run `32816241577` records the zero-cross controller counters
+- Current validated Windows CI evidence: fork-side PR #15 run `32832036967` validates remediation head `b351afdd60236b953d913b8488a5e350f705faec` against fork `main`: native x64 and Win32/x86 each passed 36/36 CTest, and x64-host-to-x64/x86 controlled XInput acceptance reported state/capability/battery/vibration expected=2 per Seat, every cross counter=0, `api_failures=0`, `stale_accepted=0`, and clean repeated child teardown
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -43,8 +43,8 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
 | P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
 | P3-HW-01 Gate A/B/C physical acceptance runner | READY | P3-QUEUE-01 | User-run two-keyboard/two-pointing-device traces and report |
-| P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Windows run `32816241577`: native x64/x86 and x64-host-to-x64/x86 controlled state/capability/battery/vibration isolation passed with every cross counter zero and no API/stale acceptance |
-| P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | READY | P3-CTRL-01, P3-ARCH-01 | Controlled DirectInput probe sees only declared devices/order |
+| P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Remediation head `b351afdd` validated by fork PR #15 run `32832036967`: native x64/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance |
+| P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | READY | P3-CTRL-01, P3-ARCH-01 | P3-CTRL-01 remediation and x86/x64 controlled architecture prerequisites are validated; no DirectInput implementation exists yet |
 | P3-D-01 HidHide read-only availability/capability probe | READY | P3-PLAN-01 | No mutation; exact installed/version/control-interface report |
 | P3-D-02 Guarded HidHide session-cloak lab | BLOCKED | P3-REC-01, P3-D-01 | Spare input/watchdog/timeout/crash rollback and physical evidence |
 | P3-E-01 Open-source non-protected application profile | BLOCKED | P3-RAW-02, P3-API-03 | Reproducible profile and measured no-cross-state result |
@@ -187,17 +187,20 @@ Next packet: P3-CTRL-01 is READY; implement controlled XInput state/slot remappi
 ### 2026-08-25 — P3-CTRL-01
 
 State: VALIDATED
-Branch/commit: `feat/p3-ctrl-01-virtual-xinput`; implementation `2128ad89e5e31dd5e594c59abc887e6cb1098a57`, source-identity review fix `33dfb2b`, routing-hint hardening `c34364c`
-Windows CI: run `32816241577` passed native x64, Win32/x86, and the dedicated x64-host-to-x64/x86 controlled XInput process matrix
+Branch/commit: historical `feat/p3-ctrl-01-virtual-xinput`; implementation `2128ad89e5e31dd5e594c59abc887e6cb1098a57`, source-identity review fix `33dfb2b`, routing-hint hardening `c34364c`; remediation branch `fix/p3-ctrl-01-generation-snapshot-hardening`, validated remediation head `b351afdd60236b953d913b8488a5e350f705faec`; fork PR #15
+Windows CI: fork PR #15 run `32832036967` reports head SHA `b351afdd60236b953d913b8488a5e350f705faec`; the pull-request checkout used merge ref `490af0f68e2a0c9b42e14efbb764b83f117f2910` (remediation head into fork-main `96e0f892bd4d32e0ce06fb8ddfc29a5255ea3559`). Native x64 and Win32/x86 each passed 36/36 CTest; the dedicated x64-host-to-x64/x86 Gate C matrix passed both controller legs.
 Automated tests:
 - strict GCC 15 CMake builds pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion` for the bounded virtual XInput component, adapter ABI v4, controller protocol, planner, and controlled host/probe portable surfaces
 - 14/14 portable Gate C CTest regressions pass, including virtual XInput state, C++/C11 adapter ABI, protocol, architecture, virtual Raw Input, polling, cursor/focus, target, and host tests
 - deterministic component tests cover logical slots 0..3, invalid slot 4, independent contexts, duplicate-source rejection including runtime-hint changes on the same opaque source, packet change/wrap, capabilities/battery consistency, vibration routing, disconnect clearing, reconnect generation, stale state/vibration rejection, and reset
-- Windows cross-architecture acceptance runs two complete cycles for both x64 and x86 targets; each architecture reports state/capability/battery/vibration expected=2, every cross counter=0, `api_failures=0`, and `stale_accepted=0`
+- fresh Windows cross-architecture acceptance in run `32832036967` runs two complete cycles for both x64 and x86 targets; each architecture reports Seat 1/Seat 2 state/capability/battery/vibration expected=2, every cross counter=0, `api_failures=0`, and `stale_accepted=0`; `runXInputSelfTest` requires cleanup success and both child processes not running after each cycle
 Manual evidence: none claimed; physical XInput discovery/routing, physical vibration, physical suppression, and commercial-game behavior remain pending and separate from the synthetic controlled acceptance
 Known limitations: no ordinary XInput API interposition, XInput DLL proxy, DirectInput, Raw HID/SDL, physical polling worker, physical controller mutation/hiding, third-party injection, or game support is implemented
 Rollback result: adapter reset deterministically clears all four controller slots; disconnect clears state/metadata/vibration and requires a newer source generation; controlled process acceptance runs two complete start/stop cycles and requires no surviving child
-Next packet: P3-CTRL-02 is READY; implement only the controlled clean-room DirectInput enumeration/order/visibility adapter while physical controller evidence remains separate
+Remediation scope: reject stale/same-generation resurrection through explicit routing-hint remaps, preserve independent generation namespaces for genuinely different stable sources, and require canonical empty metadata for failed controller snapshot fields. Historical run `32816241577` predates this fix and cannot validate the repaired semantics.
+Remediation evidence: strict GCC 15 CMake build with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror` passed all selected portable targets; 20/20 portable CTest cases passed across planner/observation, protocol, architecture, probe snapshot, Raw Input, virtual XInput, C++/C11 adapter ABI, polling/cursor/Raw Input shims, and target/host self-tests. Focused tests reproduced both defects before the production fix and then passed after it.
+Post-remediation Windows evidence: run `32832036967` satisfies the required native x64, native Win32/x86, and x64-host-to-x64/x86 controlled matrix on Windows Server 2025 / MSVC. Historical run `32816241577` remains pre-remediation evidence only and is not used to validate the repaired semantics.
+Next packet: P3-CTRL-02 is READY for a separate DirectInput enumeration/visibility packet. This validation task does not implement it.
 
 ## Next Codex task
 
@@ -207,10 +210,9 @@ Use:
 Implement P3-CTRL-02 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Build a clean-room, process-local controlled DirectInput 8 enumeration/order/
-visibility policy around stable test/profile instance identity. Two controlled
-probes must enumerate only their declared devices in deterministic order. Keep
-XInput, Raw HID, SDL, physical device hiding, third-party injection, games,
-anti-cheat, DRM, and protected-process work out of this packet.
+Implement only the clean-room controlled DirectInput enumeration/order/visibility
+adapter. Use stable instance identity rather than friendly name or enumeration
+order, keep XInput/Raw HID/SDL separate, do not replace system DLLs, and do not
+claim physical hiding or production game support from the controlled adapter.
 
 ```

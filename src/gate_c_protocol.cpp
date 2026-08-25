@@ -290,6 +290,19 @@ bool zeroGamepad(const NormalizedXInputGamepad& value) noexcept {
     return value == NormalizedXInputGamepad{};
 }
 
+bool canonicalEmptyMapping(const VirtualXInputMapping& mapping,
+                           std::uint8_t logicalSlot) noexcept {
+    VirtualXInputMapping empty;
+    empty.logicalSlot = logicalSlot;
+    return mapping == empty;
+}
+
+bool validSnapshotMapping(const VirtualXInputMapping& mapping) noexcept {
+    return validControllerSourceIdentity(mapping.source) &&
+           mapping.sourceGeneration != 0 &&
+           mapping.mappingGeneration != 0;
+}
+
 bool validateControllerUpdateMessage(const ControllerUpdateMessage& message,
                                      std::string* error) {
     const auto fail = [error](const char* text) {
@@ -941,50 +954,82 @@ bool decodeControllerSnapshot(const DecodedFrame& frame,
         if (error != nullptr) *error = "controller snapshot authority or slot is invalid";
         return false;
     }
-    if (message.stateResult == VirtualXInputResult::Success &&
-        (!message.state.connected ||
-         !validControllerSourceIdentity(message.state.mapping.source) ||
-         message.state.mapping.sourceGeneration == 0 ||
-         message.state.mapping.mappingGeneration == 0)) {
-        if (error != nullptr) *error = "connected controller snapshot state is invalid";
+    switch (message.stateResult) {
+    case VirtualXInputResult::Success:
+        if (!message.state.connected ||
+            !validSnapshotMapping(message.state.mapping)) {
+            if (error != nullptr) {
+                *error = "connected controller snapshot state is invalid";
+            }
+            return false;
+        }
+        break;
+    case VirtualXInputResult::Disconnected:
+        if (message.state.connected || !zeroGamepad(message.state.gamepad) ||
+            !validSnapshotMapping(message.state.mapping)) {
+            if (error != nullptr) {
+                *error = "disconnected controller snapshot state is invalid";
+            }
+            return false;
+        }
+        break;
+    case VirtualXInputResult::NotMapped:
+        if (message.state.connected || message.state.packetNumber != 0 ||
+            !zeroGamepad(message.state.gamepad) ||
+            !canonicalEmptyMapping(message.state.mapping,
+                                   message.logicalSlot)) {
+            if (error != nullptr) {
+                *error = "not-mapped controller snapshot state is not empty";
+            }
+            return false;
+        }
+        break;
+    default:
+        if (error != nullptr) {
+            *error = "controller snapshot has an invalid state result";
+        }
         return false;
     }
-    if (message.stateResult != VirtualXInputResult::Success &&
-        (message.state.connected || !zeroGamepad(message.state.gamepad))) {
-        if (error != nullptr) *error = "disconnected controller snapshot retains state";
+
+    if (message.capabilitiesResult == VirtualXInputResult::Success) {
+        if (message.stateResult != VirtualXInputResult::Success ||
+            !validXInputCapabilities(message.capabilities.capabilities) ||
+            message.capabilities.mapping != message.state.mapping) {
+            if (error != nullptr) {
+                *error = "controller snapshot capabilities are inconsistent";
+            }
+            return false;
+        }
+    } else if (!canonicalEmptyMapping(message.capabilities.mapping,
+                                      message.logicalSlot) ||
+               message.capabilities.capabilities !=
+                   NormalizedXInputCapabilities{}) {
+        if (error != nullptr) {
+            *error = "failed controller capabilities retain metadata";
+        }
         return false;
     }
-    if (message.capabilitiesResult == VirtualXInputResult::Success &&
-        (!validControllerSourceIdentity(
-             message.capabilities.mapping.source) ||
-         !validXInputCapabilities(
-             message.capabilities.capabilities) ||
-         (message.stateResult == VirtualXInputResult::Success &&
-          message.capabilities.mapping != message.state.mapping))) {
-        if (error != nullptr) *error = "controller snapshot capabilities are inconsistent";
-        return false;
-    }
-    if (message.batteryResult == VirtualXInputResult::Success &&
-        (!validControllerSourceIdentity(message.battery.mapping.source) ||
-         !validXInputBattery(message.battery.battery) ||
-         (message.stateResult == VirtualXInputResult::Success &&
-          message.battery.mapping != message.state.mapping))) {
-        if (error != nullptr) *error = "controller snapshot battery is inconsistent";
-        return false;
-    }
-    if (message.capabilitiesResult != VirtualXInputResult::Success &&
-        message.capabilities.capabilities !=
-            NormalizedXInputCapabilities{}) {
-        if (error != nullptr) *error = "unavailable controller capabilities retain data";
-        return false;
-    }
-    if (message.batteryResult != VirtualXInputResult::Success &&
-        message.battery.battery != NormalizedXInputBattery{}) {
-        if (error != nullptr) *error = "unavailable controller battery retains data";
+
+    if (message.batteryResult == VirtualXInputResult::Success) {
+        if (message.stateResult != VirtualXInputResult::Success ||
+            !validXInputBattery(message.battery.battery) ||
+            message.battery.mapping != message.state.mapping) {
+            if (error != nullptr) {
+                *error = "controller snapshot battery is inconsistent";
+            }
+            return false;
+        }
+    } else if (!canonicalEmptyMapping(message.battery.mapping,
+                                      message.logicalSlot) ||
+               message.battery.battery != NormalizedXInputBattery{}) {
+        if (error != nullptr) {
+            *error = "failed controller battery retains metadata";
+        }
         return false;
     }
     if (message.vibrationResult == VirtualXInputResult::Success &&
-        (!validControllerSourceIdentity(message.vibration.source) ||
+        (message.stateResult != VirtualXInputResult::Success ||
+         !validControllerSourceIdentity(message.vibration.source) ||
          message.vibration.sourceGeneration == 0 ||
          message.vibration.mappingGeneration == 0 ||
          message.vibration.commandSequence == 0 ||

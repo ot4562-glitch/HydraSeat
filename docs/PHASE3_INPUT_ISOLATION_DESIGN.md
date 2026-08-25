@@ -517,7 +517,7 @@ Only after Gate E may Phase 3 be marked complete.
 | Bounded per-target writer queues | Partial | Yes | Gate C physical acceptance pending | Controlled process only |
 | Raw Input behavior trace/parser | Yes | Windows x64/x86 validated (`32800513365`) | P3-HW-01 physical trace pending | Controlled probe only |
 | Raw Input API virtualization | Yes | Windows x64/x86 + cross-architecture validated (`32806163164`) | P3-HW-01 physical trace pending | HydraSeat-owned controlled probe only |
-| Controlled normalized XInput state/remapping | Yes | Windows x64/x86 + cross-architecture pending | Physical controller evidence pending | Direct adapter facade; no ordinary XInput hook |
+| Controlled normalized XInput state/remapping | Yes | Remediation Windows x64/x86 36/36 + cross-architecture validated (`32832036967`, head `b351afdd`); old `32816241577` is pre-fix only | Physical controller evidence pending | Direct adapter facade; no ordinary XInput hook |
 | Polling API interposition | Yes | CI pending | No | Controlled probe only |
 | Cursor/focus API interposition | No | Pending | Pending | Controlled probe only |
 | HidHide session lifecycle | No | Yes | Yes | No |
@@ -666,19 +666,32 @@ anti-cheat targets remain out of scope. See
 3. Disconnect clears state, capabilities, battery, and vibration intent. A
    reconnect must use a newer source generation; delayed old state or vibration
    fails closed.
+   Stable source identity is source kind plus opaque source key; the runtime
+   XInput slot hint is routing metadata only. Explicit same-source remaps must
+   keep generation monotonic and honor the disconnect barrier. Accepted hint
+   remaps advance mapping generation and reset connection state; different
+   stable sources have independent generation namespaces.
 4. Adapter ABI v4 adds packed versioned mapping/state/capability/battery/
    vibration structures with C11/C++ size assertions for x86 and x64.
 5. Controller update/query/snapshot messages are separate from keyboard/mouse
    `InputEvent`, fixed-width little-endian, bounded, and Seat-authorized.
+   Snapshot decoding accepts only the canonical state matrix: connected success
+   with a valid mapping; disconnected state with a valid retained mapping and
+   zero gamepad; or an empty not-mapped state. Failed capability/battery fields
+   carry empty mappings and defaults, failed vibration carries no route, and
+   successful metadata is allowed only for the connected state's exact mapping.
 6. A synthetic two-probe acceptance maps logical slot 0 to different source
    keys, validates distinct state/capabilities/battery/vibration, disconnects
    one Seat without changing the other, repeats teardown twice, and emits
    machine-readable expected/cross/API/stale counters.
-7. Strict portable component and Gate C regressions pass. Windows run
-   `32816241577` validates native x64/x86 and x64-host-to-x64/x86 synthetic
-   acceptance with all state/capability/battery/vibration cross counters zero;
-   opaque source ownership remains independent from the runtime XInput slot hint,
-   while a changed routing hint requires explicit remap/generation advance.
+7. Strict portable component and Gate C regressions pass, including 20/20 after
+   the generation/snapshot remediation. Fork PR #15 run `32832036967` validates
+   remediation head `b351afdd` with native x64/x86 36/36 and x64-host-to-x64/x86
+   synthetic acceptance: Seat 1/Seat 2 state/capability/battery/vibration
+   expected=2, every cross counter zero, `api_failures=0`, `stale_accepted=0`,
+   and repeated child cleanup. Opaque source ownership remains independent from
+   the runtime XInput slot hint, while a changed routing hint requires explicit
+   remap/generation advance. Historical run `32816241577` is pre-fix only.
 8. Detection through `XInputGetState(index)` is only a runtime availability
    hint. It does not prove stable identity, physical routing, or isolation.
    Ordinary XInput interposition, DirectInput, Raw HID/SDL, physical polling,

@@ -142,10 +142,18 @@ VirtualXInputResult VirtualXInputContext::mapLogicalSlot(
     }
 
     auto& slot = m_slots[logicalSlot];
-    if (slot.mapped && slot.mapping.source == source &&
-        slot.mapping.sourceGeneration == sourceGeneration) {
-        m_lastAppliedSequence = sequence;
-        return VirtualXInputResult::Success;
+    if (slot.mapped &&
+        sameControllerSourceIdentity(slot.mapping.source, source)) {
+        const auto generationResult =
+            validateGeneration(slot, sourceGeneration, true);
+        if (generationResult != VirtualXInputResult::Success) {
+            return generationResult;
+        }
+        if (slot.mapping.source == source &&
+            slot.mapping.sourceGeneration == sourceGeneration) {
+            m_lastAppliedSequence = sequence;
+            return VirtualXInputResult::Success;
+        }
     }
     if (slot.mapping.mappingGeneration ==
         std::numeric_limits<std::uint64_t>::max()) {
