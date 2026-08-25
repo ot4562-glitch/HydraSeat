@@ -3,9 +3,9 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-MET-01 — Input latency, queue, and bleed metrics**
-- Current validated fork-main baseline: `e2f01da08173e5150d9e9e729197847df4588a31` (merged P3-CTRL-01)
-- Current validated Windows CI evidence: fork-side PR #16 run `32840474306` validates P3-CTRL-02 head `f52535bdb160aa58006c694e86d536cca3d88529` against fork `main` via merge ref `98903728bf680e56cdc0c3f36f16ffdea7e2f991`: native x64 and Win32/x86 full CTest jobs both passed, including the controlled DirectInput policy/probe tests and read-only `DirectInputNativeObservationSelfTest`; the existing Gate C cross-architecture regression job also passed
+- Current default packet: **P3-HW-01 — Gate A/B/C physical acceptance runner**
+- Current validated fork-main baseline before active P3-MET-01 PR #18: `29fc68cfb0669536c1045da7fc92d7e61576eaca` (merged P3-CTRL-02)
+- Current validated Windows CI evidence: fork-side PR #18 run `32857666855` validates P3-MET-01 head `55953b2205d0bb1f9f929c542fcb837a543e0824` against fork `main` via merge ref `13dc288b47ea271aec7cd50620fee0fc8fc71116`: native x64 and Win32/x86 each passed 43/43 CTest, including `InputMetricsTests`, `InputMetricsCliSelfTest`, and `InputMetricsFixtureReport`; both architectures built the instrumented `hydra_gate_c_host`, and the Gate C cross-architecture regression job also passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -50,7 +50,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-E-01 Open-source non-protected application profile | BLOCKED | P3-RAW-02, P3-API-03 | Reproducible profile and measured no-cross-state result |
 | P3-E-02 First non-anti-cheat game profile | BLOCKED | P3-E-01, P3-D-02 or proven non-cloak suppression path | Explicit experimental compatibility entry |
 | P3-E-03 Two different game zero-bleed proof | BLOCKED | P3-E-02, P3-CTRL-01 | Measured keyboard/mouse/controller bleed and latency report |
-| P3-MET-01 Input latency and bleed measurement harness | CODE_COMPLETE | P3-QUEUE-01 | Bounded nonblocking recorder, schema-v1 trace/report contracts, host queue-stage instrumentation and deterministic p50/p95/p99/bleed report pass portable validation; Windows x64/x86 CI pending |
+| P3-MET-01 Input latency and bleed measurement harness | VALIDATED | P3-QUEUE-01 | Fork PR #18 run `32857666855`: native x64 and Win32/x86 43/43 CTest pass metrics library/CLI/report plus instrumented Gate C host; receiver evidence remains explicit and physical zero-bleed/latency stays manual |
 
 ## Cross-phase prerequisites allowed to start early
 
@@ -221,9 +221,9 @@ Next packet: P3-MET-01 is READY and becomes the default packet. Keep production 
 
 ### 2026-08-25 — P3-MET-01
 
-State: CODE_COMPLETE
+State: VALIDATED
 Branch/commit: `feat/p3-met-01-input-metrics`; implementation commit `97c6ceb` (`feat: implement P3-MET-01 input metrics harness`)
-Windows CI: pending. Fresh native x64 and Win32/x86 full CTest must build the new metrics library/CLI, compile the instrumented Gate C host, and run `InputMetricsTests`, `InputMetricsCliSelfTest`, and `InputMetricsFixtureReport` before the packet may become `VALIDATED`.
+Windows CI: fork PR #18 run `32857666855` validates head `55953b2205d0bb1f9f929c542fcb837a543e0824` via PR merge ref `13dc288b47ea271aec7cd50620fee0fc8fc71116`. Native x64 and Win32/x86 each pass 43/43 CTest; `InputMetricsTests`, `InputMetricsCliSelfTest`, and `InputMetricsFixtureReport` pass explicitly on both architectures, both builds produce `hydra_gate_c_host.exe`, and the existing Gate C cross-architecture job passes.
 Automated evidence:
 - strict GCC 15 `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror` build and focused metrics tests pass;
 - metrics CTest passes 3/3 and selected Phase 3 portable regression passes 24/24 across planner, observation, Raw Input, XInput, DirectInput, Gate C protocol/architecture/snapshot, C++/C11 adapter ABI, shims, and target self-test;
@@ -233,21 +233,21 @@ Live integration: `hydra_gate_c_host` records physical/enqueue/dequeue/write tim
 Known limits: target apply/query timestamps are hooks but are not transported or fabricated by this packet, so live host reports keep those stages/end-to-end latency missing and report `receiver_verified_events=0` until P3-HW/E supplies validated receiver evidence. Therefore `cross_seat_events=0`/`cross_process_events=0` alone is not a zero-bleed claim. Future cross-process timestamps must be normalized into the recorder clock domain. Physical latency/zero-bleed, game performance, physical suppression/cloaking, and CPU/memory overhead remain manual/later acceptance under D-027.
 Portable whole-project note: `cmake --build build-p3met --parallel` still reaches the pre-existing Linux-incompatible Windows-only `reset_input.cpp` target; every packet-scoped and selected Phase 3 target builds cleanly.
 Rollback/privacy: metrics owns no persistent OS/device state; default redacted mode zeros key/button detail IDs before storage, `--metrics-diagnostic` is explicit, and generated Gate C metrics reports are ignored by Git.
-Next packet: remain on P3-MET-01 until fresh Windows x64/x86 CI validates this exact implementation. Do not start P3-HW/E or device-cloak/game work from local-only evidence.
+Next packet: P3-HW-01 is READY and becomes the default packet. Implement only the guided/resumable physical acceptance runner and report tooling; real hardware pass/fail remains manual and must not be inferred from CI.
 
 ## Next Codex task
 
 Use:
 
 ```text
-Validate P3-MET-01 exactly as specified in
+Implement P3-HW-01 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Run fresh Windows x64 and Win32/x86 full CTest on the exact metrics branch head.
-Require the metrics library/CLI/tests and instrumented Gate C host to build with
-/W4 /permissive-. Keep physical latency/zero-bleed/overhead evidence pending;
-do not advance to P3-HW/E or another packet until the automated harness evidence
-is recorded truthfully.
+Build only the guided/resumable Gate A/B/C physical acceptance runner, bounded
+report/manifest tooling, parser tests, and hardware acceptance template. Reuse
+P3-MET-01 metrics without weakening receiver-evidence semantics. Do not mark any
+physical keyboard/mouse/controller/hot-plug/zero-bleed gate passed from synthetic
+or CI evidence; leave the packet CODE_COMPLETE until the user records real hardware evidence.
 
 
 ```

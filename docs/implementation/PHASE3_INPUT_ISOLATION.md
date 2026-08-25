@@ -653,7 +653,7 @@ Implemented independently from the packet specification and official Microsoft D
 
 ## P3-MET-01 — Input latency, queue, and bleed metrics
 
-**State:** CODE_COMPLETE
+**State:** VALIDATED
 
 **Goal**
 
@@ -708,7 +708,8 @@ P3-HW/E packets can produce a reproducible report with p50/p95/p99 and zero-blee
 - `schemas/input_metrics_trace_v1.schema.json` and `schemas/input_metrics_report_v1.schema.json` define the machine-readable contracts, and the `hydra_input_metrics` CLI emits a deterministic receiver-verified fixture report;
 - the report calculates nearest-rank p50/p95/p99/max for each available stage pair, end-to-end and rollback, plus missing-stage, receiver-evidence, verified cross-Seat/process, queue loss/high-water, recorder loss, event-class, and CPU/memory hook summaries;
 - strict GCC 15 `-Werror` tests pass; metrics CTest passes 3/3; selected Phase 3 portable regressions pass 24/24; both JSON schemas parse and the fixture report validates against the report schema;
-- a Linux whole-project build still hits the pre-existing Windows-only `reset_input.cpp` `<windows.h>` target; the packet-scoped and selected Phase 3 targets build cleanly. Fresh Windows x64/x86 CI is still required before `VALIDATED`.
+- fork PR #18 run `32857666855` validates branch head `55953b2205d0bb1f9f929c542fcb837a543e0824`: native x64 and Win32/x86 each pass 43/43 CTest, explicitly including `InputMetricsTests`, `InputMetricsCliSelfTest`, and `InputMetricsFixtureReport`; both architectures build the instrumented `hydra_gate_c_host`, and the existing Gate C cross-architecture job remains green;
+- a Linux whole-project build still hits the pre-existing Windows-only `reset_input.cpp` `<windows.h>` target; the packet-scoped and selected Phase 3 targets build cleanly. Physical receiver-stage/latency/zero-bleed evidence remains manual/later work and is not implied by the automated Windows pass.
 
 **Manual/physical limits**
 

@@ -5,7 +5,7 @@ This file is the phase-level summary. The implementation source of truth is the 
 Current default implementation packet:
 
 ```text
-P3-MET-01 — Input latency, queue, and bleed metrics
+P3-HW-01 — Gate A/B/C physical acceptance runner
 ```
 
 Validate the roadmap with:
@@ -103,7 +103,7 @@ Research:
 - [x] Controlled normalized XInput state/remapping correctness remediation (`P3-CTRL-01`; fork PR #15 run `32832036967` validates native x64/x86 36/36 and x64-host-to-x64/x86 zero-cross controller acceptance)
 - [x] Controlled DirectInput enumeration/order/visibility adapter (`P3-CTRL-02`; fork PR #16 run `32840474306` validates native x64/x86 controlled policy/probes and read-only DirectInput 8 observation)
 - [ ] Production controller polling/routing and physical vibration evidence (later profile/runtime work)
-- [ ] Input latency, queue, drop, and cross-Seat metrics (`P3-MET-01`; `CODE_COMPLETE` locally, Windows x64/x86 CI pending)
+- [x] Input latency, queue, drop, and receiver-evidence-aware cross-Seat metrics (`P3-MET-01`; fork PR #18 run `32857666855` validates native x64/x86 43/43 CTest; physical zero-bleed/latency remains manual)
 - [ ] Physical Gate A/B/C acceptance with two input sets
 - [ ] Watchdog/crash rollback acceptance
 - [ ] Read-only HidHide probe, then guarded session-cloak experiment
