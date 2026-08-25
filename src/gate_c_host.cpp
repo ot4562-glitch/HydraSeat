@@ -1255,6 +1255,17 @@ private:
                 baselineDifferenceObserved && completeObservations &&
                 ordinaryPollingIsolated && ordinaryCursorFocusIsolated &&
                 releaseAndDestructionIsolated;
+            if (!passed && cursorFocusShim) {
+                std::cerr
+                    << "Cursor/focus acceptance failed: firstIsolated="
+                    << firstIsolated << " secondIsolated=" << secondIsolated
+                    << " logicalWindowViews=" << baselineDifferenceObserved
+                    << " completeObservations=" << completeObservations
+                    << " polling=" << ordinaryPollingIsolated
+                    << " cursorFocus=" << ordinaryCursorFocusIsolated
+                    << " releaseDestroy=" << releaseAndDestructionIsolated
+                    << '\n';
+            }
             const bool cleaned = cleanupSessions(sessions, !passed);
             return passed && cleaned &&
                 !sessions[0].process.running() &&
@@ -1274,6 +1285,7 @@ private:
                 EqualRect(&globalClipAfter, &globalClipBefore) == FALSE ||
                 GetForegroundWindow() != globalForegroundBefore ||
                 GetCapture() != globalCaptureBefore) {
+                std::cerr << "Cursor/focus host-native global state changed during controlled virtualization.\n";
                 return 57;
             }
         }

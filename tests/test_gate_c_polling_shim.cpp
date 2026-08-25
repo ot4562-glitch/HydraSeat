@@ -272,50 +272,26 @@ void testRealPollingSemantics() {
     check(GetKeyboardState(nullptr) == FALSE &&
               GetLastError() == ERROR_INVALID_PARAMETER,
           "active GetKeyboardState rejects null without a partial write");
-    POINT cursor{};
-    RECT clip{};
-    check(GetCursorPos(&cursor) != FALSE &&
-              SetCursorPos(15, 25) != FALSE &&
-              ClipCursor(nullptr) != FALSE &&
-              GetClipCursor(&clip) != FALSE &&
-              GetForegroundWindow() == targetWindow &&
-              GetActiveWindow() == targetWindow &&
-              GetFocus() == targetWindow &&
-              GetCapture() == targetWindow &&
-              SetCapture(targetWindow) == targetWindow &&
-              ReleaseCapture() != FALSE,
-          "polling regression executable retains the complete bounded USER32 import surface");
+    // Cursor/focus APIs are intentionally not exercised in polling-only mode;
+    // they remain native pass-through unless the P3-API-03 capability is enabled.
 
     HydraGateCShimStatusV1 status{};
     status.struct_size = sizeof(status);
     check(hydra_gate_c_shim_get_status(&status) == HYDRA_GATE_C_SHIM_OK &&
               status.lifecycle == HYDRA_GATE_C_SHIM_ACTIVE &&
               status.generation == 1 &&
-              status.patched_api_mask == HYDRA_GATE_C_SHIM_ALL_API_MASK,
+              status.expected_api_mask == HYDRA_GATE_C_SHIM_POLLING_API_MASK &&
+               status.patched_api_mask == HYDRA_GATE_C_SHIM_POLLING_API_MASK,
           "active shim diagnostics expose generation and function masks");
 
     check(hydra_gate_c_shim_mark_adapter_unavailable() ==
               HYDRA_GATE_C_SHIM_ADAPTER_UNAVAILABLE,
           "adapter loss switches the installed shim to fail-closed mode");
     keyboard.fill(0x55u);
-    POINT unavailableCursor{7, 9};
-    RECT unavailableClip{1, 2, 3, 4};
     check(GetKeyState(0x41) == 0 &&
               GetKeyboardState(keyboard.data()) == FALSE &&
-              keyboard[0] == 0x55u && keyboard[0x41] == 0x55u &&
-              GetCursorPos(&unavailableCursor) == FALSE &&
-              unavailableCursor.x == 7 && unavailableCursor.y == 9 &&
-              SetCursorPos(1, 2) == FALSE &&
-              ClipCursor(nullptr) == FALSE &&
-              GetClipCursor(&unavailableClip) == FALSE &&
-              unavailableClip.left == 1 && unavailableClip.top == 2 &&
-              unavailableClip.right == 3 && unavailableClip.bottom == 4 &&
-              GetForegroundWindow() == nullptr &&
-              GetActiveWindow() == nullptr && GetFocus() == nullptr &&
-              GetCapture() == nullptr && SetCapture(targetWindow) == nullptr &&
-              ReleaseCapture() == FALSE,
-          "fail-closed polling and cursor/focus calls return no state and "
-          "never partially write caller buffers");
+              keyboard[0] == 0x55u && keyboard[0x41] == 0x55u,
+          "fail-closed polling calls return no state and never partially write caller buffers");
 
     check(hydra_gate_c_shim_uninstall() == HYDRA_GATE_C_SHIM_OK,
           "real polling imports uninstall after fail-closed transition");
@@ -323,7 +299,7 @@ void testRealPollingSemantics() {
     status.struct_size = sizeof(status);
     check(hydra_gate_c_shim_get_status(&status) == HYDRA_GATE_C_SHIM_OK &&
               status.lifecycle == HYDRA_GATE_C_SHIM_INACTIVE &&
-              status.restored_api_mask == HYDRA_GATE_C_SHIM_ALL_API_MASK &&
+              status.restored_api_mask == HYDRA_GATE_C_SHIM_POLLING_API_MASK &&
               status.rollback_complete == 1,
           "uninstall diagnostics prove exact complete restoration");
     check(hydra_gate_c_shim_uninstall() == HYDRA_GATE_C_SHIM_OK,
