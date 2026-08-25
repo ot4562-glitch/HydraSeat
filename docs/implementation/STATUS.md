@@ -3,9 +3,9 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-CTRL-02 — DirectInput enumeration and visibility adapter**
+- Current default packet: **P3-CTRL-01 — XInput controlled state and slot remapping correctness remediation**
 - Current validated fork-main baseline: `e2f01da08173e5150d9e9e729197847df4588a31` (merged P3-CTRL-01)
-- Current validated Windows CI evidence: fork-main run `32817021965` passed native x64/x86 full CTest, roadmap/current-packet validation, and the x64-host-to-x64/x86 controlled Gate C matrix; P3-CTRL-01 branch validation run `32816241577` records the zero-cross controller counters
+- Current validated Windows CI evidence: fork-main run `32817021965` passed native x64/x86 full CTest, roadmap/current-packet validation, and the x64-host-to-x64/x86 controlled Gate C matrix; P3-CTRL-01 branch validation run `32816241577` records the pre-remediation zero-cross controller counters only, so fresh native/cross x64/x86 evidence is required after this repair
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -43,8 +43,8 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
 | P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
 | P3-HW-01 Gate A/B/C physical acceptance runner | READY | P3-QUEUE-01 | User-run two-keyboard/two-pointing-device traces and report |
-| P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Windows run `32816241577`: native x64/x86 and x64-host-to-x64/x86 controlled state/capability/battery/vibration isolation passed with every cross counter zero and no API/stale acceptance |
-| P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | READY | P3-CTRL-01, P3-ARCH-01 | Controlled DirectInput probe sees only declared devices/order |
+| P3-CTRL-01 XInput controlled adapter state | CODE_COMPLETE | P3-STATE-01 | Same-source generation monotonicity and canonical snapshot failure metadata repaired; strict portable Gate C suite passes 20/20, while old Windows run `32816241577` is pre-fix evidence only |
+| P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | BLOCKED | P3-CTRL-01, P3-ARCH-01 | Remains blocked until the reopened P3-CTRL-01 remediation is freshly Windows-validated |
 | P3-D-01 HidHide read-only availability/capability probe | READY | P3-PLAN-01 | No mutation; exact installed/version/control-interface report |
 | P3-D-02 Guarded HidHide session-cloak lab | BLOCKED | P3-REC-01, P3-D-01 | Spare input/watchdog/timeout/crash rollback and physical evidence |
 | P3-E-01 Open-source non-protected application profile | BLOCKED | P3-RAW-02, P3-API-03 | Reproducible profile and measured no-cross-state result |
@@ -186,8 +186,8 @@ Next packet: P3-CTRL-01 is READY; implement controlled XInput state/slot remappi
 
 ### 2026-08-25 — P3-CTRL-01
 
-State: VALIDATED
-Branch/commit: `feat/p3-ctrl-01-virtual-xinput`; implementation `2128ad89e5e31dd5e594c59abc887e6cb1098a57`, source-identity review fix `33dfb2b`, routing-hint hardening `c34364c`
+State: CODE_COMPLETE (correctness remediation reopened after the historical validation below)
+Branch/commit: historical `feat/p3-ctrl-01-virtual-xinput`; implementation `2128ad89e5e31dd5e594c59abc887e6cb1098a57`, source-identity review fix `33dfb2b`, routing-hint hardening `c34364c`; current remediation branch `fix/p3-ctrl-01-generation-snapshot-hardening`
 Windows CI: run `32816241577` passed native x64, Win32/x86, and the dedicated x64-host-to-x64/x86 controlled XInput process matrix
 Automated tests:
 - strict GCC 15 CMake builds pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion` for the bounded virtual XInput component, adapter ABI v4, controller protocol, planner, and controlled host/probe portable surfaces
@@ -197,20 +197,23 @@ Automated tests:
 Manual evidence: none claimed; physical XInput discovery/routing, physical vibration, physical suppression, and commercial-game behavior remain pending and separate from the synthetic controlled acceptance
 Known limitations: no ordinary XInput API interposition, XInput DLL proxy, DirectInput, Raw HID/SDL, physical polling worker, physical controller mutation/hiding, third-party injection, or game support is implemented
 Rollback result: adapter reset deterministically clears all four controller slots; disconnect clears state/metadata/vibration and requires a newer source generation; controlled process acceptance runs two complete start/stop cycles and requires no surviving child
-Next packet: P3-CTRL-02 is READY; implement only the controlled clean-room DirectInput enumeration/order/visibility adapter while physical controller evidence remains separate
+Remediation scope: reject stale/same-generation resurrection through explicit routing-hint remaps, preserve independent generation namespaces for genuinely different stable sources, and require canonical empty metadata for failed controller snapshot fields. Historical run `32816241577` predates this fix and cannot validate the repaired semantics.
+Remediation evidence: strict GCC 15 CMake build with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror` passed all selected portable targets; 20/20 portable CTest cases passed across planner/observation, protocol, architecture, probe snapshot, Raw Input, virtual XInput, C++/C11 adapter ABI, polling/cursor/Raw Input shims, and target/host self-tests. Focused tests reproduced both defects before the production fix and then passed after it.
+Windows evidence required: fresh native x64, native Win32/x86, and x64-host-to-x64/x86 controlled runs with nonzero expected state/capability/battery/vibration counters, all cross counters zero, `api_failures=0`, `stale_accepted=0`, and clean process teardown. No post-remediation Windows/MSVC result is claimed locally.
+Next packet: P3-CTRL-02 is BLOCKED; do not implement it while P3-CTRL-01 remediation is active
 
 ## Next Codex task
 
 Use:
 
 ```text
-Implement P3-CTRL-02 exactly as specified in
+Repair P3-CTRL-01 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Build a clean-room, process-local controlled DirectInput 8 enumeration/order/
-visibility policy around stable test/profile instance identity. Two controlled
-probes must enumerate only their declared devices in deterministic order. Keep
-XInput, Raw HID, SDL, physical device hiding, third-party injection, games,
-anti-cheat, DRM, and protected-process work out of this packet.
+Harden stable controller source-generation semantics across explicit runtime-
+slot-hint remaps and canonicalize ControllerSnapshot failure metadata. Preserve
+the fixed-width protocol/ABI and all existing isolation boundaries. Keep
+DirectInput, Raw HID, SDL, physical polling/hiding, third-party injection,
+games, anti-cheat, DRM, and protected-process work out of this remediation.
 
 ```

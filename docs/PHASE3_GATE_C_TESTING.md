@@ -49,13 +49,14 @@ packet, queue, and token state. Native x64, Win32/x86, and x64-host-to-x64/x86
 controlled acceptance pass with expected keyboard/mouse events, zero cross-Seat
 events, and zero API/stale-token/queue-overflow failures.
 
-P3-CTRL-01 is `VALIDATED` by Windows run `32816241577`. Adapter ABI v4,
-separate controller protocol messages, a bounded four-slot normalized XInput
-component, planner boundary, and deterministic component/process tests are
-implemented. Native x64, Win32/x86, and x64-host-to-x64/x86 controlled
-acceptance pass. Both architecture legs report state/capability/battery/
-vibration expected=2, every cross counter=0, `api_failures=0`, and
-`stale_accepted=0`. Physical-controller routing is not implied.
+P3-CTRL-01 correctness remediation is `CODE_COMPLETE`. Windows run
+`32816241577` validated the pre-remediation adapter ABI v4/controller slice,
+with native x64, Win32/x86, and x64-host-to-x64/x86 expected counters of 2,
+every cross counter zero, `api_failures=0`, and `stale_accepted=0`. That run does
+not validate the repaired same-source remap and snapshot-canonicalization
+semantics. The fix passes the strict portable 20/20 suite; fresh native/cross
+x64/x86 Windows acceptance is required. Physical-controller routing is not
+implied.
 
 This is not a general game hook or a completed Gate C implementation. The
 controlled targets still call HydraSeat's adapter API directly; only the
@@ -622,7 +623,24 @@ The component suite covers slots 0..3, slot 4 rejection, remap generations,
 context isolation, duplicate sources, state extrema and packet wrap, metadata
 consistency, unavailable battery, vibration min/max/stop/repeat, stale
 sequence/source/mapping generation, disconnect/reconnect, reset, malformed ABI,
-and fixed C11/C++ sizes. The process test runs two complete cycles with Seat 1
+and fixed C11/C++ sizes. It additionally proves that same-stable-source explicit
+hint remaps cannot lower generation or bypass the disconnect barrier; accepted
+hint remaps advance mapping generation and clear state/vibration; different
+stable sources have independent generation namespaces; rejected remaps do not
+mutate state or consume sequence.
+
+Controller snapshots use this canonical decode matrix:
+
+| Field/result | Required representation |
+| --- | --- |
+| State `Success` | connected, valid nonzero mapping identity/generations, outer logical slot, normalized gamepad |
+| State `Disconnected` | disconnected, valid retained mapping/generations, outer logical slot, zero gamepad |
+| State `NotMapped` | disconnected canonical empty mapping/state, with only the outer logical slot retained |
+| Capabilities/Battery failure | canonical empty mapping plus default metadata |
+| Capabilities/Battery success | valid metadata and exact connected-state mapping; battery `available=false` remains a valid success |
+| Vibration failure/success | no route on failure; valid nonzero route matching the connected state on success |
+
+The process test runs two complete cycles with Seat 1
 and Seat 2 both querying logical slot 0 backed by distinct synthetic sources.
 Success requires every expected state/capability/battery/vibration counter to
 be nonzero, every cross counter to be zero, `api_failures=0`,
@@ -828,7 +846,7 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] P3-API-03 cursor/clip/logical-focus/capture shim, adapter ABI v2, native x64/x86 24/24 CTest, cross-architecture two-probe isolation, and host-native global-state preservation (`32792381573`)
 - [x] P3-RAW-01 standalone probe, bounded trace/parser contract, explicit synthetic fixture, native x64/x86 28/28 CTest, retained/reviewed observed registration traces, and process teardown evidence (`32800513365`)
 - [x] P3-RAW-02 controlled Raw Input virtualization, native x64/x86 ordinary-API tests, x64-host-to-x64/x86 two-process no-cross-Seat acceptance, rollback, and existing polling/cursor regressions (`32806163164`)
-- [x] P3-CTRL-01 bounded normalized XInput state, adapter ABI v4, controller protocol, planner boundary, native x64/x86 tests, and x64-host-to-x64/x86 zero-cross acceptance (`32816241577`)
+- [ ] P3-CTRL-01 generation/snapshot correctness remediation: strict portable 20/20 passes; fresh native x64/x86 and x64-host-to-x64/x86 zero-cross acceptance pending (old `32816241577` is pre-fix only)
 
 ### Pending
 
@@ -849,9 +867,11 @@ last-registration-wins per usage, usage-local removal, accepted-but-not-echoed
 `RIDEV_DEVNOTIFY`, retained destroyed-HWND runtime values until replacement,
 and the architecture-specific structure sizes with 8-byte raw-buffer alignment.
 Physical `WM_INPUT` and device-change evidence remains P3-HW-01. P3-CTRL-01 is
-`VALIDATED` by run `32816241577`; physical controller polling/routing/vibration
-remains a separate manual/production concern. P3-CTRL-02 is now READY for the
-controlled clean-room DirectInput enumeration/order/visibility boundary.
+`CODE_COMPLETE` after the generation/snapshot remediation; run `32816241577`
+is pre-fix evidence only, and fresh native/cross x64/x86 validation is pending.
+Physical controller polling/routing/vibration remains a separate manual/
+production concern. P3-CTRL-02 remains BLOCKED and no DirectInput work starts
+from this packet.
 
 The two-probe process test releases Probe B's virtual capture while asserting
 that Probe A retains its own capture, then shuts down Probe A and re-queries

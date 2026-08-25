@@ -333,7 +333,7 @@ hydra_plan polled-keyboard-mouse-game --protoinput --hidhide --allow-injection -
   --trace hydra_gate_c_host.jsonl
 ```
 
-Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe 的 process-local polling 与 cursor/clip/logical-focus/capture shim 已通过 x64/x86 Windows CI 验证。独立 Raw Input behavior probe 和 bounded trace/parser 已 code-complete，但 native x64/x86 observed trace 仍待验证。当前不实现 remote injection、physical suppression 或第三方/商业 target 支持。
+Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe 的 process-local polling 与 cursor/clip/logical-focus/capture shim 已通过 x64/x86 Windows CI 验证。独立 Raw Input behavior probe 与 bounded trace/parser 也已在 Windows run `32800513365` 通过 native x64/x86 验证。XInput controlled slice 的旧 Windows run `32816241577` 属于修复前证据；generation/snapshot 正确性修复已通过 strict portable 20/20，当前为等待新 Windows 验证的 `CODE_COMPLETE`。当前不实现 remote injection、physical suppression 或第三方/商业 target 支持。
 
 相关文档：
 
@@ -353,7 +353,7 @@ Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe
 当前默认 packet：
 
 ```text
-P3-CTRL-02 — DirectInput enumeration and visibility adapter
+P3-CTRL-01 — XInput generation/snapshot 正确性修复
 ```
 
 开始编码前阅读：

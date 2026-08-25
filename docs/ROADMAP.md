@@ -5,7 +5,7 @@ This file is the phase-level summary. The implementation source of truth is the 
 Current default implementation packet:
 
 ```text
-P3-API-01 — Controlled Win32 API probe baseline
+P3-CTRL-01 — XInput generation and snapshot correctness remediation
 ```
 
 Validate the roadmap with:
@@ -70,13 +70,15 @@ Research:
 
 ### Remaining critical path
 
-- [ ] Controlled probe records real OS polling/cursor/focus/Raw Input baseline (`P3-API-01`)
+- [x] Controlled probe records real OS polling/cursor/focus baseline (`P3-API-01`)
 - [x] Startup-loaded polling shim for HydraSeat-owned probes
 - [x] Cursor/focus/capture shim for HydraSeat-owned probes
 - [x] Raw Input registration/data behavior probe (`P3-RAW-01`)
 - [x] Raw Input virtualization shim (`P3-RAW-02`)
 - [x] x86/x64 controlled adapter matrix
-- [ ] XInput and DirectInput controlled/production routing
+- [ ] Controlled normalized XInput state/remapping correctness remediation (`P3-CTRL-01`; portable `CODE_COMPLETE`, fresh Windows x64/x86 and cross-architecture validation pending)
+- [ ] Controlled DirectInput enumeration/order/visibility adapter (`P3-CTRL-02`; blocked on fresh P3-CTRL-01 validation)
+- [ ] Production controller polling/routing and physical vibration evidence (later profile/runtime work)
 - [ ] Input latency, queue, drop, and cross-Seat metrics
 - [ ] Physical Gate A/B/C acceptance with two input sets
 - [ ] Watchdog/crash rollback acceptance

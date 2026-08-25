@@ -388,6 +388,117 @@ void testControllerProtocol() {
                          "stale disconnected snapshot is structural");
     check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
           "disconnected controller snapshot cannot retain gamepad state");
+
+    auto disconnected = snapshot;
+    disconnected.stateResult = VirtualXInputResult::Disconnected;
+    disconnected.capabilitiesResult = VirtualXInputResult::Disconnected;
+    disconnected.batteryResult = VirtualXInputResult::Disconnected;
+    disconnected.vibrationResult = VirtualXInputResult::Disconnected;
+    disconnected.state.connected = false;
+    disconnected.state.gamepad = {};
+    disconnected.capabilities = {};
+    disconnected.battery = {};
+    disconnected.vibration = {};
+    frame = decodeOrFail(encodeControllerSnapshot(36u, disconnected),
+                         "canonical disconnected snapshot is structural");
+    check(decodeControllerSnapshot(frame, decodedSnapshot, &error) &&
+              decodedSnapshot == disconnected,
+          "disconnected state retains only its valid mapping identity");
+
+    auto malformedDisconnected = disconnected;
+    malformedDisconnected.state.mapping.source = {};
+    frame = decodeOrFail(
+        encodeControllerSnapshot(37u, malformedDisconnected),
+        "malformed disconnected mapping is structural");
+    check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
+          "disconnected state requires a valid retained mapping identity");
+
+    ControllerSnapshotMessage notMapped;
+    notMapped.seatId = 1u;
+    notMapped.logicalSlot = 2u;
+    notMapped.state.mapping.logicalSlot = 2u;
+    notMapped.capabilities.mapping.logicalSlot = 2u;
+    notMapped.battery.mapping.logicalSlot = 2u;
+    notMapped.vibration.logicalSlot = 2u;
+    frame = decodeOrFail(encodeControllerSnapshot(38u, notMapped),
+                         "canonical not-mapped snapshot is structural");
+    check(decodeControllerSnapshot(frame, decodedSnapshot, &error) &&
+              decodedSnapshot == notMapped,
+          "not-mapped snapshot is canonically empty except for its outer logical slot");
+
+    auto hiddenNotMapped = notMapped;
+    hiddenNotMapped.state.mapping = {2u, mapping.source, 5u, 2u};
+    frame = decodeOrFail(encodeControllerSnapshot(39u, hiddenNotMapped),
+                         "not-mapped snapshot with hidden identity is structural");
+    check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
+          "not-mapped state rejects hidden mapping metadata");
+    auto staleNotMappedPacket = notMapped;
+    staleNotMappedPacket.state.packetNumber = 1u;
+    frame = decodeOrFail(
+        encodeControllerSnapshot(40u, staleNotMappedPacket),
+        "not-mapped snapshot with stale packet number is structural");
+    check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
+          "not-mapped state rejects hidden packet metadata");
+
+    auto hiddenCapabilities = disconnected;
+    hiddenCapabilities.capabilities.mapping = disconnected.state.mapping;
+    frame = decodeOrFail(encodeControllerSnapshot(41u, hiddenCapabilities),
+                         "failed capabilities with hidden mapping is structural");
+    check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
+          "failed capabilities reject hidden mapping metadata");
+    auto hiddenBattery = disconnected;
+    hiddenBattery.battery.mapping = disconnected.state.mapping;
+    frame = decodeOrFail(encodeControllerSnapshot(42u, hiddenBattery),
+                         "failed battery with hidden mapping is structural");
+    check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
+          "failed battery rejects hidden mapping metadata");
+    auto hiddenVibration = disconnected;
+    hiddenVibration.vibration = snapshot.vibration;
+    frame = decodeOrFail(encodeControllerSnapshot(43u, hiddenVibration),
+                         "failed vibration with hidden route is structural");
+    check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
+          "failed vibration rejects every hidden route field");
+
+    auto impossibleCapabilities = disconnected;
+    impossibleCapabilities.capabilitiesResult =
+        VirtualXInputResult::Success;
+    impossibleCapabilities.capabilities.mapping =
+        disconnected.state.mapping;
+    impossibleCapabilities.capabilities.capabilities =
+        capabilities.capabilities;
+    frame = decodeOrFail(
+        encodeControllerSnapshot(44u, impossibleCapabilities),
+        "disconnected state with successful capabilities is structural");
+    check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
+          "successful capabilities require a successful connected state");
+    auto impossibleBattery = disconnected;
+    impossibleBattery.batteryResult = VirtualXInputResult::Success;
+    impossibleBattery.battery.mapping = disconnected.state.mapping;
+    impossibleBattery.battery.battery = battery.battery;
+    frame = decodeOrFail(
+        encodeControllerSnapshot(45u, impossibleBattery),
+        "disconnected state with successful battery is structural");
+    check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
+          "successful battery requires a successful connected state");
+    auto impossibleVibration = disconnected;
+    impossibleVibration.vibrationResult = VirtualXInputResult::Success;
+    impossibleVibration.vibration = snapshot.vibration;
+    frame = decodeOrFail(
+        encodeControllerSnapshot(46u, impossibleVibration),
+        "disconnected state with successful vibration is structural");
+    check(!decodeControllerSnapshot(frame, decodedSnapshot, &error),
+          "successful vibration requires a successful connected state");
+
+    auto unavailableBattery = snapshot;
+    unavailableBattery.vibrationResult = VirtualXInputResult::Disconnected;
+    unavailableBattery.vibration = {};
+    unavailableBattery.battery.battery = {};
+    frame = decodeOrFail(encodeControllerSnapshot(47u, unavailableBattery),
+                         "successful unavailable battery snapshot is structural");
+    check(decodeControllerSnapshot(frame, decodedSnapshot, &error) &&
+              decodedSnapshot == unavailableBattery &&
+              !decodedSnapshot.battery.battery.available,
+          "battery available=false remains successful canonical metadata");
     check(controllerSeatAuthorityMatches(1u, 1u) &&
               !controllerSeatAuthorityMatches(1u, 2u) &&
               !controllerSeatAuthorityMatches(0u, 0u),

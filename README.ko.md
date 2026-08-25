@@ -333,7 +333,7 @@ hydra_plan polled-keyboard-mouse-game --protoinput --hidhide --allow-injection -
   --trace hydra_gate_c_host.jsonl
 ```
 
-Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled probe용 process-local polling 및 cursor/clip/logical-focus/capture shim은 x64/x86 Windows CI에서 검증됐습니다. 별도 Raw Input behavior probe와 bounded trace/parser는 code-complete 상태이며 native x64/x86 observed trace 검증은 아직 필요합니다. Remote injection, physical suppression, third-party/commercial target 지원은 구현하지 않습니다.
+Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled probe용 process-local polling 및 cursor/clip/logical-focus/capture shim은 x64/x86 Windows CI에서 검증됐습니다. 별도 Raw Input behavior probe와 bounded trace/parser도 Windows run `32800513365`에서 native x64/x86 검증됐습니다. XInput controlled slice의 기존 Windows run `32816241577`은 수정 전 근거이며, generation/snapshot 정확성 수정은 strict portable 20/20 통과 후 새 Windows 검증을 기다리는 `CODE_COMPLETE` 상태입니다. Remote injection, physical suppression, third-party/commercial target 지원은 구현하지 않습니다.
 
 관련 문서:
 
@@ -353,7 +353,7 @@ Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled prob
 현재 기본 packet:
 
 ```text
-P3-CTRL-02 — DirectInput enumeration and visibility adapter
+P3-CTRL-01 — XInput generation/snapshot 정확성 수정
 ```
 
 작업 시작 전:
