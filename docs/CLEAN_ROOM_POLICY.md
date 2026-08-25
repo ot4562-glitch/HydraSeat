@@ -135,7 +135,7 @@ HydraSeat must default to unsupported for protected processes when a documented 
 
 ## 7. Current project-license blocker
 
-The repository README advertises MIT, but the repository currently lacks a tracked `LICENSE` file. Before any third-party code is imported, maintainers must:
+The repository currently states that its project license is not yet formally declared and it lacks a tracked `LICENSE` file. Long-term open-source distribution is a product goal, but that intent does not grant current reuse or redistribution rights. Before any third-party code is imported, maintainers must:
 
 1. confirm ownership/permission for the existing HydraSeat code;
 2. add an explicit license file or document the chosen licensing model;

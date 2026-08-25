@@ -16,6 +16,24 @@ python tools/validate_implementation_roadmap.py
 
 ---
 
+## Product north star
+
+HydraSeat is being built toward a practical shared-PC gaming product: when one Windows gaming PC has enough hardware headroom, a household or group of friends should be able to use separate monitors and input/audio devices as two or more local gaming Seats instead of requiring a second PC for every player.
+
+The roadmap therefore prioritizes the complete user journey, not only isolated technical primitives:
+
+- configure Seats without developer tools;
+- run different games/apps concurrently with measured zero-bleed behavior;
+- allow separate instances of the same multiplayer title only for exact profiles where the title/launcher/account/license/single-instance rules permit it;
+- keep overhead low enough to preserve useful gaming performance;
+- Start, Stop / Return to Windows, Reconfigure, diagnose, recover, install, update, and uninstall safely;
+- publish exact compatibility evidence rather than universal game-support claims;
+- evolve toward a broadly usable open-source/community project after the project license and contribution terms are formally resolved.
+
+This product direction does not weaken the current safety boundary: HydraSeat does not bypass anti-cheat, DRM, protected processes, account limits, launcher policy, or single-instance protections.
+
+---
+
 ## Phase 0 — Research and Foundation (Complete)
 
 - [x] Establish C++20 / optional Qt 6 project architecture
@@ -129,6 +147,7 @@ Detailed implementation: [Phase 4 packet roadmap](implementation/PHASE4_RUNTIME_
 - [ ] Produce integrated latency/drop/bleed/resource report
 - [ ] Validate an end-to-end controlled/open-source two-Seat session
 - [ ] Validate two different non-anti-cheat game profiles
+- [ ] Record an optional same-title/two-instance compatibility case only when the exact game/provider/account/license/single-instance rules permit it; this is not required for the baseline MVP
 - [ ] Test target restart and input/display/controller/audio reconnect
 - [ ] Provide truthful start/stop/status/reset UI
 - [ ] Publish machine-readable compatibility/hardware matrix
@@ -151,6 +170,7 @@ Detailed implementation: [Phase 5 packet roadmap](implementation/PHASE5_TWO_SEAT
 - [ ] Provide profile/catalog/plan CLI
 - [ ] Add portable import/export with redaction and hardware identity remapping
 - [ ] Maintain provider/profile regression fixture corpus
+- [ ] Make compatibility/profile formats contribution-friendly with provenance, validation, redaction, and exact evidence requirements for a future public community catalog
 
 Detailed implementation: [Phase 6 packet roadmap](implementation/PHASE6_LAUNCHER_PROFILES.md)
 
@@ -219,6 +239,7 @@ Detailed implementation: [Phase 9 packet roadmap](implementation/PHASE9_COMPATIB
 - [ ] Run long-duration release soak/fault/reboot/update campaign
 - [ ] Complete clean-machine onboarding, accessibility, help, and recovery docs
 - [ ] Resolve project license/contribution terms and third-party notices
+- [ ] Publish contribution/onboarding guidance and community compatibility-profile evidence rules once the license gate permits describing the project as open source
 - [ ] Produce signed reproducible artifacts, checksums, SBOM, and provenance
 - [ ] Establish support/regression/security intake policy
 - [ ] Pass release-candidate stabilization gate

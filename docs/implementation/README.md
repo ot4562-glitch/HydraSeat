@@ -19,6 +19,10 @@ The target product remains:
 
 > One Windows PC should feel like multiple local gaming PCs. Each Seat may own one or more displays, keyboard/mouse/controller devices, audio endpoints, processes, windows, cursor state, launcher state, and eventually a lightweight Seat shell. The implementation must not require a virtual machine, Remote Desktop, or streaming for ordinary local monitors.
 
+The product north star is a practical household/friend shared-PC experience. If one gaming PC has enough CPU/GPU/memory and peripheral headroom, two or more people should be able to use separate Seats concurrently instead of needing a second physical PC for every local player. Different games are the baseline MVP. Separate instances of the same multiplayer title are an optional compatibility case only when the exact title/provider/account/license/single-instance rules allow it; HydraSeat never bypasses DRM, anti-cheat, launcher policy, account restrictions, protected processes, or single-instance protections.
+
+Product completion therefore includes more than isolation correctness: a non-developer must be able to configure Seats, understand compatibility limits, start and stop a session, recover safely, and install/update/uninstall the product; overhead must be measured low enough to preserve useful gaming performance; and compatibility/profile formats should be suitable for future community contribution. Broad open-source distribution is a release objective, but it is gated by the currently unresolved project license and contribution terms.
+
 ## 2. Source-of-truth order
 
 When documents disagree, use this order:
@@ -87,12 +91,12 @@ Phase numbers group product capability. They are mostly sequential, but reliabil
 | 2 | Seat composition | Complete | Multi-display Seat model and transactional profiles |
 | 3 | Input compatibility and isolation | Current | Documented profiles can run without cross-Seat input merging and can roll back safely |
 | 4 | Runtime host, control console, process/window/display routing | Planned | Background host stays authoritative; Management Seat controls Start/Return/Reconfigure; Seat-owned windows remain inside assigned display groups |
-| 5 | Two-Seat gaming MVP | Planned | Two different supported games run with independent input/display/controller/audio and measured limits |
+| 5 | Two-Seat gaming MVP | Planned | Two different supported games run with independent input/display/controller/audio and measured limits; exact same-title/two-instance support is optional profile-specific evidence |
 | 6 | Launcher and profile manager | Planned | Repeatable provider-aware launch plans and editable compatibility profiles |
 | 7 | Seat shell and local-PC experience | Planned | Each Seat feels like a coherent local desktop/launcher environment |
 | 8 | Reliability, watchdog, installer, updates | Planned | Crash-safe background runtime with emergency reset and reversible install/update |
-| 9 | Compatibility SDK and ecosystem | Planned | Versioned adapter/profile SDK with trust and validation policy |
-| 10 | Release hardening | Planned | Signed, documented, performance-tested release with explicit compatibility scope |
+| 9 | Compatibility SDK and ecosystem | Planned | Versioned adapter/profile SDK with trust, validation, and future community contribution policy |
+| 10 | Release hardening | Planned | Signed, documented, performance-tested, legally distributable release with explicit compatibility scope and resolved license/contribution terms |
 
 Detailed specifications:
 

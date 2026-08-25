@@ -2,11 +2,13 @@
 
 ## 1. Project identity
 
-HydraSeat is an experimental Windows local gaming multiseat framework written primarily in C++20. The repository license is not yet formally declared; do not describe it as open source or copy third-party source until the tracked license and contribution terms are resolved.
+HydraSeat is an experimental Windows local gaming multiseat framework written primarily in C++20. The repository license is not yet formally declared; long-term public open-source distribution is a product goal, not the current legal status. Do not describe the current repository as open source or copy third-party source until the tracked license and contribution terms are resolved.
 
 The product goal is:
 
 > Make one physical Windows PC feel like multiple local gaming PCs. Each Seat may own one or more displays, keyboard/mouse/controller devices, audio endpoints, processes, windows, virtual cursor/focus state, profiles, and an optional Seat shell. Ordinary local-monitor use must not require a VM, RDP, or streaming.
+
+The primary human use case is a household or group of friends sharing the unused headroom of one capable gaming PC: different games may run concurrently on separate Seats, and separate instances of the same title are in scope only when the title/launcher/account/license/single-instance policy and an explicit compatibility profile permit it. Product work must optimize for a non-developer being able to configure Seats, start a split session, understand compatibility limits, and safely return to ordinary Windows.
 
 A **Seat**, not a monitor or game window, is the primary ownership unit.
 

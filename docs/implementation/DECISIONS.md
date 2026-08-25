@@ -334,3 +334,31 @@ Rules:
 - release validation checks localized README/version/link consistency and supported-locale UI resource completeness.
 
 Traditional Chinese or additional locales may be added later through the same resource contract without changing core runtime protocols.
+
+## D-036 — Household shared-PC gaming is the product north star
+
+HydraSeat is not being built only as an input-isolation research harness. The product target is a household/friend shared-PC experience in which one sufficiently capable Windows gaming PC can become two or more simultaneous local gaming stations while preserving ordinary local-monitor performance and a clear path back to normal Windows.
+
+The roadmap must preserve these user outcomes:
+
+- two or more Seats can run different games/applications concurrently;
+- a Seat may use one or multiple monitors and its own keyboard, mouse, controller, and audio endpoints;
+- separate instances of the same multiplayer title are supported only when the exact game version, launcher/provider, account/license rules, single-instance behavior, and compatibility profile permit it;
+- HydraSeat never bypasses DRM, anti-cheat, account restrictions, launcher restrictions, protected processes, or single-instance protections to create same-title support;
+- setup, Start, Stop / Return to Windows, Reconfigure, diagnostics, and recovery must be understandable to a non-developer;
+- the added CPU/memory/input-latency overhead must be measured and low enough that sharing available machine headroom remains useful for gaming.
+
+When technical choices are otherwise equivalent, prefer the path that improves a reproducible two-Seat household workflow over a research-only capability that cannot be integrated into the user journey.
+
+## D-037 — Public open-source distribution is a gated product objective
+
+The intended long-term distribution model is a broadly reusable open-source project with public documentation, compatibility evidence, contribution-friendly profiles, and a community extension ecosystem.
+
+That intent does not change the repository's current legal state. Until a tracked project license and contribution terms are resolved:
+
+- documentation must not claim that the repository is already open source;
+- external code contributions and third-party source reuse must follow D-025 and `docs/CLEAN_ROOM_POLICY.md`;
+- release/community tooling may be designed for future public use, but redistribution rights must not be assumed;
+- P10-LIC-01 remains the formal release gate for project license, contribution policy, notices, and provenance.
+
+After that gate is satisfied, package, SDK, compatibility-profile, documentation, and contribution workflows should minimize friction for lawful community adoption without weakening security, provenance, compatibility, or recovery requirements.
