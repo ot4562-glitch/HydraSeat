@@ -615,9 +615,9 @@ anti-cheat targets remain out of scope. See
    the shim.
 7. The polling and cursor/focus patch sets install as one all-or-rollback
    capability and uninstall in reverse order after in-flight calls drain.
-8. Strict portable component tests pass; Windows x64/x86 and cross-architecture
-   execution remains pending, so P3-API-03 is `CODE_COMPLETE`, not
-   `VALIDATED`.
+8. Strict portable component tests pass, and Windows CI run `32792381573`
+   validates x64/x86 24/24 CTest plus x64-host-to-x64/x86 ordinary-API,
+   no-cross-Seat, teardown, polling-regression, and global-state-preservation execution.
 
 ## Related documents
 

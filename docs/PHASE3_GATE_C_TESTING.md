@@ -27,12 +27,12 @@ process-internal IAT patching, fixed-width C diagnostics, exact unpatch, and
 x86/x64 artifact selection. Native x64/x86 CTest and the real x64-host-to-x64/x86
 ordinary-polling two-probe matrix all passed.
 
-P3-API-03 is `CODE_COMPLETE` on
-`feat/p3-api-03-cursor-focus-shim`. It extends the same startup-loaded shim
-with a bounded cursor/clip/logical-focus/capture allowlist, adapter ABI v2,
-ordinary-API self-tests, and host-native global-state-preservation checks.
-Strict portable component tests pass; Windows/MSVC x64/x86 and
-cross-architecture execution is pending and therefore not claimed.
+P3-API-03 is `VALIDATED` on `feat/p3-api-03-cursor-focus-shim` by Windows
+CI run `32792381573`. It extends the same startup-loaded shim with a bounded
+cursor/clip/logical-focus/capture allowlist and adapter ABI v2. Native x64 and
+Win32/x86 each passed 24/24 CTest, while the dedicated x64-host cross-architecture
+job passed both x64 and x86 ordinary-API, no-cross-Seat, teardown, polling-regression,
+and host-native global-state-preservation paths.
 
 This is not a general game hook or a completed Gate C implementation. The
 controlled targets still call HydraSeat's adapter API directly; only the
@@ -610,23 +610,22 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] Declared x86/x64 CTest and x64-host-to-x86-target CI jobs
 - [x] Windows/MSVC execution of the x86/x64 architecture matrix and x64-host-to-x86-target/probe self-tests (`32727711605`)
 - [x] P3-API-02 polling shim source, fixed C ABI, transactional IAT engine, architecture manifest, native x64/x86 tests, and cross-architecture ordinary-polling proof (`32780563364`)
+- [x] P3-API-03 cursor/clip/logical-focus/capture shim, adapter ABI v2, native x64/x86 24/24 CTest, cross-architecture two-probe isolation, and host-native global-state preservation (`32792381573`)
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Controlled Raw Input consumer that calls `RegisterRawInputDevices` / `GetRawInputData`
-- [ ] Windows validation of the code-complete cursor/focus/capture API shim
-      for the controlled probe (P3-API-03)
 - [ ] Adapter crash/watchdog recovery acceptance
 - [ ] Commercial non-anti-cheat game profile experiment
 - [ ] Physical device cloaking/suppression
 
 ## Next implementation step
 
-P3-API-03 is code-complete and remains the current validation target. Run the
-declared Windows/MSVC native x64, native x86, x64-host-to-x64/x86
-cursor/focus-shim matrix, global-state-preservation checks, and the complete
-polling/architecture regression suite before changing it to `VALIDATED`.
+P3-API-03 is `VALIDATED` by run `32792381573`. The next controlled slice is
+P3-RAW-01: record actual `RegisterRawInputDevices`, `WM_INPUT`,
+`GetRawInputData`, and `GetRawInputBuffer` behavior and produce stable fixtures
+before implementing any Raw Input interposition in P3-RAW-02.
 
 The two-probe process test releases Probe B's virtual capture while asserting
 that Probe A retains its own capture, then shuts down Probe A and re-queries

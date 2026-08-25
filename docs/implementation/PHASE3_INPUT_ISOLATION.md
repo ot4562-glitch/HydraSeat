@@ -204,7 +204,7 @@ Two controlled probes call the ordinary polling APIs and receive their own Seat 
 
 ## P3-API-03 — Cursor, clip, focus, and capture shim
 
-**State:** CODE_COMPLETE
+**State:** VALIDATED
 
 **Goal**
 
@@ -289,15 +289,15 @@ Controlled probes use the ordinary API calls and observe independent Seat-local 
   controlled process;
 - `ShowCursor` is explicitly deferred because its counter/thread contract is
   not defined by this packet;
-- strict portable component evidence is green. Native Windows/MSVC x64/x86,
-  cross-architecture, ordinary-API, and global-state-preservation execution is
-  still required before this packet may become `VALIDATED`.
+- strict portable component evidence is green. Windows CI run `32792381573`
+  validates native x64/x86 full CTest plus x64-host-to-x64/x86 ordinary-API,
+  no-cross-Seat, rollback, and host-native global-state-preservation execution.
 
 ---
 
 ## P3-RAW-01 — Controlled Raw Input behavior probe
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 

@@ -353,7 +353,7 @@ Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe
 当前默认 packet：
 
 ```text
-P3-API-03 — Cursor, clip, focus, and capture shim
+P3-RAW-01 — Controlled Raw Input behavior probe
 ```
 
 开始编码前阅读：

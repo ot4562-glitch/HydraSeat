@@ -425,7 +425,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-API-03 — Cursor, clip, focus, and capture shim
+P3-RAW-01 — Controlled Raw Input behavior probe
 ```
 
 Start every coding task by reading:

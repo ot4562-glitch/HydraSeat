@@ -72,7 +72,7 @@ Research:
 
 - [ ] Controlled probe records real OS polling/cursor/focus/Raw Input baseline (`P3-API-01`)
 - [x] Startup-loaded polling shim for HydraSeat-owned probes
-- [ ] Cursor/focus/capture shim for HydraSeat-owned probes
+- [x] Cursor/focus/capture shim for HydraSeat-owned probes
 - [ ] Raw Input registration/data behavior probe and virtualization shim
 - [x] x86/x64 controlled adapter matrix
 - [ ] XInput and DirectInput controlled/production routing

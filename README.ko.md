@@ -353,7 +353,7 @@ Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled prob
 현재 기본 packet:
 
 ```text
-P3-API-03 — Cursor, clip, focus, and capture shim
+P3-RAW-01 — Controlled Raw Input behavior probe
 ```
 
 작업 시작 전:
