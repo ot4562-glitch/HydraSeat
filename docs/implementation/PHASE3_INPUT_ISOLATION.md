@@ -297,7 +297,7 @@ Controlled probes use the ordinary API calls and observe independent Seat-local 
 
 ## P3-RAW-01 — Controlled Raw Input behavior probe
 
-**State:** READY
+**State:** VALIDATED
 
 **Goal**
 
@@ -341,11 +341,44 @@ P3-RAW-02 has a stable behavior specification and fixtures rather than assumptio
 
 `test: implement P3-RAW-01 Raw Input behavior probe`
 
+**Code-complete implementation note (2026-08-25)**
+
+- `hydra_gate_c_raw_input_probe.exe` is a separate HydraSeat-owned process; it
+  never shares Raw Input registration state with the production host or
+  `InputRouter`;
+- schema v1 is deterministic UTF-8 JSON with fixed-width runtime diagnostic
+  values, strict version/size/count checks, a synthetic parser fixture, and
+  separately generated observed-Windows traces;
+- native registration experiments cover keyboard/mouse foreground targets,
+  Window A-to-B replacement, independent usage mutation/removal,
+  `RIDEV_INPUTSINK`, `RIDEV_DEVNOTIFY`, their legal combination, destroyed
+  target observation, cleanup, and repeated process teardown;
+- `WM_INPUT` callbacks use pre-reserved bounded storage and one aligned fixed
+  scratch buffer. File serialization and optional stable device identity
+  resolution happen after callback processing;
+- `GetRawInputData` and `GetRawInputBuffer` record query/read sizes, errors,
+  headers, block offsets, pointer-width alignment, and explicit malformed or
+  overflow results without manufacturing a successful `HRAWINPUT`;
+- strict portable trace/parser and existing Gate C regression tests pass.
+- Windows CI run `32800513365` validates native x64 and Win32/x86 28/28 CTest,
+  repeated process teardown, and retained observed registration traces while the
+  existing Gate C cross-architecture job remains green;
+- both architectures observed the same registration contract: target replacement
+  is last-registration-wins per usage, removal deletes only that usage,
+  `RIDEV_INPUTSINK` is echoed by `GetRegisteredRawInputDevices`, while an accepted
+  `RIDEV_DEVNOTIFY` request is not echoed in the returned flags;
+- destroying the registered target HWND leaves its runtime value in the process's
+  registration snapshot until a fresh valid registration replaces it. x64 records
+  a 24-byte `RAWINPUTHEADER`/48-byte `RAWINPUT`; Win32/x86 records 16/40 bytes and
+  both paths use the documented 8-byte Raw Input buffer alignment policy;
+- CI observed no physical `WM_INPUT` or device change. Those remain P3-HW-01
+  evidence and are not implied by this packet's `VALIDATED` state.
+
 ---
 
 ## P3-RAW-02 — Controlled Raw Input virtualization shim
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 

@@ -195,7 +195,31 @@ is deferred.
 - synthetic Windows CI starts two processes and proves different A/B key edges, mouse state, cursor state and virtual foreground state do not cross between them;
 - the target displays virtual state beside actual OS foreground state to make the current limitation visible.
 
-The current target calls the adapter C ABI directly. Polling interposition is Windows-validated and cursor/focus interposition is code-complete pending native x64/x86 validation. Gate C remains incomplete until that validation passes and HydraSeat-owned probes cover the separate Raw Input surface. No commercial-process injection, physical suppression or anti-cheat interaction is implemented.
+The current target calls the adapter C ABI directly. Polling and cursor/focus
+interposition are Windows-validated. Gate C remains incomplete until the
+separate Raw Input surface, recovery, physical acceptance, and later declared
+compatibility gates pass. No commercial-process injection, physical
+suppression, or anti-cheat interaction is implemented.
+
+#### `hydra_gate_c_raw_input_probe`
+
+P3-RAW-01 keeps native Raw Input behavior measurement outside the production
+host. The standalone controlled process owns two test windows and only its own
+keyboard/mouse registrations. It records foreground/background registration,
+per-usage target replacement/removal, device notification, destroyed-window
+state, `WM_INPUT`, `GetRawInputData`, and `GetRawInputBuffer` boundaries in a
+bounded schema-v1 UTF-8 trace.
+
+The window procedure uses pre-reserved bounded memory and performs no pipe or
+file I/O. Runtime HWND/HANDLE/HRAWINPUT/hDevice values are fixed-width
+diagnostics, never stable identity; existing Phase 1 helpers may attach an
+optional device path and stable ID after callback processing. The committed
+parser fixture is explicitly synthetic. Windows run `32800513365` retained and
+validated separate x86/x64 observed traces: replacement is last-wins per usage,
+removal is usage-local, accepted `RIDEV_DEVNOTIFY` is not echoed in registered
+flags, and a destroyed target HWND remains as a runtime value until valid
+replacement. This component observes behavior only and supplies no Raw Input
+virtualization or isolation capability.
 
 See [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
 

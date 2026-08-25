@@ -398,12 +398,14 @@ Important boundary:
 
 - controlled targets call the adapter API directly;
 - HydraSeat-owned probes may opt into a startup-loaded, process-local IAT shim
-  for polling plus cursor/clip/logical-focus/capture APIs; cursor/focus Windows
-  x64/x86 validation is still pending;
+  for polling plus cursor/clip/logical-focus/capture APIs; both surfaces are
+  Windows-validated in controlled x64/x86 CI;
+- the standalone Raw Input behavior probe and bounded trace/parser are
+  code-complete, while native x64/x86 observed traces are still pending;
 - no detour, remote injection, driver control, physical suppression, or
   third-party/commercial-process patch is installed;
-- Gate C is not complete until the pending cursor/focus validation and later
-  controlled Raw Input API packets pass.
+- Gate C is not complete until the Raw Input, recovery, physical, and later
+  compatibility gates pass.
 
 See [Phase 3 Gate C controlled-process testing](docs/PHASE3_GATE_C_TESTING.md).
 
@@ -425,7 +427,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-RAW-01 — Controlled Raw Input behavior probe
+P3-RAW-02 — Controlled Raw Input virtualization shim
 ```
 
 Start every coding task by reading:
