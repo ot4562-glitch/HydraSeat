@@ -67,6 +67,7 @@ struct HostOptions {
     std::string tracePath{"hydra_gate_c_host.jsonl"};
     std::string metricsReportPath{"hydra_gate_c_metrics.json"};
     bool metricsDiagnostic{false};
+    bool traceSensitiveKeyIds{false};
     bool selfTest{false};
     bool architectureSelfTest{false};
     bool baselineSelfTest{false};
@@ -96,8 +97,10 @@ void printUsage(std::ostream& output) {
         << "  hydra_gate_c_host --protocol-error-self-test [--target <hydra_gate_c_target.exe>]\n"
         << "  hydra_gate_c_host [--profile <workspace_config.json>] [--trace <file.jsonl>]\n"
         << "                     [--metrics-report <file.json>] [--metrics-diagnostic]\n"
+        << "                     [--trace-sensitive-keys]\n"
         << "                     [--target <hydra_gate_c_target.exe>]\n\n"
         << "Metrics are redacted by default; --metrics-diagnostic retains key/button IDs.\n"
+        << "JSONL key identifiers are also redacted by default; --trace-sensitive-keys is a separate explicit opt-in.\n"
         << "The host launches only HydraSeat's controlled target executable. It does\n"
         << "not inject, hook, hide devices, or attach to a commercial game.\n";
 }
@@ -219,6 +222,8 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
             options.metricsReportPath = wideToUtf8(argv[++index]);
         } else if (argument == L"--metrics-diagnostic") {
             options.metricsDiagnostic = true;
+        } else if (argument == L"--trace-sensitive-keys") {
+            options.traceSensitiveKeyIds = true;
         } else if (argument == L"--self-test") {
             options.selfTest = true;
         } else if (argument == L"--architecture-self-test") {
@@ -2114,7 +2119,15 @@ private:
                       << bindings.ambiguousSharedDevices.size() << '\n';
         }
 
-        hydra::InputTraceWriter trace(m_options.tracePath);
+        hydra::InputTraceWriter trace(
+            m_options.tracePath,
+            m_options.traceSensitiveKeyIds
+                ? hydra::InputTracePrivacyMode::DiagnosticKeyIds
+                : hydra::InputTracePrivacyMode::Redacted);
+        if (m_options.traceSensitiveKeyIds) {
+            std::cerr
+                << "WARNING: --trace-sensitive-keys is enabled; JSONL trace records may reveal typed virtual-key identifiers.\n";
+        }
         hydra::InputRouter router;
         router.setGlobalCallback([&](const RawInputEvent& event) {
             hydra::InputMetricSample physical;

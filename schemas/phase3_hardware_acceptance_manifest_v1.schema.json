@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hydraseat.invalid/schemas/phase3_hardware_acceptance_manifest_v1.schema.json",
+  "title": "HydraSeat Phase 3 Hardware Acceptance Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "session_id",
+    "created_utc",
+    "updated_utc",
+    "state",
+    "privacy",
+    "environment",
+    "profile",
+    "stages",
+    "manual_verdict"
+  ],
+  "$defs": {
+    "manualCheck": {
+      "type": "string",
+      "enum": ["PENDING", "PASS", "FAIL", "NOT_APPLICABLE"]
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "category", "seat_id"],
+      "properties": {
+        "device_id": { "type": "string", "minLength": 1 },
+        "category": { "type": "string", "enum": ["keyboard", "mouse"] },
+        "seat_id": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "started_utc",
+        "ended_utc",
+        "duration_seconds",
+        "process_exit_code",
+        "trace",
+        "metrics_report",
+        "auxiliary_traces",
+        "manual_checks",
+        "notes"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["PENDING", "RUNNING", "RECORDED", "FAILED", "SKIPPED"]
+        },
+        "started_utc": { "type": ["string", "null"] },
+        "ended_utc": { "type": ["string", "null"] },
+        "duration_seconds": { "type": "number", "minimum": 0 },
+        "process_exit_code": { "type": ["integer", "null"] },
+        "trace": { "type": ["string", "null"] },
+        "metrics_report": { "type": ["string", "null"] },
+        "auxiliary_traces": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "manual_checks": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/manualCheck" }
+        },
+        "notes": { "type": "string" }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": { "const": 1 },
+    "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "created_utc": { "type": "string", "minLength": 1 },
+    "updated_utc": { "type": "string", "minLength": 1 },
+    "state": {
+      "type": "string",
+      "enum": ["IN_PROGRESS", "READY_FOR_REVIEW", "MANUAL_PASS", "MANUAL_FAIL"]
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sensitive_key_ids_enabled", "notice_acknowledged"],
+      "properties": {
+        "sensitive_key_ids_enabled": { "type": "boolean" },
+        "notice_acknowledged": { "type": "boolean" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["windows_version", "windows_build", "architecture", "hardware_notes"],
+      "properties": {
+        "windows_version": { "type": "string" },
+        "windows_build": { "type": "string" },
+        "architecture": { "type": "string" },
+        "hardware_notes": { "type": "string" }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_path",
+        "sha256",
+        "schema_version",
+        "expected_ownership",
+        "shareable_resources",
+        "shared_case"
+      ],
+      "properties": {
+        "source_path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+        "schema_version": { "const": 2 },
+        "expected_ownership": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/ownership" }
+        },
+        "shareable_resources": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "id"],
+            "properties": {
+              "type": { "type": "string" },
+              "id": { "type": "string" }
+            }
+          }
+        },
+        "shared_case": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["derived_profile", "sha256", "device_id", "category"],
+          "properties": {
+            "derived_profile": { "type": "string", "minLength": 1 },
+            "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+            "device_id": { "type": "string", "minLength": 1 },
+            "category": { "type": "string", "enum": ["keyboard", "mouse"] }
+          }
+        }
+      }
+    },
+    "stages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate_a", "gate_b", "gate_c"],
+      "properties": {
+        "gate_a": { "$ref": "#/$defs/stage" },
+        "gate_b": { "$ref": "#/$defs/stage" },
+        "gate_c": { "$ref": "#/$defs/stage" }
+      }
+    },
+    "manual_verdict": {
+      "type": "string",
+      "enum": ["PENDING", "PASS", "FAIL"]
+    },
+    "manual_verdict_note": { "type": "string" }
+  }
+}
