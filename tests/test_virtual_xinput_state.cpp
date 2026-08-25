@@ -80,6 +80,12 @@ void testSlotsMappingAndPacketSemantics() {
     check(context.mapLogicalSlot(5u, 3u, source(1u, 0u), 1u) ==
               VirtualXInputResult::DuplicateSource,
           "one context rejects duplicate source ownership");
+    check(context.mapLogicalSlot(5u, 3u, source(1u, 3u), 1u) ==
+              VirtualXInputResult::DuplicateSource,
+          "runtime slot hint changes cannot bypass duplicate source ownership");
+    check(sameControllerSourceIdentity(source(1u, 0u), source(1u, 3u)) &&
+              source(1u, 0u) != source(1u, 3u),
+          "opaque source identity is independent from its runtime slot hint");
 
     VirtualXInputContext packetContext;
     const auto a = source(101u, 0u);

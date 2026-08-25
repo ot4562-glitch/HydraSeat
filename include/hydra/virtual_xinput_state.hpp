@@ -155,6 +155,9 @@ constexpr std::uint32_t nextXInputPacketNumber(
 
 bool validControllerSourceIdentity(
     const ControllerSourceIdentity& source) noexcept;
+bool sameControllerSourceIdentity(
+    const ControllerSourceIdentity& left,
+    const ControllerSourceIdentity& right) noexcept;
 bool validXInputCapabilities(
     const NormalizedXInputCapabilities& capabilities) noexcept;
 bool validXInputBattery(const NormalizedXInputBattery& battery) noexcept;

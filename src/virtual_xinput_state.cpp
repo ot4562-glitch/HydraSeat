@@ -23,6 +23,12 @@ bool validControllerSourceIdentity(
            validRuntimeSlot(source.runtimeXInputSlotHint);
 }
 
+bool sameControllerSourceIdentity(
+    const ControllerSourceIdentity& left,
+    const ControllerSourceIdentity& right) noexcept {
+    return left.kind == right.kind && left.sourceKey == right.sourceKey;
+}
+
 bool validXInputCapabilities(
     const NormalizedXInputCapabilities& capabilities) noexcept {
     if (capabilities.type != XInputCapabilityType::Gamepad) {
@@ -74,7 +80,8 @@ VirtualXInputContext::Slot* VirtualXInputContext::findSource(
     const ControllerSourceIdentity& source) noexcept {
     const auto found = std::find_if(
         m_slots.begin(), m_slots.end(), [&](const Slot& slot) {
-            return slot.mapped && slot.mapping.source == source;
+            return slot.mapped &&
+                   sameControllerSourceIdentity(slot.mapping.source, source);
         });
     return found == m_slots.end() ? nullptr : &*found;
 }
@@ -83,7 +90,8 @@ const VirtualXInputContext::Slot* VirtualXInputContext::findSource(
     const ControllerSourceIdentity& source) const noexcept {
     const auto found = std::find_if(
         m_slots.begin(), m_slots.end(), [&](const Slot& slot) {
-            return slot.mapped && slot.mapping.source == source;
+            return slot.mapped &&
+                   sameControllerSourceIdentity(slot.mapping.source, source);
         });
     return found == m_slots.end() ? nullptr : &*found;
 }
@@ -127,7 +135,8 @@ VirtualXInputResult VirtualXInputContext::mapLogicalSlot(
     }
     for (std::size_t index = 0; index < m_slots.size(); ++index) {
         if (index != logicalSlot && m_slots[index].mapped &&
-            m_slots[index].mapping.source == source) {
+            sameControllerSourceIdentity(
+                m_slots[index].mapping.source, source)) {
             return VirtualXInputResult::DuplicateSource;
         }
     }
