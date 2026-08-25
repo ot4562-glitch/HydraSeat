@@ -56,11 +56,11 @@ std::optional<std::uint32_t> parsePositiveU32(std::string_view text) {
     for (const char character : text) {
         if (character < '0' || character > '9') return std::nullopt;
         const auto digit = static_cast<unsigned>(character - '0');
-        if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10u) {
+        if (value > ((std::numeric_limits<std::uint64_t>::max)() - digit) / 10u) {
             return std::nullopt;
         }
         value = value * 10u + digit;
-        if (value > std::numeric_limits<std::uint32_t>::max()) return std::nullopt;
+        if (value > (std::numeric_limits<std::uint32_t>::max)()) return std::nullopt;
     }
     if (value == 0) return std::nullopt;
     return static_cast<std::uint32_t>(value);
