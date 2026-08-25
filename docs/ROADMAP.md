@@ -5,7 +5,7 @@ This file is the phase-level summary. The implementation source of truth is the 
 Current default implementation packet:
 
 ```text
-P3-CTRL-02 — DirectInput enumeration and visibility adapter
+P3-MET-01 — Input latency, queue, and bleed metrics
 ```
 
 Validate the roadmap with:
@@ -77,7 +77,7 @@ Research:
 - [x] Raw Input virtualization shim (`P3-RAW-02`)
 - [x] x86/x64 controlled adapter matrix
 - [x] Controlled normalized XInput state/remapping correctness remediation (`P3-CTRL-01`; fork PR #15 run `32832036967` validates native x64/x86 36/36 and x64-host-to-x64/x86 zero-cross controller acceptance)
-- [ ] Controlled DirectInput enumeration/order/visibility adapter (`P3-CTRL-02`; `CODE_COMPLETE` locally, native Windows x64/x86 DirectInput 8 validation pending)
+- [x] Controlled DirectInput enumeration/order/visibility adapter (`P3-CTRL-02`; fork PR #16 run `32840474306` validates native x64/x86 controlled policy/probes and read-only DirectInput 8 observation)
 - [ ] Production controller polling/routing and physical vibration evidence (later profile/runtime work)
 - [ ] Input latency, queue, drop, and cross-Seat metrics
 - [ ] Physical Gate A/B/C acceptance with two input sets

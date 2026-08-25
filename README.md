@@ -440,7 +440,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-CTRL-02 — DirectInput enumeration and visibility adapter
+P3-MET-01 — Input latency, queue, and bleed metrics
 ```
 
 Start every coding task by reading:

@@ -852,7 +852,7 @@ A later implementation may coalesce relative mouse movement while preserving key
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Physical keyboard/mouse `WM_INPUT` and actual device-change trace (P3-HW-01)
-- [ ] P3-CTRL-02 controlled DirectInput enumeration/order/visibility acceptance: portable policy/two-probe/planner regressions pass locally; native Windows x64/x86 `DirectInput8Create`/`EnumDevices` CTest pending
+- [x] P3-CTRL-02 controlled DirectInput enumeration/order/visibility acceptance: fork PR #16 run `32840474306` passed native Windows x64/x86 full CTest, including both controlled views and read-only `DirectInput8Create`/`EnumDevices` observation
 - [ ] Physical controller polling/routing/vibration evidence
 
 - [ ] Adapter crash/watchdog recovery acceptance
@@ -870,11 +870,11 @@ Physical `WM_INPUT` and device-change evidence remains P3-HW-01. P3-CTRL-01 is
 `VALIDATED` after the generation/snapshot remediation by fork PR #15 run
 `32832036967`; run `32816241577` remains pre-fix evidence only. Physical
 controller polling/routing/vibration remains a separate manual/production
-concern. P3-CTRL-02 is `CODE_COMPLETE` locally with a bounded stable-instance
+concern. P3-CTRL-02 is `VALIDATED` by fork PR #16 run `32840474306`; its bounded stable-instance
 GUID visibility/order policy, two HydraSeat-owned controlled probe views, and a
 read-only Windows DirectInput 8 observation test wired into ordinary x64/x86
-CTest. Native Windows execution is still pending, so the packet is not yet
-`VALIDATED` and production DirectInput interposition does not start from this
+CTest passed in both native x64 and Win32/x86 jobs, while the existing Gate C
+cross-architecture regression job stayed green. Production DirectInput interposition does not start from this
 state.
 
 The two-probe process test releases Probe B's virtual capture while asserting

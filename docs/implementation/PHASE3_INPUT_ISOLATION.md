@@ -595,7 +595,7 @@ Controlled targets have independent, queryable XInput-style state and the planne
 
 ## P3-CTRL-02 — DirectInput enumeration and visibility adapter
 
-**State:** CODE_COMPLETE
+**State:** VALIDATED
 
 **Goal**
 
@@ -639,7 +639,7 @@ Two controlled probes enumerate only their declared DirectInput devices in deter
 - the Windows-only observation mode uses `DirectInput8Create` and `IDirectInput8W::EnumDevices(DI8DEVCLASS_GAMECTRL, ..., DIEDFL_ATTACHEDONLY)` read-only; it does not create/acquire devices, change cooperative level, send force feedback, hide devices, replace `dinput8.dll`, or touch SDL/Raw HID;
 - `GameCompatibilityProfile` now carries ordered DirectInput instance IDs, while planner tests prove controlled visibility/order still does not satisfy `PhysicalInputSuppression` or production zero-bleed requirements;
 - strict GCC 15 `-Werror` component/probe/planner builds pass, focused DirectInput CTest passes 3/3, and the selected Phase 3 portable regression set passes 21/21 including plan CLI observation, XInput, Raw Input, Gate C protocol/ABI/shims, and target tests;
-- native Windows x64/x86 MSVC/CTest execution is still required, so this packet is `CODE_COMPLETE`, not `VALIDATED`.
+- fork PR #16 run `32840474306` validated head `f52535bdb160aa58006c694e86d536cca3d88529` on Windows Server 2025 / MSVC: native x64 and Win32/x86 full CTest jobs both passed, including the two controlled views and read-only `DirectInputNativeObservationSelfTest`; the existing Gate C cross-architecture job also remained green.
 
 **Clean-room evidence**
 

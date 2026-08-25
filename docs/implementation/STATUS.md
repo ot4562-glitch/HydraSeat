@@ -3,9 +3,9 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-CTRL-02 — DirectInput enumeration and visibility adapter**
+- Current default packet: **P3-MET-01 — Input latency, queue, and bleed metrics**
 - Current validated fork-main baseline: `e2f01da08173e5150d9e9e729197847df4588a31` (merged P3-CTRL-01)
-- Current validated Windows CI evidence: fork-side PR #15 run `32832036967` validates remediation head `b351afdd60236b953d913b8488a5e350f705faec` against fork `main`: native x64 and Win32/x86 each passed 36/36 CTest, and x64-host-to-x64/x86 controlled XInput acceptance reported state/capability/battery/vibration expected=2 per Seat, every cross counter=0, `api_failures=0`, `stale_accepted=0`, and clean repeated child teardown
+- Current validated Windows CI evidence: fork-side PR #16 run `32840474306` validates P3-CTRL-02 head `f52535bdb160aa58006c694e86d536cca3d88529` against fork `main` via merge ref `98903728bf680e56cdc0c3f36f16ffdea7e2f991`: native x64 and Win32/x86 full CTest jobs both passed, including the controlled DirectInput policy/probe tests and read-only `DirectInputNativeObservationSelfTest`; the existing Gate C cross-architecture regression job also passed
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -44,7 +44,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
 | P3-HW-01 Gate A/B/C physical acceptance runner | READY | P3-QUEUE-01 | User-run two-keyboard/two-pointing-device traces and report |
 | P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Remediation head `b351afdd` validated by fork PR #15 run `32832036967`: native x64/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance |
-| P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | CODE_COMPLETE | P3-CTRL-01, P3-ARCH-01 | Bounded instance-GUID policy, ordered allowlist, two controlled probes, profile field, and read-only Windows DirectInput 8 observation probe implemented; strict portable regressions pass, native x64/x86 MSVC/CTest pending |
+| P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | VALIDATED | P3-CTRL-01, P3-ARCH-01 | Fork PR #16 run `32840474306`: native x64 and Win32/x86 full CTest passed with controlled DirectInput policy/probes plus read-only `DirectInputNativeObservationSelfTest`; Gate C cross-architecture regressions stayed green |
 | P3-D-01 HidHide read-only availability/capability probe | READY | P3-PLAN-01 | No mutation; exact installed/version/control-interface report |
 | P3-D-02 Guarded HidHide session-cloak lab | BLOCKED | P3-REC-01, P3-D-01 | Spare input/watchdog/timeout/crash rollback and physical evidence |
 | P3-E-01 Open-source non-protected application profile | BLOCKED | P3-RAW-02, P3-API-03 | Reproducible profile and measured no-cross-state result |
@@ -204,9 +204,9 @@ Next packet: P3-CTRL-02 is READY for a separate DirectInput enumeration/visibili
 
 ### 2026-08-25 — P3-CTRL-02
 
-State: CODE_COMPLETE
-Branch/commit: `feat/p3-ctrl-02-directinput-visibility`; implementation commit `084043b` (`feat: implement P3-CTRL-02 DirectInput visibility policy`)
-Windows CI: pending. Native x64 and Win32/x86 MSVC full CTest must execute `DirectInputNativeObservationSelfTest` before this packet may become `VALIDATED`.
+State: VALIDATED
+Branch/commit: `feat/p3-ctrl-02-directinput-visibility`; implementation commit `084043b` (`feat: implement P3-CTRL-02 DirectInput visibility policy`), pre-validation evidence head `f52535bdb160aa58006c694e86d536cca3d88529`; fork PR #16
+Windows CI: fork PR #16 run `32840474306` validated head `f52535bdb160aa58006c694e86d536cca3d88529` against fork `main` via merge ref `98903728bf680e56cdc0c3f36f16ffdea7e2f991`. Native x64 and Win32/x86 full CTest jobs both passed, including `DirectInputPolicyTests`, `DirectInputControlledSeatA`, `DirectInputControlledSeatB`, and the read-only `DirectInputNativeObservationSelfTest`; the existing Gate C cross-architecture regression job also passed.
 Automated tests:
 - new portable `hydra_directinput_policy` and `hydra_directinput_probe` build under GCC 15 with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror`;
 - focused DirectInput CTest passes 3/3: policy, controlled Seat A (`C,A`), controlled Seat B (`B`), with calculated `cross_visible=0`;
@@ -217,20 +217,20 @@ Manual evidence: none claimed. Real physical DirectInput controller behavior, ph
 Known limitations: the Windows probe is read-only and calls only `DirectInput8Create` plus attached-game-controller `EnumDevices`; it does not implement a `dinput8.dll` proxy, COM API interposition, `CreateDevice`, device acquire/state, cooperative level, force feedback, or physical mutation.
 Clean-room evidence: implementation used the packet/design specification and official Microsoft DirectInput 8 documentation for `IDirectInput8::EnumDevices`, `DIDEVICEINSTANCE`, and `DIEnumDevicesCallback`; no unlicensed devreorder/Duo implementation source was copied, translated, or consulted while writing the component.
 Rollback result: this slice owns only process-local vectors/policy state and a read-only COM enumeration object; no persistent/device state is changed, so teardown is ordinary object/process destruction.
-Next packet: remain on P3-CTRL-02 until fresh native Windows x64/x86 validation is recorded. Do not start production DirectInput interposition or another packet from this evidence.
+Next packet: P3-MET-01 is READY and becomes the default packet. Keep production DirectInput interposition, physical hiding/suppression, SDL/Raw HID, and game support outside P3-MET-01.
 
 ## Next Codex task
 
 Use:
 
 ```text
-Validate P3-CTRL-02 exactly as specified in
+Implement P3-MET-01 exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Run fresh Windows x64 and Win32/x86 MSVC/CTest for the controlled DirectInput
-policy/probes, including the read-only native DirectInput 8 observation test.
-Keep the packet `CODE_COMPLETE` if native Windows evidence is absent or fails;
-do not start production interposition, physical hiding, SDL/Raw HID, or another
-packet until the required P3-CTRL-02 validation evidence is recorded.
+Implement only the input latency, bounded queue/drop, and cross-Seat bleed
+measurement harness and its machine-readable report contract. Reuse existing
+sequence/Seat/process identities, keep measurement overhead bounded, and do not
+implement physical suppression, device cloaking, game profiles, or later packets.
+
 
 ```

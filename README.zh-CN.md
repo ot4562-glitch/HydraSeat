@@ -353,7 +353,7 @@ Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe
 当前默认 packet：
 
 ```text
-P3-CTRL-02 — DirectInput enumeration/visibility adapter
+P3-MET-01 — 输入延迟、队列与串扰测量
 ```
 
 开始编码前阅读：
