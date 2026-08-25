@@ -445,6 +445,8 @@ Implemented foundation:
 - a code-complete startup-loaded polling shim that transactionally patches
   only the controlled probe's three allowlisted IAT entries and restores them
   before unload;
+- a code-complete cursor/clip/logical-focus/capture extension in that same
+  startup-loaded shim, pending native Windows validation;
 - bounded per-target writer queues for interactive Raw Input routing;
 - orderly shutdown and force-termination cleanup for controlled child processes.
 
@@ -453,8 +455,8 @@ Remaining Gate C pass criteria:
 - run physical Seat-owned keyboards/mice through the controlled target processes;
 - validate x64/x86 HydraSeat-owned probe processes observing Seat-local values
   through the ordinary polling APIs;
-- make controlled probes observe Seat-local values through the actual Raw
-  Input, cursor and focus API surfaces;
+- validate controlled probes observing Seat-local values through the actual
+  cursor/focus API surface, then implement the separate Raw Input packets;
 - prove adapter/host/target failure leaves no orphan child or persistent global state;
 - confirm no global cursor clipping and no physical suppression are performed during Gate C;
 - keep anti-cheat/protected and commercial targets out of scope until all controlled criteria pass.
@@ -583,10 +585,39 @@ x64/x86 and x64-host-to-x64/x86 controlled target/probe evidence.
    `32780563364` also passes native x64/x86 and x64-host-to-x64/x86
    polling-probe execution, so P3-API-02 is `VALIDATED`.
 
-Gate C remains incomplete until later controlled probes cover Raw Input plus
-cursor/focus surfaces while preserving the validated polling-shim behavior. Commercial games, physical
-device cloaking and anti-cheat targets remain out of scope. See
+Gate C remains incomplete until Windows validation confirms the cursor/focus
+surface and later packets cover Raw Input while preserving the validated
+polling-shim behavior. Commercial games, physical device cloaking and
+anti-cheat targets remain out of scope. See
 [PHASE3_GATE_C_TESTING.md](PHASE3_GATE_C_TESTING.md).
+
+### Gate C controlled cursor/focus-shim slice
+
+1. The same `hydra_gate_c_shim.dll` owns polling plus cursor/focus lifecycle;
+   there is no competing DLL patching the controlled probe.
+2. A closed ten-function USER32/NTUSER named-import allowlist covers
+   `GetCursorPos`, `SetCursorPos`, `ClipCursor`, `GetClipCursor`,
+   `GetForegroundWindow`, `GetActiveWindow`, `GetFocus`, `GetCapture`,
+   `SetCapture`, and `ReleaseCapture`. `ShowCursor` is deferred.
+3. Adapter ABI v2 retains the existing process-local cursor/clip state and
+   adds fixed-width transient target/foreground/active/focus/capture runtime
+   window values. No raw pointer is persisted or transported as identity.
+4. Controlled v1 uses signed 32-bit logical screen coordinates exactly as
+   supplied by the probe. It performs no inferred DPI, physical-pixel, or
+   client-coordinate conversion. Clip right/bottom are exclusive; invalid
+   rectangles fail without mutation and enabled clips clamp the cursor.
+5. Logical foreground, active, and focus share one current-process-owned
+   controlled target in v1. Capture may use another validated window owned by
+   that process. Stale, destroyed, or foreign windows never fall back to the
+   native global state.
+6. Active setters mutate adapter state only. Native global cursor, clip,
+   foreground, and capture are host-side diagnostics and are not changed by
+   the shim.
+7. The polling and cursor/focus patch sets install as one all-or-rollback
+   capability and uninstall in reverse order after in-flight calls drain.
+8. Strict portable component tests pass, and Windows CI run `32792381573`
+   validates x64/x86 24/24 CTest plus x64-host-to-x64/x86 ordinary-API,
+   no-cross-Seat, teardown, polling-regression, and global-state-preservation execution.
 
 ## Related documents
 

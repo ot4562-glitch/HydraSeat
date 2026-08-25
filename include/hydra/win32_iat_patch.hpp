@@ -15,15 +15,42 @@ enum class PollingImport : std::uint8_t {
     GetKeyboardState = 2
 };
 
+enum class CursorFocusImport : std::uint8_t {
+    GetCursorPos = 0,
+    SetCursorPos = 1,
+    ClipCursor = 2,
+    GetClipCursor = 3,
+    GetForegroundWindow = 4,
+    GetActiveWindow = 5,
+    GetFocus = 6,
+    GetCapture = 7,
+    SetCapture = 8,
+    ReleaseCapture = 9
+};
+
 inline constexpr std::size_t kPollingImportCount = 3;
 inline constexpr std::uint32_t kPollingImportMask = 0x7u;
+inline constexpr std::size_t kCursorFocusImportCount = 10;
+inline constexpr std::uint32_t kCursorFocusImportMask = 0x3ffu;
 
 constexpr std::uint32_t pollingImportBit(PollingImport value) noexcept {
     return 1u << static_cast<std::uint32_t>(value);
 }
 
+constexpr std::uint32_t cursorFocusImportBit(
+    CursorFocusImport value) noexcept {
+    return 1u << static_cast<std::uint32_t>(value);
+}
+
 struct PollingIatSlot {
     PollingImport function{PollingImport::GetAsyncKeyState};
+    std::uintptr_t* address{nullptr};
+    std::uintptr_t original{0};
+    std::uintptr_t replacement{0};
+};
+
+struct CursorFocusIatSlot {
+    CursorFocusImport function{CursorFocusImport::GetCursorPos};
     std::uintptr_t* address{nullptr};
     std::uintptr_t original{0};
     std::uintptr_t replacement{0};
@@ -89,6 +116,24 @@ private:
     bool m_installed{false};
 };
 
+class CursorFocusIatPatchSet {
+public:
+    IatPatchReport install(std::span<const CursorFocusIatSlot> slots,
+                           IatSlotWriter writer,
+                           void* writerContext = nullptr);
+    IatPatchReport uninstall(IatSlotWriter writer,
+                             void* writerContext = nullptr);
+
+    bool installed() const noexcept { return m_installed; }
+    const std::vector<CursorFocusIatSlot>& records() const noexcept {
+        return m_records;
+    }
+
+private:
+    std::vector<CursorFocusIatSlot> m_records;
+    bool m_installed{false};
+};
+
 IatWriteResult writeProcessIatSlot(
     std::uintptr_t* address,
     std::uintptr_t expected,
@@ -98,5 +143,9 @@ IatWriteResult writeProcessIatSlot(
 IatPatchReport discoverCurrentProcessPollingImports(
     const std::array<std::uintptr_t, kPollingImportCount>& replacements,
     std::vector<PollingIatSlot>& slots);
+
+IatPatchReport discoverCurrentProcessCursorFocusImports(
+    const std::array<std::uintptr_t, kCursorFocusImportCount>& replacements,
+    std::vector<CursorFocusIatSlot>& slots);
 
 } // namespace hydra::gatec

@@ -12,6 +12,12 @@ _Static_assert(sizeof(HydraGateCAdapterControlStateV1) ==
 _Static_assert(sizeof(HydraGateCAdapterSnapshotV1) ==
                    HYDRA_GATE_C_ADAPTER_SNAPSHOT_V1_BYTES,
                "Gate C snapshot ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterClipRectV2) ==
+                   HYDRA_GATE_C_ADAPTER_CLIP_RECT_V2_BYTES,
+               "Gate C clip ABI size changed");
+_Static_assert(sizeof(HydraGateCAdapterWindowStateV2) ==
+                   HYDRA_GATE_C_ADAPTER_WINDOW_STATE_V2_BYTES,
+               "Gate C window ABI size changed");
 
 int main(void) {
     if (hydra_gate_c_adapter_api_version() !=
@@ -24,6 +30,17 @@ int main(void) {
     if (handle == NULL) {
         fputs("Gate C adapter context creation failed.\n", stderr);
         return 2;
+    }
+
+    HydraGateCAdapterWindowStateV2 windows = {0};
+    windows.struct_size = (uint32_t)sizeof(windows);
+    windows.api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+    windows.process_id = 1234u;
+    windows.target_window = 0x1234u;
+    if (hydra_gate_c_adapter_configure_window_state(handle, &windows) !=
+        HYDRA_GATE_C_ADAPTER_OK) {
+        hydra_gate_c_adapter_destroy(handle);
+        return 6;
     }
 
     HydraGateCAdapterControlStateV1 control = {0};
@@ -53,6 +70,17 @@ int main(void) {
         queried.virtual_foreground != 1u) {
         hydra_gate_c_adapter_destroy(handle);
         return 5;
+    }
+
+    windows = (HydraGateCAdapterWindowStateV2){0};
+    windows.struct_size = (uint32_t)sizeof(windows);
+    if (hydra_gate_c_adapter_get_window_state(handle, &windows) !=
+            HYDRA_GATE_C_ADAPTER_OK ||
+        windows.api_version != HYDRA_GATE_C_ADAPTER_API_VERSION ||
+        windows.target_window != 0x1234u ||
+        windows.logical_foreground_window != 0x1234u) {
+        hydra_gate_c_adapter_destroy(handle);
+        return 7;
     }
 
     hydra_gate_c_adapter_destroy(handle);

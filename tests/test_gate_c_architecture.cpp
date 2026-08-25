@@ -28,6 +28,10 @@ static_assert(sizeof(HydraGateCAdapterControlStateV1) ==
               HYDRA_GATE_C_ADAPTER_CONTROL_STATE_V1_BYTES);
 static_assert(sizeof(HydraGateCAdapterSnapshotV1) ==
               HYDRA_GATE_C_ADAPTER_SNAPSHOT_V1_BYTES);
+static_assert(sizeof(HydraGateCAdapterClipRectV2) ==
+              HYDRA_GATE_C_ADAPTER_CLIP_RECT_V2_BYTES);
+static_assert(sizeof(HydraGateCAdapterWindowStateV2) ==
+              HYDRA_GATE_C_ADAPTER_WINDOW_STATE_V2_BYTES);
 
 void check(bool condition, std::string_view message) {
     if (!condition) {

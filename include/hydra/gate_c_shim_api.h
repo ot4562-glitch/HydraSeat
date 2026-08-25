@@ -20,13 +20,28 @@
 extern "C" {
 #endif
 
-#define HYDRA_GATE_C_SHIM_API_VERSION 1u
+#define HYDRA_GATE_C_SHIM_API_VERSION 2u
 #define HYDRA_GATE_C_SHIM_CONFIG_V1_BYTES 24u
+#define HYDRA_GATE_C_SHIM_CONFIG_V2_BYTES 32u
 #define HYDRA_GATE_C_SHIM_STATUS_V1_BYTES 60u
 #define HYDRA_GATE_C_SHIM_GET_ASYNC_KEY_STATE_BIT 0x00000001u
 #define HYDRA_GATE_C_SHIM_GET_KEY_STATE_BIT 0x00000002u
 #define HYDRA_GATE_C_SHIM_GET_KEYBOARD_STATE_BIT 0x00000004u
 #define HYDRA_GATE_C_SHIM_POLLING_API_MASK 0x00000007u
+#define HYDRA_GATE_C_SHIM_GET_CURSOR_POS_BIT 0x00000008u
+#define HYDRA_GATE_C_SHIM_SET_CURSOR_POS_BIT 0x00000010u
+#define HYDRA_GATE_C_SHIM_CLIP_CURSOR_BIT 0x00000020u
+#define HYDRA_GATE_C_SHIM_GET_CLIP_CURSOR_BIT 0x00000040u
+#define HYDRA_GATE_C_SHIM_GET_FOREGROUND_WINDOW_BIT 0x00000080u
+#define HYDRA_GATE_C_SHIM_GET_ACTIVE_WINDOW_BIT 0x00000100u
+#define HYDRA_GATE_C_SHIM_GET_FOCUS_BIT 0x00000200u
+#define HYDRA_GATE_C_SHIM_GET_CAPTURE_BIT 0x00000400u
+#define HYDRA_GATE_C_SHIM_SET_CAPTURE_BIT 0x00000800u
+#define HYDRA_GATE_C_SHIM_RELEASE_CAPTURE_BIT 0x00001000u
+#define HYDRA_GATE_C_SHIM_CURSOR_FOCUS_API_MASK 0x00001ff8u
+#define HYDRA_GATE_C_SHIM_ALL_API_MASK 0x00001fffu
+#define HYDRA_GATE_C_SHIM_ENABLE_CURSOR_FOCUS 0x00000001u
+#define HYDRA_GATE_C_SHIM_CONFIG_FLAGS_MASK 0x00000001u
 #define HYDRA_GATE_C_SHIM_MODULE_CURRENT_EXECUTABLE 1u
 
 typedef enum HydraGateCShimResult {
@@ -66,6 +81,16 @@ typedef struct HydraGateCShimConfigV1 {
     uint32_t reserved0;
 } HydraGateCShimConfigV1;
 
+typedef struct HydraGateCShimConfigV2 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint32_t seat_id;
+    uint32_t process_id;
+    uint32_t flags;
+    uint32_t reserved0;
+    uint64_t target_window;
+} HydraGateCShimConfigV2;
+
 typedef struct HydraGateCShimStatusV1 {
     uint32_t struct_size;
     uint32_t api_version;
@@ -93,7 +118,7 @@ hydra_gate_c_shim_api_version(void);
 HYDRA_GATE_C_SHIM_API HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL
 hydra_gate_c_shim_install(
     HydraGateCAdapterHandle adapter,
-    const HydraGateCShimConfigV1* config);
+    const HydraGateCShimConfigV2* config);
 
 HYDRA_GATE_C_SHIM_API HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL
 hydra_gate_c_shim_mark_adapter_unavailable(void);

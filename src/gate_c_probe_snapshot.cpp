@@ -204,7 +204,8 @@ bool validate(const ProbeComparison& comparison, std::string& error) {
         comparison.adapter.keyStateResult > kMaximumAdapterResult ||
         comparison.adapter.keyboardStateResult > kMaximumAdapterResult ||
         comparison.adapter.controlStateResult > kMaximumAdapterResult ||
-        comparison.adapter.mouseStateResult > kMaximumAdapterResult) {
+        comparison.adapter.mouseStateResult > kMaximumAdapterResult ||
+        comparison.adapter.windowStateResult > kMaximumAdapterResult) {
         error = "adapter result code is invalid";
         return false;
     }
@@ -217,8 +218,11 @@ bool validate(const ProbeComparison& comparison, std::string& error) {
         expected.cursorMatches != comparison.cursorMatches ||
         expected.clipRectangleMatches != comparison.clipRectangleMatches ||
         expected.foregroundMatches != comparison.foregroundMatches ||
+        expected.activeMatches != comparison.activeMatches ||
+        expected.focusMatches != comparison.focusMatches ||
         expected.captureMatches != comparison.captureMatches ||
         expected.osForegroundIsTarget != comparison.osForegroundIsTarget ||
+        expected.osActiveIsTarget != comparison.osActiveIsTarget ||
         expected.osFocusIsTarget != comparison.osFocusIsTarget ||
         expected.osCaptureIsTarget != comparison.osCaptureIsTarget) {
         error = "probe comparison fields are inconsistent";
@@ -240,6 +244,8 @@ void updateProbeComparison(ProbeComparison& comparison) noexcept {
         comparison.adapter.keyboardStateResult == kAdapterOk;
     const bool adapterControlStateValid =
         comparison.adapter.controlStateResult == kAdapterOk;
+    const bool adapterWindowStateValid =
+        comparison.adapter.windowStateResult == kAdapterOk;
     comparison.asyncDownMatches =
         adapterSnapshotValid &&
         keyDown(comparison.os.asyncKeyState) ==
@@ -265,19 +271,27 @@ void updateProbeComparison(ProbeComparison& comparison) noexcept {
     comparison.osForegroundIsTarget =
         comparison.os.foregroundWindowRuntimeValue ==
         comparison.targetWindowRuntimeValue;
+    comparison.osActiveIsTarget =
+        comparison.os.activeWindowRuntimeValue ==
+        comparison.targetWindowRuntimeValue;
     comparison.osFocusIsTarget =
         comparison.os.focusWindowRuntimeValue ==
         comparison.targetWindowRuntimeValue;
     comparison.osCaptureIsTarget =
         comparison.os.captureWindowRuntimeValue ==
         comparison.targetWindowRuntimeValue;
-    comparison.foregroundMatches =
-        adapterControlStateValid &&
-        comparison.osForegroundIsTarget ==
-        comparison.adapter.virtualForeground;
-    comparison.captureMatches =
-        adapterControlStateValid &&
-        comparison.osCaptureIsTarget == comparison.adapter.virtualCapture;
+    comparison.foregroundMatches = adapterWindowStateValid &&
+        comparison.os.foregroundWindowRuntimeValue ==
+            comparison.adapter.logicalForegroundWindowRuntimeValue;
+    comparison.activeMatches = adapterWindowStateValid &&
+        comparison.os.activeWindowRuntimeValue ==
+            comparison.adapter.logicalActiveWindowRuntimeValue;
+    comparison.focusMatches = adapterWindowStateValid &&
+        comparison.os.focusWindowRuntimeValue ==
+            comparison.adapter.logicalFocusWindowRuntimeValue;
+    comparison.captureMatches = adapterWindowStateValid &&
+        comparison.os.captureWindowRuntimeValue ==
+            comparison.adapter.virtualCaptureWindowRuntimeValue;
 }
 
 std::vector<std::byte> encodeProbeComparison(
@@ -317,6 +331,7 @@ std::vector<std::byte> encodeProbeComparison(
     writer.u32(comparison.os.clipRectangleError);
     writeRect(writer, comparison.os.clipRectangle);
     writer.u64(comparison.os.foregroundWindowRuntimeValue);
+    writer.u64(comparison.os.activeWindowRuntimeValue);
     writer.u64(comparison.os.focusWindowRuntimeValue);
     writer.u64(comparison.os.captureWindowRuntimeValue);
 
@@ -325,6 +340,7 @@ std::vector<std::byte> encodeProbeComparison(
     writer.u32(comparison.adapter.keyboardStateResult);
     writer.u32(comparison.adapter.controlStateResult);
     writer.u32(comparison.adapter.mouseStateResult);
+    writer.u32(comparison.adapter.windowStateResult);
     writer.u64(comparison.adapter.lastAppliedSequence);
     writer.u16(comparison.adapter.asyncKeyState);
     writer.u16(comparison.adapter.keyState);
@@ -340,6 +356,11 @@ std::vector<std::byte> encodeProbeComparison(
     writer.boolean(comparison.adapter.virtualCapture);
     writer.padding(1);
     writeRect(writer, comparison.adapter.clipRectangle);
+    writer.u64(comparison.adapter.targetWindowRuntimeValue);
+    writer.u64(comparison.adapter.logicalForegroundWindowRuntimeValue);
+    writer.u64(comparison.adapter.logicalActiveWindowRuntimeValue);
+    writer.u64(comparison.adapter.logicalFocusWindowRuntimeValue);
+    writer.u64(comparison.adapter.virtualCaptureWindowRuntimeValue);
 
     writer.boolean(comparison.asyncDownMatches);
     writer.boolean(comparison.keyStateDownMatches);
@@ -347,11 +368,14 @@ std::vector<std::byte> encodeProbeComparison(
     writer.boolean(comparison.cursorMatches);
     writer.boolean(comparison.clipRectangleMatches);
     writer.boolean(comparison.foregroundMatches);
+    writer.boolean(comparison.activeMatches);
+    writer.boolean(comparison.focusMatches);
     writer.boolean(comparison.captureMatches);
     writer.boolean(comparison.osForegroundIsTarget);
+    writer.boolean(comparison.osActiveIsTarget);
     writer.boolean(comparison.osFocusIsTarget);
     writer.boolean(comparison.osCaptureIsTarget);
-    writer.padding(2);
+    writer.padding(3);
 
     auto bytes = writer.take();
     if (bytes.size() != kProbeSnapshotWireBytes ||
@@ -425,6 +449,7 @@ ProbeSnapshotDecodeResult decodeProbeComparison(
         !reader.u32(comparison.os.clipRectangleError) ||
         !readRect(reader, comparison.os.clipRectangle) ||
         !reader.u64(comparison.os.foregroundWindowRuntimeValue) ||
+        !reader.u64(comparison.os.activeWindowRuntimeValue) ||
         !reader.u64(comparison.os.focusWindowRuntimeValue) ||
         !reader.u64(comparison.os.captureWindowRuntimeValue) ||
         !reader.u32(comparison.adapter.snapshotResult) ||
@@ -432,6 +457,7 @@ ProbeSnapshotDecodeResult decodeProbeComparison(
         !reader.u32(comparison.adapter.keyboardStateResult) ||
         !reader.u32(comparison.adapter.controlStateResult) ||
         !reader.u32(comparison.adapter.mouseStateResult) ||
+        !reader.u32(comparison.adapter.windowStateResult) ||
         !reader.u64(comparison.adapter.lastAppliedSequence) ||
         !reader.u16(comparison.adapter.asyncKeyState) ||
         !reader.u16(comparison.adapter.keyState) ||
@@ -447,17 +473,26 @@ ProbeSnapshotDecodeResult decodeProbeComparison(
         !reader.boolean(comparison.adapter.virtualCapture) ||
         !reader.padding(1) ||
         !readRect(reader, comparison.adapter.clipRectangle) ||
+        !reader.u64(comparison.adapter.targetWindowRuntimeValue) ||
+        !reader.u64(
+            comparison.adapter.logicalForegroundWindowRuntimeValue) ||
+        !reader.u64(comparison.adapter.logicalActiveWindowRuntimeValue) ||
+        !reader.u64(comparison.adapter.logicalFocusWindowRuntimeValue) ||
+        !reader.u64(comparison.adapter.virtualCaptureWindowRuntimeValue) ||
         !reader.boolean(comparison.asyncDownMatches) ||
         !reader.boolean(comparison.keyStateDownMatches) ||
         !reader.boolean(comparison.keyboardStateDownMatches) ||
         !reader.boolean(comparison.cursorMatches) ||
         !reader.boolean(comparison.clipRectangleMatches) ||
         !reader.boolean(comparison.foregroundMatches) ||
+        !reader.boolean(comparison.activeMatches) ||
+        !reader.boolean(comparison.focusMatches) ||
         !reader.boolean(comparison.captureMatches) ||
         !reader.boolean(comparison.osForegroundIsTarget) ||
+        !reader.boolean(comparison.osActiveIsTarget) ||
         !reader.boolean(comparison.osFocusIsTarget) ||
         !reader.boolean(comparison.osCaptureIsTarget) ||
-        !reader.padding(2) || !reader.finished()) {
+        !reader.padding(3) || !reader.finished()) {
         result.error = reader.error().empty()
                            ? "probe snapshot contains trailing bytes"
                            : reader.error();

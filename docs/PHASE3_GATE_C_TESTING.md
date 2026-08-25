@@ -27,9 +27,16 @@ process-internal IAT patching, fixed-width C diagnostics, exact unpatch, and
 x86/x64 artifact selection. Native x64/x86 CTest and the real x64-host-to-x64/x86
 ordinary-polling two-probe matrix all passed.
 
+P3-API-03 is `VALIDATED` on `feat/p3-api-03-cursor-focus-shim` by Windows
+CI run `32792381573`. It extends the same startup-loaded shim with a bounded
+cursor/clip/logical-focus/capture allowlist and adapter ABI v2. Native x64 and
+Win32/x86 each passed 24/24 CTest, while the dedicated x64-host cross-architecture
+job passed both x64 and x86 ordinary-API, no-cross-Seat, teardown, polling-regression,
+and host-native global-state-preservation paths.
+
 This is not a general game hook or a completed Gate C implementation. The
 controlled targets still call HydraSeat's adapter API directly; only the
-explicitly launched API probe may opt into the polling shim. Commercial games
+explicitly launched API probe may opt into the polling/cursor-focus shim. Commercial games
 remain unsupported and are never modified by this packet.
 
 ## Safety boundary
@@ -91,8 +98,10 @@ The API probe is a separate HydraSeat-owned process. It:
 - reads the matching process-local state through the existing adapter C ABI;
 - returns both observations in one versioned `ProbeSnapshot` frame;
 - treats HWND values as transient runtime diagnostics, never persisted identity;
-- never calls a Win32 cursor/focus/capture setter;
-- optionally loads the explicitly selected polling shim before the controlled
+- in cursor/focus test mode calls ordinary Win32 setters only after the
+  process-local shim is active; those calls mutate adapter state, not native
+  global state;
+- optionally loads the explicitly selected shim before the controlled
   session and refuses DLL unload until exact unpatch succeeds.
 
 Visible probe mode shows the last OS and adapter observations side by side. A
@@ -119,6 +128,26 @@ out-of-domain calls use the saved original directly. Adapter loss/read failure
 enters visible fail-closed mode for supported keys. Lifecycle transitions wait
 for active adapter reads, restore the IAT, and only then permit unload.
 
+P3-API-03 keeps that lifecycle and adds a separate closed ten-entry patch set
+for `GetCursorPos`, `SetCursorPos`, `ClipCursor`, `GetClipCursor`,
+`GetForegroundWindow`, `GetActiveWindow`, `GetFocus`, `GetCapture`,
+`SetCapture`, and `ReleaseCapture`. Both sets form one capability transaction:
+cursor/focus discovery or installation failure restores the already-applied
+polling set, and uninstall restores cursor/focus then polling in reverse.
+
+Active cursor/clip/capture setters call only adapter ABI v2. They never call
+their saved native mutator. Logical foreground/active/focus queries share the
+validated controlled target in v1; capture may reference another validated
+window owned by the same process. Stale/destroyed/foreign HWNDs return a
+visible failure or null and never silently expose native global state.
+
+The coordinate contract is signed 32-bit caller-declared logical screen
+coordinates with no inferred DPI/client/physical conversion. Negative values
+are valid, clip right/bottom are exclusive, invalid rectangles do not mutate
+state, and cursor setters clamp to an enabled clip. Disabled `GetClipCursor`
+returns the documented full signed logical-domain sentinel. `ShowCursor`
+remains deferred because its counter/thread semantics are not defined.
+
 Shim ABI v1 is `__cdecl` and uses packed fixed-width config/status structures
 with `struct_size`, generation, API masks, result, adapter-result, system-error,
 and rollback diagnostics. Toggle low bits are explicitly unsupported in v1:
@@ -131,7 +160,7 @@ or reference-repository source was copied, adapted, or used as a build input.
 
 ### `hydra_gate_c_adapter.dll`
 
-The adapter is a process-local state component with a C ABI. It currently provides semantic equivalents for controlled tests:
+The adapter is a process-local state component with a C ABI. ABI v2 currently provides semantic equivalents for controlled tests:
 
 - key down/up state;
 - `GetAsyncKeyState`-style high bit plus one-shot press edge;
@@ -142,6 +171,8 @@ The adapter is a process-local state component with a C ABI. It currently provid
 - virtual clip rectangle;
 - virtual foreground state;
 - virtual capture state;
+- fixed-width transient controlled target, logical foreground/active/focus,
+  and virtual capture HWND runtime values;
 - full state snapshot and reset.
 
 The adapter is linked normally into the controlled target. It is not injected into another program.
@@ -232,6 +263,13 @@ hydra_gate_c_adapter_get_keyboard_state
 hydra_gate_c_adapter_get_control_state
 hydra_gate_c_adapter_get_mouse_state
 hydra_gate_c_adapter_get_snapshot
+hydra_gate_c_adapter_set_virtual_cursor
+hydra_gate_c_adapter_set_virtual_clip
+hydra_gate_c_adapter_configure_window_state
+hydra_gate_c_adapter_get_window_state
+hydra_gate_c_adapter_set_virtual_capture
+hydra_gate_c_adapter_release_virtual_capture
+hydra_gate_c_adapter_invalidate_window
 ```
 
 This API is the boundary a future clean-room Windows compatibility layer can call after interposing a target API. It does not itself install that interposition.
@@ -382,6 +420,39 @@ the ordinary imported polling APIs see only their own Seat, then requires
 successful unpatch before clean exit. Artifact-root mode preflights probe,
 adapter, and shim PE machines before launch. Forced probe termination changes
 no other process because the patch is confined to the terminated process.
+
+### Cursor/focus shim component and process tests
+
+```powershell
+ctest --test-dir build --build-config Release -R GateCCursorFocusShim --output-on-failure
+```
+
+Portable component coverage includes the closed allowlist, missing/duplicate
+and malformed plans, partial install rollback, combined rollback of an
+already-installed polling set, exact pointer restoration, retryable uninstall,
+negative/extreme coordinates, right/bottom-exclusive clamping, and fixed-width
+C/C++ ABI assertions.
+
+On Windows the local ordinary-API and two-process checks are:
+
+```powershell
+.\build-x64\gate-c\x64\hydra_gate_c_api_probe.exe `
+  --cursor-focus-shim-self-test `
+  --shim .\build-x64\gate-c\x64\hydra_gate_c_shim.dll
+
+.\build-x64\gate-c\x64\hydra_gate_c_host.exe `
+  --cursor-focus-shim-self-test `
+  --target .\build-x64\gate-c\x64\hydra_gate_c_api_probe.exe `
+  --shim .\build-x64\gate-c\x64\hydra_gate_c_shim.dll
+```
+
+The local test covers ordinary getters/setters, null/invalid rectangles,
+foreign and destroyed HWNDs, virtual capture return/release, adapter-owned
+state, no partial output, fail-closed error reporting, native-state
+preservation, exact unpatch, and `ShowCursor` deferral. The host test launches
+two probes with distinct cursor/clip/logical-focus/capture state and requires
+the host-native cursor, clip, foreground, and capture observations to remain
+unchanged. Native x64/x86 and x64-host-to-x64/x86 execution remains pending.
 
 ### Target self-test
 
@@ -539,21 +610,26 @@ A later implementation may coalesce relative mouse movement while preserving key
 - [x] Declared x86/x64 CTest and x64-host-to-x86-target CI jobs
 - [x] Windows/MSVC execution of the x86/x64 architecture matrix and x64-host-to-x86-target/probe self-tests (`32727711605`)
 - [x] P3-API-02 polling shim source, fixed C ABI, transactional IAT engine, architecture manifest, native x64/x86 tests, and cross-architecture ordinary-polling proof (`32780563364`)
+- [x] P3-API-03 cursor/clip/logical-focus/capture shim, adapter ABI v2, native x64/x86 24/24 CTest, cross-architecture two-probe isolation, and host-native global-state preservation (`32792381573`)
 
 ### Pending
 
 - [ ] Physical Gate C run using the user's two keyboard/two pointing-device profile
 - [ ] Controlled Raw Input consumer that calls `RegisterRawInputDevices` / `GetRawInputData`
-- [ ] Cursor/focus/capture API shim for the controlled probe (P3-API-03)
 - [ ] Adapter crash/watchdog recovery acceptance
 - [ ] Commercial non-anti-cheat game profile experiment
 - [ ] Physical device cloaking/suppression
 
 ## Next implementation step
 
-P3-API-02 passed the declared Windows/MSVC native x64, native x86, and
-x64-host-to-x64/x86 polling-probe matrix in run `32780563364` and is now
-`VALIDATED`. P3-API-03 may begin, but it must preserve the polling-shim
-regressions and remain limited to HydraSeat-owned controlled probes.
+P3-API-03 is `VALIDATED` by run `32792381573`. The next controlled slice is
+P3-RAW-01: record actual `RegisterRawInputDevices`, `WM_INPUT`,
+`GetRawInputData`, and `GetRawInputBuffer` behavior and produce stable fixtures
+before implementing any Raw Input interposition in P3-RAW-02.
+
+The two-probe process test releases Probe B's virtual capture while asserting
+that Probe A retains its own capture, then shuts down Probe A and re-queries
+Probe B after A's HWND has been destroyed. Capture release and destroyed-window
+isolation are therefore explicit cross-process regressions.
 
 Gate C is not complete until controlled probes observe Seat-local values through the API surface a real game would call.

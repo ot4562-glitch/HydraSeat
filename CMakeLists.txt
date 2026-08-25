@@ -159,10 +159,13 @@ if(MSVC)
     target_compile_options(hydra_gate_c_adapter PRIVATE /W4 /permissive-)
 endif()
 
-# P3-API-02 process-local polling IAT transaction support and startup-loaded
-# shim. The DLL is selected per architecture and is never remotely injected.
+# P3-API-02/03 bounded polling plus cursor/focus IAT transaction support and
+# startup-loaded shim. The DLL is selected per architecture and is never
+# remotely injected.
 add_library(hydra_gate_c_shim_support STATIC
+    src/gate_c_cursor_focus_shim.cpp
     src/gate_c_shim_iat.cpp
+    include/hydra/gate_c_cursor_focus_policy.hpp
     include/hydra/win32_iat_patch.hpp
 )
 set_target_properties(hydra_gate_c_shim_support PROPERTIES
@@ -430,6 +433,20 @@ if(MSVC)
 endif()
 add_test(NAME GateCPollingShimTests COMMAND gate_c_polling_shim_tests)
 
+add_executable(gate_c_cursor_focus_shim_tests
+    tests/test_gate_c_cursor_focus_shim.cpp
+)
+target_link_libraries(gate_c_cursor_focus_shim_tests PRIVATE
+    hydra_gate_c_shim_support
+)
+hydra_set_gate_c_output(gate_c_cursor_focus_shim_tests)
+if(MSVC)
+    target_compile_options(gate_c_cursor_focus_shim_tests PRIVATE
+        /W4 /permissive-)
+endif()
+add_test(NAME GateCCursorFocusShimTests
+         COMMAND gate_c_cursor_focus_shim_tests)
+
 add_executable(gate_c_shim_c_smoke
     tests/test_gate_c_shim_c.c
 )
@@ -464,6 +481,13 @@ if(WIN32)
                 --shim $<TARGET_FILE:hydra_gate_c_shim>
     )
     set_tests_properties(GateCPollingShimProbeSelfTest PROPERTIES TIMEOUT 20)
+
+    add_test(
+        NAME GateCCursorFocusShimProbeSelfTest
+        COMMAND hydra_gate_c_api_probe --cursor-focus-shim-self-test
+                --shim $<TARGET_FILE:hydra_gate_c_shim>
+    )
+    set_tests_properties(GateCCursorFocusShimProbeSelfTest PROPERTIES TIMEOUT 25)
 endif()
 
 if(WIN32)
@@ -495,6 +519,14 @@ if(WIN32)
                 --shim $<TARGET_FILE:hydra_gate_c_shim>
     )
     set_tests_properties(GateCPollingShimProcessSelfTest PROPERTIES TIMEOUT 75)
+
+    add_test(
+        NAME GateCCursorFocusShimProcessSelfTest
+        COMMAND hydra_gate_c_host --cursor-focus-shim-self-test
+                --target $<TARGET_FILE:hydra_gate_c_api_probe>
+                --shim $<TARGET_FILE:hydra_gate_c_shim>
+    )
+    set_tests_properties(GateCCursorFocusShimProcessSelfTest PROPERTIES TIMEOUT 75)
 else()
     add_test(NAME GateCHostPortableSelfTest COMMAND hydra_gate_c_host --self-test)
 endif()

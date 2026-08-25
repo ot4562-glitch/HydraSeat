@@ -397,9 +397,13 @@ Implemented Gate C state:
 Important boundary:
 
 - controlled targets call the adapter API directly;
-- no Import Address Table patch, detour, process injection, driver control or physical suppression is installed;
-- the two targets can both report `virtual foreground=true`, but ordinary Windows APIs in an unmodified game still see the real OS foreground state;
-- Gate C is not complete until HydraSeat-owned probes observe the virtual values through the actual Raw Input, polling, cursor and focus API surfaces.
+- HydraSeat-owned probes may opt into a startup-loaded, process-local IAT shim
+  for polling plus cursor/clip/logical-focus/capture APIs; cursor/focus Windows
+  x64/x86 validation is still pending;
+- no detour, remote injection, driver control, physical suppression, or
+  third-party/commercial-process patch is installed;
+- Gate C is not complete until the pending cursor/focus validation and later
+  controlled Raw Input API packets pass.
 
 See [Phase 3 Gate C controlled-process testing](docs/PHASE3_GATE_C_TESTING.md).
 
@@ -421,7 +425,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-API-02 — Startup-loaded polling API shim for controlled probes
+P3-RAW-01 — Controlled Raw Input behavior probe
 ```
 
 Start every coding task by reading:

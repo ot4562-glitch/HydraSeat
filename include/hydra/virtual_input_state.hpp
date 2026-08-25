@@ -24,6 +24,10 @@ public:
                     const InputEventMessage& message);
     bool applyControl(std::uint64_t sequence,
                       const ControlStateMessage& message);
+    void setVirtualCursor(std::int32_t x, std::int32_t y) noexcept;
+    bool setVirtualClip(bool enabled, std::int32_t left,
+                        std::int32_t top, std::int32_t right,
+                        std::int32_t bottom) noexcept;
 
     bool keyDown(std::uint32_t vkey) const noexcept;
     std::uint16_t consumeAsyncKeyState(std::uint32_t vkey) noexcept;

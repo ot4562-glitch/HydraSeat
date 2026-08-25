@@ -13,6 +13,12 @@ namespace {
 struct AdapterContext {
     std::mutex mutex;
     hydra::gatec::VirtualInputState state;
+    std::uint32_t processId{0};
+    std::uint64_t targetWindow{0};
+    std::uint64_t logicalForegroundWindow{0};
+    std::uint64_t logicalActiveWindow{0};
+    std::uint64_t logicalFocusWindow{0};
+    std::uint64_t virtualCaptureWindow{0};
 };
 
 static_assert(sizeof(HydraGateCAdapterInputEventV1) ==
@@ -21,6 +27,10 @@ static_assert(sizeof(HydraGateCAdapterControlStateV1) ==
               HYDRA_GATE_C_ADAPTER_CONTROL_STATE_V1_BYTES);
 static_assert(sizeof(HydraGateCAdapterSnapshotV1) ==
               HYDRA_GATE_C_ADAPTER_SNAPSHOT_V1_BYTES);
+static_assert(sizeof(HydraGateCAdapterClipRectV2) ==
+              HYDRA_GATE_C_ADAPTER_CLIP_RECT_V2_BYTES);
+static_assert(sizeof(HydraGateCAdapterWindowStateV2) ==
+              HYDRA_GATE_C_ADAPTER_WINDOW_STATE_V2_BYTES);
 
 AdapterContext* contextOf(HydraGateCAdapterHandle handle) noexcept {
     return static_cast<AdapterContext*>(handle);
@@ -28,6 +38,30 @@ AdapterContext* contextOf(HydraGateCAdapterHandle handle) noexcept {
 
 bool validBoolean(std::uint8_t value) noexcept {
     return value <= 1u;
+}
+
+bool allZero(const std::uint8_t (&bytes)[3]) noexcept {
+    return bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0;
+}
+
+void clearWindowState(AdapterContext& context) noexcept {
+    context.processId = 0;
+    context.targetWindow = 0;
+    context.logicalForegroundWindow = 0;
+    context.logicalActiveWindow = 0;
+    context.logicalFocusWindow = 0;
+    context.virtualCaptureWindow = 0;
+}
+
+void copyWindowState(const AdapterContext& source,
+                     HydraGateCAdapterWindowStateV2& destination) noexcept {
+    destination.process_id = source.processId;
+    destination.target_window = source.targetWindow;
+    destination.logical_foreground_window =
+        source.logicalForegroundWindow;
+    destination.logical_active_window = source.logicalActiveWindow;
+    destination.logical_focus_window = source.logicalFocusWindow;
+    destination.virtual_capture_window = source.virtualCaptureWindow;
 }
 
 HydraGateCAdapterResult validateInput(
@@ -170,6 +204,7 @@ HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL hydra_gate_c_adapter_reset(
     try {
         std::scoped_lock lock(context->mutex);
         context->state.reset();
+        clearWindowState(*context);
         return HYDRA_GATE_C_ADAPTER_OK;
     } catch (...) {
         return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
@@ -218,9 +253,19 @@ hydra_gate_c_adapter_apply_control(
         if (sequence <= context->state.lastAppliedSequence()) {
             return HYDRA_GATE_C_ADAPTER_STALE_SEQUENCE;
         }
-        return context->state.applyControl(sequence, toMessage(*controlData))
-                   ? HYDRA_GATE_C_ADAPTER_OK
-                   : HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+        if (!context->state.applyControl(sequence, toMessage(*controlData))) {
+            return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+        }
+        const auto logicalTarget = context->targetWindow;
+        context->logicalForegroundWindow =
+            controlData->virtual_foreground != 0 ? logicalTarget : 0;
+        context->logicalActiveWindow =
+            controlData->virtual_foreground != 0 ? logicalTarget : 0;
+        context->logicalFocusWindow =
+            controlData->virtual_foreground != 0 ? logicalTarget : 0;
+        context->virtualCaptureWindow =
+            controlData->virtual_capture != 0 ? logicalTarget : 0;
+        return HYDRA_GATE_C_ADAPTER_OK;
     } catch (...) {
         return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
     }
@@ -362,6 +407,162 @@ hydra_gate_c_adapter_get_snapshot(
         std::memset(snapshot, 0, sizeof(*snapshot));
         snapshot->struct_size = requestedSize;
         copySnapshot(state, *snapshot);
+        return HYDRA_GATE_C_ADAPTER_OK;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_set_virtual_cursor(
+    HydraGateCAdapterHandle handle, std::int32_t x, std::int32_t y) {
+    auto* context = contextOf(handle);
+    if (context == nullptr) return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    try {
+        std::scoped_lock lock(context->mutex);
+        context->state.setVirtualCursor(x, y);
+        return HYDRA_GATE_C_ADAPTER_OK;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_set_virtual_clip(
+    HydraGateCAdapterHandle handle,
+    const HydraGateCAdapterClipRectV2* clip) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || clip == nullptr) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    if (clip->struct_size != sizeof(HydraGateCAdapterClipRectV2)) {
+        return HYDRA_GATE_C_ADAPTER_STRUCT_VERSION_MISMATCH;
+    }
+    if (!validBoolean(clip->enabled) || !allZero(clip->reserved0)) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+    }
+    try {
+        std::scoped_lock lock(context->mutex);
+        return context->state.setVirtualClip(
+                   clip->enabled != 0, clip->left, clip->top,
+                   clip->right, clip->bottom)
+                   ? HYDRA_GATE_C_ADAPTER_OK
+                   : HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_configure_window_state(
+    HydraGateCAdapterHandle handle,
+    const HydraGateCAdapterWindowStateV2* windowState) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || windowState == nullptr) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    if (windowState->struct_size != sizeof(HydraGateCAdapterWindowStateV2) ||
+        windowState->api_version != HYDRA_GATE_C_ADAPTER_API_VERSION) {
+        return HYDRA_GATE_C_ADAPTER_STRUCT_VERSION_MISMATCH;
+    }
+    if (windowState->process_id == 0 || windowState->reserved0 != 0 ||
+        windowState->target_window == 0) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_STATE;
+    }
+    try {
+        std::scoped_lock lock(context->mutex);
+        context->processId = windowState->process_id;
+        context->targetWindow = windowState->target_window;
+        context->logicalForegroundWindow =
+            windowState->logical_foreground_window;
+        context->logicalActiveWindow = windowState->logical_active_window;
+        context->logicalFocusWindow = windowState->logical_focus_window;
+        context->virtualCaptureWindow =
+            windowState->virtual_capture_window;
+        return HYDRA_GATE_C_ADAPTER_OK;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_get_window_state(
+    HydraGateCAdapterHandle handle,
+    HydraGateCAdapterWindowStateV2* windowState) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || windowState == nullptr) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    if (windowState->struct_size != sizeof(HydraGateCAdapterWindowStateV2)) {
+        return HYDRA_GATE_C_ADAPTER_STRUCT_VERSION_MISMATCH;
+    }
+    try {
+        std::scoped_lock lock(context->mutex);
+        const auto requestedSize = windowState->struct_size;
+        std::memset(windowState, 0, sizeof(*windowState));
+        windowState->struct_size = requestedSize;
+        windowState->api_version = HYDRA_GATE_C_ADAPTER_API_VERSION;
+        copyWindowState(*context, *windowState);
+        return HYDRA_GATE_C_ADAPTER_OK;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_set_virtual_capture(
+    HydraGateCAdapterHandle handle, std::uint64_t window,
+    std::uint64_t* previousWindow) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || window == 0 || previousWindow == nullptr) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    try {
+        std::scoped_lock lock(context->mutex);
+        *previousWindow = context->virtualCaptureWindow;
+        context->virtualCaptureWindow = window;
+        return HYDRA_GATE_C_ADAPTER_OK;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_release_virtual_capture(
+    HydraGateCAdapterHandle handle) {
+    auto* context = contextOf(handle);
+    if (context == nullptr) return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    try {
+        std::scoped_lock lock(context->mutex);
+        context->virtualCaptureWindow = 0;
+        return HYDRA_GATE_C_ADAPTER_OK;
+    } catch (...) {
+        return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;
+    }
+}
+
+HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_invalidate_window(
+    HydraGateCAdapterHandle handle, std::uint64_t window) {
+    auto* context = contextOf(handle);
+    if (context == nullptr || window == 0) {
+        return HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT;
+    }
+    try {
+        std::scoped_lock lock(context->mutex);
+        if (context->targetWindow == window) context->targetWindow = 0;
+        if (context->logicalForegroundWindow == window) {
+            context->logicalForegroundWindow = 0;
+        }
+        if (context->logicalActiveWindow == window) {
+            context->logicalActiveWindow = 0;
+        }
+        if (context->logicalFocusWindow == window) {
+            context->logicalFocusWindow = 0;
+        }
+        if (context->virtualCaptureWindow == window) {
+            context->virtualCaptureWindow = 0;
+        }
         return HYDRA_GATE_C_ADAPTER_OK;
     } catch (...) {
         return HYDRA_GATE_C_ADAPTER_INTERNAL_ERROR;

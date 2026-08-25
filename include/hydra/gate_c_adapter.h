@@ -19,13 +19,15 @@
 extern "C" {
 #endif
 
-#define HYDRA_GATE_C_ADAPTER_API_VERSION 1u
+#define HYDRA_GATE_C_ADAPTER_API_VERSION 2u
 #define HYDRA_GATE_C_ADAPTER_KEY_BYTES 32u
 #define HYDRA_GATE_C_ADAPTER_KEYBOARD_STATE_BYTES 256u
 #define HYDRA_GATE_C_ADAPTER_NO_PROBE_KEY 0xffffu
 #define HYDRA_GATE_C_ADAPTER_INPUT_EVENT_V1_BYTES 36u
 #define HYDRA_GATE_C_ADAPTER_CONTROL_STATE_V1_BYTES 32u
 #define HYDRA_GATE_C_ADAPTER_SNAPSHOT_V1_BYTES 120u
+#define HYDRA_GATE_C_ADAPTER_CLIP_RECT_V2_BYTES 24u
+#define HYDRA_GATE_C_ADAPTER_WINDOW_STATE_V2_BYTES 56u
 
 typedef void* HydraGateCAdapterHandle;
 
@@ -103,6 +105,33 @@ typedef struct HydraGateCAdapterSnapshotV1 {
     int32_t clip_bottom;
 } HydraGateCAdapterSnapshotV1;
 
+typedef struct HydraGateCAdapterClipRectV2 {
+    uint32_t struct_size;
+    uint8_t enabled;
+    uint8_t reserved0[3];
+    int32_t left;
+    int32_t top;
+    int32_t right;
+    int32_t bottom;
+} HydraGateCAdapterClipRectV2;
+
+/*
+ * HWND values are transient process-local runtime values represented as
+ * fixed-width integers. They are never persisted or transported as stable
+ * window identity.
+ */
+typedef struct HydraGateCAdapterWindowStateV2 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint32_t process_id;
+    uint32_t reserved0;
+    uint64_t target_window;
+    uint64_t logical_foreground_window;
+    uint64_t logical_active_window;
+    uint64_t logical_focus_window;
+    uint64_t virtual_capture_window;
+} HydraGateCAdapterWindowStateV2;
+
 #pragma pack(pop)
 
 HYDRA_GATE_C_ADAPTER_API uint32_t HYDRA_GATE_C_ADAPTER_CALL
@@ -163,6 +192,42 @@ hydra_gate_c_adapter_get_snapshot(
     HydraGateCAdapterHandle handle,
     uint16_t probe_vkey,
     HydraGateCAdapterSnapshotV1* snapshot);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_set_virtual_cursor(
+    HydraGateCAdapterHandle handle,
+    int32_t x,
+    int32_t y);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_set_virtual_clip(
+    HydraGateCAdapterHandle handle,
+    const HydraGateCAdapterClipRectV2* clip);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_configure_window_state(
+    HydraGateCAdapterHandle handle,
+    const HydraGateCAdapterWindowStateV2* window_state);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_get_window_state(
+    HydraGateCAdapterHandle handle,
+    HydraGateCAdapterWindowStateV2* window_state);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_set_virtual_capture(
+    HydraGateCAdapterHandle handle,
+    uint64_t window,
+    uint64_t* previous_window);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_release_virtual_capture(
+    HydraGateCAdapterHandle handle);
+
+HYDRA_GATE_C_ADAPTER_API HydraGateCAdapterResult HYDRA_GATE_C_ADAPTER_CALL
+hydra_gate_c_adapter_invalidate_window(
+    HydraGateCAdapterHandle handle,
+    uint64_t window);
 
 #ifdef __cplusplus
 }

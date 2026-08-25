@@ -37,6 +37,8 @@ hydra::gatec::ProbeComparison sampleComparison() {
     comparison.os.clipRectangleSucceeded = true;
     comparison.os.clipRectangle = {0, 0, 1920, 1080};
     comparison.os.foregroundWindowRuntimeValue = 0x33334444u;
+    comparison.os.activeWindowRuntimeValue =
+        comparison.targetWindowRuntimeValue;
     comparison.os.focusWindowRuntimeValue =
         comparison.targetWindowRuntimeValue;
     comparison.os.captureWindowRuntimeValue = 0;
@@ -57,6 +59,16 @@ hydra::gatec::ProbeComparison sampleComparison() {
     comparison.adapter.virtualForeground = true;
     comparison.adapter.virtualCapture = true;
     comparison.adapter.clipRectangle = {0, 0, 100, 100};
+    comparison.adapter.targetWindowRuntimeValue =
+        comparison.targetWindowRuntimeValue;
+    comparison.adapter.logicalForegroundWindowRuntimeValue =
+        comparison.targetWindowRuntimeValue;
+    comparison.adapter.logicalActiveWindowRuntimeValue =
+        comparison.targetWindowRuntimeValue;
+    comparison.adapter.logicalFocusWindowRuntimeValue =
+        comparison.targetWindowRuntimeValue;
+    comparison.adapter.virtualCaptureWindowRuntimeValue =
+        comparison.targetWindowRuntimeValue;
 
     hydra::gatec::updateProbeComparison(comparison);
     return comparison;
@@ -89,7 +101,7 @@ void testRoundTrip() {
 void testInvalidVersionAndSchemaFields() {
     using namespace hydra::gatec;
     auto encoded = encodeProbeComparison(sampleComparison());
-    encoded[4] = std::byte{2};
+    encoded[4] = std::byte{3};
     encoded[5] = std::byte{0};
     check(!decodeProbeComparison(encoded),
           "future snapshot schema versions are rejected");
@@ -148,6 +160,7 @@ void testFailedAdapterCallsNeverReportMatches() {
     comparison.adapter.keyStateResult = 1;
     comparison.adapter.keyboardStateResult = 1;
     comparison.adapter.controlStateResult = 1;
+    comparison.adapter.windowStateResult = 1;
     updateProbeComparison(comparison);
 
     check(!comparison.asyncDownMatches &&
