@@ -1,5 +1,6 @@
 #pragma once
 
+#include "hydra/directinput_policy.hpp"
 #include "hydra/workspace_manager.hpp"
 
 #include <chrono>
@@ -258,6 +259,12 @@ struct GameCompatibilityProfile {
     bool allowGlobalInputSuppression{false};
     bool requireZeroBleed{false};
     std::vector<std::string> preferredBackends;
+
+    // DirectInput instance GUIDs are machine-specific stable identifiers returned
+    // by DirectInput 8 enumeration. Their profile order defines the controlled
+    // process-local enumeration order; unlisted IDs are not visible.
+    std::vector<directinput::DirectInputInstanceId>
+        directInputOrderedInstanceIds;
 };
 
 struct PlannedBackendStep {

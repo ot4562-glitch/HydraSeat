@@ -182,6 +182,39 @@ void testControlledXInputCapabilityBoundary() {
           "explicit controlled adapter availability covers only slot remapping and not physical production routing");
 }
 
+void testControlledDirectInputCapabilityBoundary() {
+    auto profile = hydra::compatibilityProfileTemplate(
+        "directinput-controller-game");
+    check(profile.has_value(), "DirectInput controller profile exists");
+    check(profile->directInputOrderedInstanceIds.empty(),
+          "DirectInput template requires machine-specific instance IDs to be configured later");
+
+    hydra::directinput::DirectInputInstanceId selectedInstance;
+    selectedInstance.data1 = 1u;
+    profile->directInputOrderedInstanceIds.push_back(selectedInstance);
+
+    BackendEnvironment controlled;
+    controlled.directInputAdapterAvailable = true;
+    controlled.processInjectionApproved = true;
+    controlled.recoveryGuardReady = true;
+    const IsolationPlanner planner(
+        hydra::builtInIsolationBackends(controlled));
+    const auto plan = planner.plan(*profile, controlled);
+
+    check(plan.status == PlanStatus::Unsupported &&
+              selected(plan, "hydra.directinput-adapter") &&
+              hydra::hasCapability(
+                  plan.coveredCapabilities,
+                  InputIsolationCapability::DirectInputVisibility) &&
+              hydra::hasCapability(
+                  plan.coveredCapabilities,
+                  InputIsolationCapability::DirectInputOrdering) &&
+              hydra::hasCapability(
+                  plan.missingCapabilities,
+                  InputIsolationCapability::PhysicalInputSuppression),
+          "controlled DirectInput availability covers only enumeration visibility/order and not physical production routing");
+}
+
 void testConfiguredReferencesStillFailWithoutVerifiedSuppression() {
     BackendEnvironment environment;
     environment.protoInputAvailable = true;
@@ -539,6 +572,7 @@ int main() {
     testObservationProfile();
     testRawInputProfileFailsClosed();
     testControlledXInputCapabilityBoundary();
+    testControlledDirectInputCapabilityBoundary();
     testConfiguredReferencesStillFailWithoutVerifiedSuppression();
     testVerifiedSuppressionBackendCanCompletePlan();
     testAntiCheatRejectsInvasiveBackends();

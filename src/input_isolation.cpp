@@ -662,7 +662,8 @@ BackendDescriptor directInputAdapterBackend(bool available) {
     result.sessionScoped = true;
     if (!available) {
         result.unavailableReason =
-            L"The clean-room DirectInput adapter is not implemented.";
+            L"The controlled DirectInput visibility/order adapter is not enabled "
+             "for this target; code availability alone is not production support.";
     }
     return result;
 }

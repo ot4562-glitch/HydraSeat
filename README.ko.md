@@ -353,7 +353,7 @@ Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled prob
 현재 기본 packet:
 
 ```text
-P3-CTRL-02 — DirectInput enumeration/visibility adapter
+P3-MET-01 — 입력 지연, 큐 및 입력 누출 측정
 ```
 
 작업 시작 전:
