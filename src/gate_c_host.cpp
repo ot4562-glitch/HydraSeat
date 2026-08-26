@@ -2006,6 +2006,9 @@ private:
                               kHandshakeTimeoutMs, true) ||
                 !launchTarget(sessions[1], true, {},
                               kHandshakeTimeoutMs, true)) {
+                std::cerr << "Gate C API self-test cycle failed at launch; architecture="
+                          << hydra::gatec::processArchitectureName(m_expectedArchitecture)
+                          << " raw=" << rawInputShim << '\n';
                 cleanupSessions(sessions, true);
                 return false;
             }
@@ -2033,6 +2036,9 @@ private:
             }
             if (!sendControl(sessions[0], firstControl) ||
                 !sendControl(sessions[1], secondControl)) {
+                std::cerr << "Gate C API self-test cycle failed at control write; architecture="
+                          << hydra::gatec::processArchitectureName(m_expectedArchitecture)
+                          << " raw=" << rawInputShim << '\n';
                 cleanupSessions(sessions, true);
                 return false;
             }
@@ -2058,6 +2064,9 @@ private:
                 !sendInput(sessions[0], firstMouse) ||
                 !sendInput(sessions[1], keyB) ||
                 !sendInput(sessions[1], secondMouse)) {
+                std::cerr << "Gate C API self-test cycle failed at input write; architecture="
+                          << hydra::gatec::processArchitectureName(m_expectedArchitecture)
+                          << " raw=" << rawInputShim << '\n';
                 cleanupSessions(sessions, true);
                 return false;
             }
@@ -2068,6 +2077,9 @@ private:
             const auto firstASecond =
                 queryProbeSnapshot(sessions[0], 0x41);
             if (!firstA || !secondA || !secondB || !firstASecond) {
+                std::cerr << "Gate C API self-test cycle failed at snapshot query; architecture="
+                          << hydra::gatec::processArchitectureName(m_expectedArchitecture)
+                          << " raw=" << rawInputShim << '\n';
                 cleanupSessions(sessions, true);
                 return false;
             }
@@ -2319,6 +2331,14 @@ private:
                     << secondRaw.apiFailures << "}\n";
             }
             const bool cleaned = cleanupSessions(sessions, !passed);
+            if (!cleaned || sessions[0].process.running() ||
+                sessions[1].process.running()) {
+                std::cerr << "Gate C API self-test cycle failed at cleanup; architecture="
+                          << hydra::gatec::processArchitectureName(m_expectedArchitecture)
+                          << " raw=" << rawInputShim
+                          << " passed=" << passed
+                          << " cleaned=" << cleaned << '\n';
+            }
             return passed && cleaned &&
                 !sessions[0].process.running() &&
                 !sessions[1].process.running();
