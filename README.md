@@ -455,7 +455,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-MET-01 — Input latency, queue, and bleed metrics
+P3-REC-01 — Gate C watchdog and crash recovery acceptance (READY)
 ```
 
 Start every coding task by reading:

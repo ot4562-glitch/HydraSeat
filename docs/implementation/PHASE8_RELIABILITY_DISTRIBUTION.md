@@ -211,7 +211,7 @@ A user can recover from a forced host/target failure through one documented comm
 
 ## P8-JOURNAL-01 — Crash journal and safe-mode marker
 
-**State:** READY
+**State:** VALIDATED
 
 **Goal**
 
@@ -264,6 +264,17 @@ Persist only the minimum state needed to detect incomplete activation/rollback a
 **Done when**
 
 Host startup can distinguish clean stop, recoverable incomplete session, and recovery-required state.
+
+**P8-JOURNAL-01 implementation note (2026-08-26)**
+
+- journal schema v1 uses a fixed 24-byte little-endian header with payload length, CRC32 integrity, reserved-field validation, an 8 KiB total-file ceiling, at most 160 transition records, at most 16 previous-state snapshot references, and four bounded diagnostic history slots;
+- the journal stores only fixed-width session identity, a deterministic digest of the canonical trusted rollback manifest, runtime/lease generation, transition/action IDs, snapshot IDs/digests, and terminal result. The digest is correlation evidence, not authentication, and journal bytes never create rollback actions; every action marker must still match the trusted in-memory watchdog manifest;
+- `CrashJournalStore` is a synchronous single-writer control-plane object. `beginActivation()` durably records the first boundary before risky work, and `persistTransition()` may advance by at most one record so callers cannot batch across required durability boundaries. Write/replace failure blocks activation/transition and attempts to persist safe mode;
+- native persistence uses a temporary file plus write-through/flush and atomic replacement. Windows production state resolves under the current user's LocalAppData `HydraSeat/Recovery` directory; tests may supply isolated custom roots. Storage calls are forbidden from latency-sensitive input callbacks and one recovery directory must be externally serialized;
+- startup assessment distinguishes no/clean journal, recoverable nonterminal state, and corrupt/explicit recovery-required state. Non-clean startup enters a bounded safe-mode marker; corrupt or unreadable state fails closed;
+- safe mode cannot be cleared merely by deleting a marker through this API: the caller must independently verify rollback, persist a matching clean journal, and provide the matching session/runtime generation before `clearSafeModeAfterVerifiedReset()` succeeds;
+- local GCC 15 validation passes the complete available portable CTest suite 33/33 plus a focused strict `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror` crash-journal build/test. Tests cover codec bounds/corruption/future versions, canonical plan binding, every valid nonterminal crash boundary, durable-boundary skipping, write/atomic-replace failure, immutable-history rejection, bounded rotation, safe-mode activation blocking, verified-reset clearing, no-instruction-channel behavior, and native temporary-directory persistence;
+- fork PR #22 run `32947110442` validates exact implementation head `2b42d9a7e585a2629f27911ed7a8683298ec9ab8`: native Windows x64 and Win32/x86 full-project configure/build/unfiltered CTest pass, and the existing Gate C cross-architecture regression job passes. This packet does not wire Gate C processes into the watchdog, execute recovery actions from journal data, or replace the emergency reset CLI; those remain `P3-REC-01` and `P8-RESET-01` responsibilities.
 
 **Suggested commit**
 

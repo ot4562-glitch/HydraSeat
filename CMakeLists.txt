@@ -205,6 +205,24 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P8-JOURNAL-01 bounded durable crash journal and safe-mode marker. The journal
+# is evidence only: action IDs are validated against the trusted watchdog plan
+# and cannot introduce arbitrary commands or paths.
+add_library(hydra_crash_journal STATIC
+    src/crash_journal.cpp
+    include/hydra/crash_journal.hpp
+)
+target_link_libraries(hydra_crash_journal PUBLIC hydra_watchdog_core)
+if(WIN32)
+    target_link_libraries(hydra_crash_journal PRIVATE Shell32.lib Ole32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_crash_journal PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_crash_journal PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # Phase 3 controlled-process protocol and virtual input-state core.
 add_library(hydra_gate_c_core STATIC
     src/gate_c_architecture.cpp
@@ -593,6 +611,20 @@ if(WIN32)
     add_test(NAME WatchdogProcessFaultTests COMMAND watchdog_process_tests)
     set_tests_properties(WatchdogProcessFaultTests PROPERTIES TIMEOUT 60)
 endif()
+
+# P8-JOURNAL-01 fixed-width codec/state-machine, storage, corruption, rotation,
+# and startup safe-mode tests. Native storage tests use only a temporary directory.
+add_executable(crash_journal_tests
+    tests/test_crash_journal.cpp
+)
+target_link_libraries(crash_journal_tests PRIVATE hydra_crash_journal)
+if(MSVC)
+    target_compile_options(crash_journal_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(crash_journal_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME CrashJournalTests COMMAND crash_journal_tests)
 
 # Pure Gate A/B observation and explicit Seat-routing tests.
 add_executable(input_observation_tests

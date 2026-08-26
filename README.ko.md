@@ -368,7 +368,7 @@ Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled prob
 현재 기본 packet:
 
 ```text
-P3-MET-01 — 입력 지연, 큐 및 입력 누출 측정
+P3-REC-01 — Gate C watchdog 및 크래시 복구 승인 (READY)
 ```
 
 작업 시작 전:
