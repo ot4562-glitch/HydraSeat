@@ -157,9 +157,11 @@ enum class SessionEndKind : std::uint32_t {
 // Interactive Gate C loads user32 for Raw Input and controlled windows. Windows
 // does not reliably deliver CTRL_LOGOFF_EVENT/CTRL_SHUTDOWN_EVENT to such a
 // console process, so real desktop-session termination is observed through a
-// dedicated hidden top-level window instead. Its window procedure performs no
-// cleanup itself: it only records the bounded signal and asks the ordinary host
-// control loop to execute the existing guarded rollback path.
+// dedicated hidden top-level window instead. The window runs on a dedicated
+// message thread so WM_QUERYENDSESSION can wait for the ordinary control loop
+// to finish durable rollback before Windows is told the session may end. The
+// wait is bounded; timeout or unproven cleanup vetoes the session end rather
+// than allowing an Active crash journal to survive.
 class GateCSessionEndWindow {
 public:
     GateCSessionEndWindow() = default;
@@ -171,66 +173,89 @@ public:
     }
 
     bool initialize(std::string* error = nullptr) {
-        if (m_window != nullptr) return true;
+        if (m_thread.joinable()) return m_initSucceeded.load();
 
-        WNDCLASSEXW windowClass{};
-        windowClass.cbSize = sizeof(windowClass);
-        windowClass.lpfnWndProc = GateCSessionEndWindow::WndProc;
-        windowClass.hInstance = GetModuleHandleW(nullptr);
-        windowClass.lpszClassName = kWindowClass;
-
-        if (RegisterClassExW(&windowClass) == 0) {
+        m_readyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        m_cleanupEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (m_readyEvent == nullptr || m_cleanupEvent == nullptr) {
             const DWORD systemError = GetLastError();
-            if (systemError != ERROR_CLASS_ALREADY_EXISTS) {
-                if (error != nullptr) {
-                    *error = "RegisterClassExW(session-end) failed: " +
-                             std::to_string(systemError);
-                }
-                return false;
+            if (m_readyEvent != nullptr) {
+                CloseHandle(m_readyEvent);
+                m_readyEvent = nullptr;
             }
-        }
-
-        m_window = CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-            kWindowClass,
-            L"HydraSeat Session End Monitor",
-            WS_POPUP,
-            0, 0, 0, 0,
-            nullptr,
-            nullptr,
-            GetModuleHandleW(nullptr),
-            this);
-        if (m_window == nullptr) {
-            const DWORD systemError = GetLastError();
+            if (m_cleanupEvent != nullptr) {
+                CloseHandle(m_cleanupEvent);
+                m_cleanupEvent = nullptr;
+            }
             if (error != nullptr) {
-                *error = "CreateWindowExW(session-end) failed: " +
+                *error = "session-end event creation failed: " +
                          std::to_string(systemError);
             }
             return false;
         }
-        return true;
-    }
 
-    void processMessages() {
-        MSG message{};
-        while (m_window != nullptr &&
-               PeekMessageW(&message, m_window, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
+        m_initSucceeded.store(false);
+        m_initStage.store(InitStage::None);
+        m_initError.store(ERROR_SUCCESS);
+        m_cleanupSucceeded.store(false);
+        m_lastKind.store(SessionEndKind::None);
+        m_lastMessage.store(0);
+        m_queryTimedOut.store(false);
+        m_thread = std::thread([this] { messageThread(); });
+
+        const DWORD ready = WaitForSingleObject(m_readyEvent, kStartupTimeoutMs);
+        if (ready != WAIT_OBJECT_0 || !m_initSucceeded.load()) {
+            if (error != nullptr) {
+                if (ready == WAIT_TIMEOUT) {
+                    *error = "session-end window startup timed out";
+                } else if (ready != WAIT_OBJECT_0) {
+                    *error = "session-end window startup wait failed: " +
+                             std::to_string(GetLastError());
+                } else {
+                    const char* stage = m_initStage.load() == InitStage::RegisterClass
+                        ? "RegisterClassExW(session-end) failed: "
+                        : "CreateWindowExW(session-end) failed: ";
+                    *error = std::string(stage) +
+                             std::to_string(m_initError.load());
+                }
+            }
+            close();
+            return false;
         }
+        return m_window.load() != nullptr;
     }
 
     void close() noexcept {
-        if (m_window != nullptr) {
-            if (IsWindow(m_window)) {
-                (void)DestroyWindow(m_window);
-            }
-            m_window = nullptr;
+        if (m_cleanupEvent != nullptr) {
+            m_cleanupSucceeded.store(false);
+            (void)SetEvent(m_cleanupEvent);
+        }
+        const HWND window = m_window.load();
+        bool closePosted = false;
+        if (window != nullptr && IsWindow(window)) {
+            closePosted = PostMessageW(window, WM_CLOSE, 0, 0) != FALSE;
+        }
+        const DWORD threadId = m_threadId.load();
+        if (!closePosted && threadId != 0) {
+            (void)PostThreadMessageW(threadId, WM_QUIT, 0, 0);
+        }
+        if (m_thread.joinable()) {
+            m_thread.join();
+        }
+        m_window.store(nullptr);
+        m_threadId.store(0);
+        if (m_readyEvent != nullptr) {
+            CloseHandle(m_readyEvent);
+            m_readyEvent = nullptr;
+        }
+        if (m_cleanupEvent != nullptr) {
+            CloseHandle(m_cleanupEvent);
+            m_cleanupEvent = nullptr;
         }
     }
 
     [[nodiscard]] HWND window() const noexcept {
-        return m_window;
+        return m_window.load();
     }
 
     [[nodiscard]] SessionEndKind lastKind() const noexcept {
@@ -241,9 +266,28 @@ public:
         return m_lastMessage.load();
     }
 
+    [[nodiscard]] bool queryTimedOut() const noexcept {
+        return m_queryTimedOut.load();
+    }
+
+    void signalCleanupComplete(bool succeeded) noexcept {
+        m_cleanupSucceeded.store(succeeded);
+        if (m_cleanupEvent != nullptr) {
+            (void)SetEvent(m_cleanupEvent);
+        }
+    }
+
 private:
+    enum class InitStage : std::uint32_t {
+        None = 0,
+        RegisterClass = 1,
+        CreateWindow = 2,
+    };
+
     static constexpr wchar_t kWindowClass[] =
         L"HydraSeatGateCSessionEndMonitor";
+    static constexpr DWORD kStartupTimeoutMs = 5'000;
+    static constexpr DWORD kCleanupWaitMs = 5'000;
 
     static SessionEndKind kindFromFlags(LPARAM flags) noexcept {
         return (static_cast<std::uintptr_t>(flags) & ENDSESSION_LOGOFF) != 0
@@ -255,6 +299,58 @@ private:
         m_lastKind.store(kindFromFlags(flags));
         m_lastMessage.store(message);
         gStopRequested.store(true);
+    }
+
+    void messageThread() noexcept {
+        m_threadId.store(GetCurrentThreadId());
+        MSG queueMessage{};
+        (void)PeekMessageW(&queueMessage, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
+
+        WNDCLASSEXW windowClass{};
+        windowClass.cbSize = sizeof(windowClass);
+        windowClass.lpfnWndProc = GateCSessionEndWindow::WndProc;
+        windowClass.hInstance = GetModuleHandleW(nullptr);
+        windowClass.lpszClassName = kWindowClass;
+
+        if (RegisterClassExW(&windowClass) == 0) {
+            const DWORD systemError = GetLastError();
+            if (systemError != ERROR_CLASS_ALREADY_EXISTS) {
+                m_initStage.store(InitStage::RegisterClass);
+                m_initError.store(systemError);
+                (void)SetEvent(m_readyEvent);
+                return;
+            }
+        }
+
+        const HWND window = CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            kWindowClass,
+            L"HydraSeat Session End Monitor",
+            WS_POPUP,
+            0, 0, 0, 0,
+            nullptr,
+            nullptr,
+            GetModuleHandleW(nullptr),
+            this);
+        if (window == nullptr) {
+            m_initStage.store(InitStage::CreateWindow);
+            m_initError.store(GetLastError());
+            (void)SetEvent(m_readyEvent);
+            return;
+        }
+
+        m_window.store(window);
+        m_initSucceeded.store(true);
+        (void)SetEvent(m_readyEvent);
+
+        MSG message{};
+        while (true) {
+            const BOOL result = GetMessageW(&message, nullptr, 0, 0);
+            if (result <= 0) break;
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        m_window.store(nullptr);
     }
 
     static LRESULT CALLBACK WndProc(HWND window, UINT message,
@@ -275,7 +371,16 @@ private:
         if (self != nullptr) {
             if (message == WM_QUERYENDSESSION) {
                 self->requestStop(message, lParam);
-                return TRUE;
+                const DWORD wait = self->m_cleanupEvent == nullptr
+                    ? WAIT_FAILED
+                    : WaitForSingleObject(self->m_cleanupEvent, kCleanupWaitMs);
+                if (wait == WAIT_TIMEOUT) {
+                    self->m_queryTimedOut.store(true);
+                }
+                return wait == WAIT_OBJECT_0 &&
+                           self->m_cleanupSucceeded.load()
+                    ? TRUE
+                    : FALSE;
             }
             if (message == WM_ENDSESSION) {
                 if (wParam != FALSE) {
@@ -283,11 +388,28 @@ private:
                 }
                 return 0;
             }
+            if (message == WM_CLOSE) {
+                DestroyWindow(window);
+                return 0;
+            }
+            if (message == WM_DESTROY) {
+                PostQuitMessage(0);
+                return 0;
+            }
         }
         return DefWindowProcW(window, message, wParam, lParam);
     }
 
-    HWND m_window{nullptr};
+    std::thread m_thread;
+    std::atomic<DWORD> m_threadId{0};
+    HANDLE m_readyEvent{nullptr};
+    HANDLE m_cleanupEvent{nullptr};
+    std::atomic<HWND> m_window{nullptr};
+    std::atomic<bool> m_initSucceeded{false};
+    std::atomic<InitStage> m_initStage{InitStage::None};
+    std::atomic<DWORD> m_initError{ERROR_SUCCESS};
+    std::atomic<bool> m_cleanupSucceeded{false};
+    std::atomic<bool> m_queryTimedOut{false};
     std::atomic<SessionEndKind> m_lastKind{SessionEndKind::None};
     std::atomic<UINT> m_lastMessage{0};
 };
@@ -1609,6 +1731,8 @@ private:
             }
         }
 
+        bool rollbackAlreadyComplete = false;
+
         if (m_options.recoveryScenario == "lease-stall") {
             std::this_thread::sleep_for(std::chrono::milliseconds(2'500));
         } else if (m_options.recoveryScenario == "target-killed") {
@@ -1655,14 +1779,38 @@ private:
                 : SessionEndKind::Shutdown;
 
             gStopRequested.store(false);
-            const LRESULT queryResult = SendMessageW(
-                sessionEndWindow.window(), WM_QUERYENDSESSION,
-                static_cast<WPARAM>(0), sessionFlags);
-            if (queryResult == FALSE || !gStopRequested.load() ||
+            std::atomic<LRESULT> queryResult{FALSE};
+            std::atomic<bool> queryCompleted{false};
+            std::thread queryThread([&] {
+                queryResult.store(SendMessageW(
+                    sessionEndWindow.window(), WM_QUERYENDSESSION,
+                    static_cast<WPARAM>(0), sessionFlags));
+                queryCompleted.store(true);
+            });
+
+            const auto stopDeadline = std::chrono::steady_clock::now() +
+                std::chrono::seconds(2);
+            while (!gStopRequested.load() &&
+                   std::chrono::steady_clock::now() < stopDeadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (!gStopRequested.load() || queryCompleted.load() ||
                 sessionEndWindow.lastKind() != expectedKind ||
                 sessionEndWindow.lastMessage() != WM_QUERYENDSESSION) {
+                sessionEndWindow.signalCleanupComplete(false);
+                queryThread.join();
                 return 133;
             }
+
+            const bool cleaned =
+                rollbackGuardedSessions(recovery, sessions, true);
+            sessionEndWindow.signalCleanupComplete(cleaned);
+            queryThread.join();
+            if (!cleaned || queryResult.load() == FALSE ||
+                sessionEndWindow.queryTimedOut()) {
+                return 133;
+            }
+            rollbackAlreadyComplete = true;
 
             gStopRequested.store(false);
             (void)SendMessageW(
@@ -1687,7 +1835,8 @@ private:
             return 134;
         }
 
-        if (!rollbackGuardedSessions(recovery, sessions) ||
+        if ((!rollbackAlreadyComplete &&
+             !rollbackGuardedSessions(recovery, sessions)) ||
             !recoveryEndedClean(recovery)) {
             return 135;
         }
@@ -3083,6 +3232,12 @@ private:
         if (!activateGuardedSessions(recovery, sessions, false)) {
             return 42;
         }
+        auto rollbackAndSignal = [&](bool forceTerminate) {
+            const bool clean = rollbackGuardedSessions(
+                recovery, sessions, forceTerminate);
+            sessionEndWindow.signalCleanupComplete(clean);
+            return clean;
+        };
         for (auto& session : sessions) {
             seats.assignTargetWindow(session.seatId, session.targetWindow);
         }
@@ -3099,7 +3254,7 @@ private:
         control.clipBottom = 600;
         for (auto& session : sessions) {
             if (!sendControl(session, control)) {
-                (void)rollbackGuardedSessions(recovery, sessions, true);
+                (void)rollbackAndSignal(true);
                 return 43;
             }
         }
@@ -3117,7 +3272,7 @@ private:
             auto writer = std::make_unique<TargetInputWriter>(session, &metrics);
             if (!writer->start()) {
                 for (auto& started : writers) started->stop();
-                (void)rollbackGuardedSessions(recovery, sessions, true);
+                (void)rollbackAndSignal(true);
                 return 44;
             }
             writerBySeat.emplace(session.seatId, writer.get());
@@ -3176,7 +3331,7 @@ private:
         if (!router.initialize()) {
             std::cerr << "Raw Input host initialization failed.\n";
             for (auto& writer : writers) writer->stop();
-            (void)rollbackGuardedSessions(recovery, sessions, true);
+            (void)rollbackAndSignal(true);
             return 45;
         }
 
@@ -3188,7 +3343,7 @@ private:
             router.stop();
             trace.flush();
             for (auto& writer : writers) writer->stop();
-            (void)rollbackGuardedSessions(recovery, sessions, true);
+            (void)rollbackAndSignal(true);
             return 47;
         }
         std::cout
@@ -3203,8 +3358,6 @@ private:
         auto nextLeaseRenewal = std::chrono::steady_clock::now() +
             std::chrono::milliseconds(500);
         while (!gStopRequested.load()) {
-            sessionEndWindow.processMessages();
-            if (gStopRequested.load()) break;
             router.processMessages();
             bool allRunning = true;
             for (const auto& session : sessions) {
@@ -3255,8 +3408,14 @@ private:
         rollbackStart.stage = hydra::InputMetricStage::RollbackStarted;
         (void)metrics.tryRecord(rollbackStart);
 
-        const bool cleanExit = rollbackGuardedSessions(
-            recovery, sessions, writerFailure || recoveryFailure);
+        const bool sessionEndRequested =
+            sessionEndWindow.lastKind() != SessionEndKind::None;
+        const bool cleanExit = rollbackAndSignal(
+            writerFailure || recoveryFailure || sessionEndRequested);
+        if (sessionEndWindow.queryTimedOut()) {
+            std::cerr << "Gate C session-end cleanup exceeded the bounded query wait; "
+                         "Windows session end was vetoed.\n";
+        }
 
         auto rollbackComplete = rollbackStart;
         rollbackComplete.timestampMicros = hydra::monotonicInputMetricTimestampMicros();
