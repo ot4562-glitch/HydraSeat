@@ -455,7 +455,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-MET-01 — Input latency, queue, and bleed metrics
+P8-JOURNAL-01 — Crash journal and safe-mode marker (CODE_COMPLETE; Windows CI pending)
 ```
 
 Start every coding task by reading:

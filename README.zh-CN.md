@@ -368,7 +368,7 @@ Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe
 当前默认 packet：
 
 ```text
-P3-MET-01 — 输入延迟、队列与串扰测量
+P8-JOURNAL-01 — 崩溃日志与安全模式标记（CODE_COMPLETE；等待 Windows CI）
 ```
 
 开始编码前阅读：

@@ -58,7 +58,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | --- | --- | --- |
 | P8-WATCH-01 Watchdog protocol and lease model | VALIDATED | Fork PR #21 run `32919928489` validates head `dceaab9`: native x64/x86 full CTest including `WatchdogProcessFaultTests` plus Gate C cross-architecture pass; actual Gate C recovery integration remains P3-REC-01 |
 | P8-RESET-01 Emergency reset CLI contract | BLOCKED | Depends on watchdog rollback registry/contracts |
-| P8-JOURNAL-01 Crash journal and safe-mode marker | READY | Required before external game experiments |
+| P8-JOURNAL-01 Crash journal and safe-mode marker | CODE_COMPLETE | Local portable 33/33 CTest plus strict GCC 15 crash-journal build/test pass; bounded durable journal, startup assessment, safe-mode marker, atomic failure handling, and verified-reset clear contract implemented. Windows x64/x86 CI remains required before VALIDATED; Gate C recovery wiring remains P3-REC-01 |
 | P4-RUN-01 Production host service/process skeleton | BLOCKED | Start after P3 controlled shim contract stabilizes |
 
 ## Manual gates
@@ -285,20 +285,36 @@ Manual evidence: none claimed. P3-HW-01 remains `CODE_COMPLETE`; physical Gate A
 Known limitation: P8-WATCH-01 does not persist a crash journal and does not implement cryptographic signing for its non-nameable inherited local transport. Durable journal/restart recovery belongs to P8-JOURNAL-01; any future named/cross-trust transport requires explicit authenticated framing.
 Next packet: P8-JOURNAL-01 is now the current critical prerequisite; P3-REC-01 remains blocked until the durable journal/safe-mode contract is also validated.
 
+### 2026-08-26 — P8-JOURNAL-01
+
+State: CODE_COMPLETE
+Branch/commit: `feat/p8-journal-01-crash-journal`; the packet-scoped CODE_COMPLETE snapshot is committed on this branch for Windows validation, with the exact validated SHA to be recorded after CI.
+Windows CI: PENDING. Native MSVC x64/Win32-x86 full-project validation has not yet been run for this packet, so it is not `VALIDATED`.
+Automated/local evidence:
+- `cmake --build build-p8journal --target crash_journal_tests --parallel` passes and focused `CrashJournalTests` passes;
+- the complete locally available portable CTest suite passes 33/33, including all existing watchdog, planner, observation, Raw Input, XInput, DirectInput, metrics, hardware-acceptance parser, Gate C protocol/ABI/shim, target, and host regressions;
+- a fresh GCC 15 strict build of `crash_journal_tests` passes with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror`, and its focused CTest passes;
+- roadmap validation reports 115 packet definitions and 0 warnings; Windows Git `git diff --check` passes. The WSL Git executable incorrectly reports repository-wide CRLF lines as trailing whitespace, so Windows Git is the authoritative whitespace check for this Windows worktree;
+- tests cover fixed-width bounded codec round trip, checksum corruption, truncation/future/oversized rejection, deterministic canonical rollback-plan binding, invalid/stale action identity, reverse rollback order, maximum 32-action lifecycle fit, every valid nonterminal startup boundary, explicit failure state, critical write and atomic-replace failures, immutable-history/truncation rejection, one-record durable-boundary enforcement, bounded four-slot rotation, active safe-mode activation blocking, verified-reset-only clearing, journal-not-instruction-channel behavior, and native temporary-directory persistence.
+Persistent-state/recovery boundary: schema v1 is capped at 8 KiB with at most 160 records, 16 snapshot references, and four history slots. Production Windows storage resolves to current-user LocalAppData and uses write-through/flush plus temp-file atomic replacement. Storage is synchronous/single-writer and forbidden on latency-sensitive input callbacks. Corrupt/unreadable/incomplete state fails closed into safe mode; a journal write failure blocks risky activation.
+Security/privacy: persisted bytes contain only fixed-width session/lease/generation/action/snapshot identities and digests. The deterministic plan/journal digest is correlation evidence, not authentication. Journal bytes never manufacture recovery actions; action IDs and generations must validate against the trusted watchdog manifest. No raw input, credentials, command strings, executable paths, arbitrary process data, or third-party code are persisted.
+Manual evidence: none claimed or required by this foundation packet. P3-HW-01 remains `CODE_COMPLETE`; physical Gate A/B/C remain PENDING.
+Known limitation: P8-JOURNAL-01 supplies the durable evidence/safe-mode/reset-verification contract only. Actual Gate C watchdog/process integration and forced-failure acceptance remain `P3-REC-01`; the standalone emergency reset executable remains `P8-RESET-01`.
+Next action: validate this exact packet SHA in Windows x64 and Win32/x86 CI. Only after that passes may P8-JOURNAL-01 become `VALIDATED` and unblock P3-REC-01.
+
 ## Next Codex task
 
 Use:
 
 ```text
-Implement P8-JOURNAL-01 exactly as specified in
-  docs/implementation/PHASE8_RELIABILITY_DISTRIBUTION.md
+Validate the CODE_COMPLETE P8-JOURNAL-01 packet at its exact committed SHA.
 
-Build only the bounded durable crash journal and safe-mode marker required before
-P3-REC-01. Record versioned session/plan identity, transition/action markers,
-lease identity, snapshot references/hashes, and clean/recovery-required outcomes;
-corruption or write failure must fail safe and journal data must never become an
-arbitrary-action instruction channel. Do not start P3-REC-01 or P3-D-02 yet. Keep
-P3-HW-01 CODE_COMPLETE and all physical Gate A/B/C rows PENDING.
-
+Run the full Windows/MSVC native x64 and Win32/x86 configure/build/unfiltered
+CTest matrix and preserve the existing Gate C cross-architecture regression job.
+Do not change journal behavior merely to make CI green: diagnose any Windows-only
+compiler/API/filesystem defect, repair only P8-JOURNAL-01 scope, and rerun the full
+matrix. Mark P8-JOURNAL-01 VALIDATED only after both native architectures are green.
+Do not start P3-REC-01 or P3-D-02 in the validation task; P3-HW-01 remains
+CODE_COMPLETE and all physical Gate A/B/C rows remain PENDING.
 
 ```
