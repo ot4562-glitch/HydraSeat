@@ -437,6 +437,8 @@ Any backend that can suppress or hide input requires:
 - a command-line reset path;
 - explicit user confirmation.
 
+P8-WATCH-01 supplies the first independent recovery primitive without yet wiring risky runtime state into it. `hydra_watchdog.exe` receives a bounded/versioned rollback manifest over capability-secured inherited anonymous pipes, correlates it with session/generation/sequence identity, watches the exact host process creation identity plus lease expiry, and can currently terminate only an exact HydraSeat-owned process identity (`PID + creation time`). The manifest has no arbitrary command/path field. Unsupported rollback action types fail closed as `RecoveryRequired`; durable journal/reset state and Gate C/device-cloak integration remain later packets. A clean disarm is accepted only after the watchdog re-runs the registered idempotent rollback plan as a postcondition backstop.
+
 ## Anti-cheat and protected processes
 
 HydraSeat does not bypass anti-cheat, DRM or protected-process controls. Invasive backends are denied by default when anti-cheat/protection is detected or declared. The planner returns observation-only or unsupported unless a tested non-invasive plan covers every required capability.
