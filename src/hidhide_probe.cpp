@@ -7,6 +7,7 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <winioctl.h>
 #include <cfgmgr32.h>
 #include <winsvc.h>
 #include <winver.h>
