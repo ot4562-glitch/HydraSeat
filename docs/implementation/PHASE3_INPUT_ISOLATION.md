@@ -880,7 +880,7 @@ The planner can distinguish unavailable, installed-unverified, and verified-supp
 
 ## P3-REC-01 — Gate C watchdog and crash recovery acceptance
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 

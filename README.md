@@ -455,7 +455,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P8-JOURNAL-01 — Crash journal and safe-mode marker (CODE_COMPLETE; Windows CI pending)
+P3-REC-01 — Gate C watchdog and crash recovery acceptance (READY)
 ```
 
 Start every coding task by reading:

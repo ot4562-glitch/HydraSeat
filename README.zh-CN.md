@@ -368,7 +368,7 @@ Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe
 当前默认 packet：
 
 ```text
-P8-JOURNAL-01 — 崩溃日志与安全模式标记（CODE_COMPLETE；等待 Windows CI）
+P3-REC-01 — Gate C 看门狗与崩溃恢复验收（READY）
 ```
 
 开始编码前阅读：

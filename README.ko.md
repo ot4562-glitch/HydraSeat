@@ -368,7 +368,7 @@ Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled prob
 현재 기본 packet:
 
 ```text
-P8-JOURNAL-01 — 크래시 저널 및 안전 모드 마커 (CODE_COMPLETE; Windows CI 대기)
+P3-REC-01 — Gate C watchdog 및 크래시 복구 승인 (READY)
 ```
 
 작업 시작 전:
