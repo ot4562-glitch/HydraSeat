@@ -230,6 +230,33 @@ It does **not** by itself create Seat-local keyboard/mouse state or deliver repl
 
 Implement HidHide as an **optional external backend through the documented control API**, preferably using session-scoped entries. Begin with read-only availability/capability probing. Device hiding must remain disabled until a recovery guard, emergency timeout, test mode and explicit user confirmation are in place.
 
+### P3-D-01 read-only contract record
+
+The read-only probe is tied to upstream revision
+`2b950fd9393e1644b4199f6eb4999e1720f0c6e9`. It consulted the public
+`DEVELOPER.md`, the exact `HidHide` service declaration in
+`HidHide/HidHide.inf`, the file-version resource in `HidHide/Version.rc`, and
+the minimal documented IOCTL/interface declarations in
+`Shared/HidHideIoctlContract.h`. HidHide is MIT-licensed, but HydraSeat's
+license remains unresolved, so no upstream implementation is copied, adapted,
+linked, or made a build input.
+
+The independently implemented Windows observer enumerates interface GUID
+`{0C320FF7-BD9B-42B6-BDAF-49FEB9C91649}`, obtains the driver file version from
+the read-only service configuration, opens the returned control interface for
+read access, and sends only function 2052 (`GET_ACTIVE`) and function 2054
+(`GET_WLINVERSE`). It never defines or calls set/list/session mutation
+operations and never reads allowlist, persistent blacklist, or session-list
+contents.
+
+Exact tag commits `98ccf1724d5960d98fc31af9714433df964f462f`
+(`1.7.339.0`), `0aa3c946e7629a47d5465a1bc96de846395ba3f9`
+(`1.7.344.0`), and `22a1ff5fdce550ec789f7b229ad4c59d6709ab61`
+(`1.7.346.0`) each publish functions 2056/2057 for the session blacklist.
+HydraSeat recognizes only those exact versions. The production release
+`1.5.230.0` and all other/unknown versions remain installed-unverified; no
+minimum/maximum version range is guessed.
+
 Repository reference: `https://github.com/nefarius/HidHide`
 
 ---

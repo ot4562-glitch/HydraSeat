@@ -14,7 +14,8 @@ void printUsage(std::ostream& out) {
         << "  hydra_plan <profile-template> [options]\n\n"
         << "Options only describe an environment; this tool never activates a backend.\n"
         << "  --protoinput          Mark a configured external ProtoInput adapter available\n"
-        << "  --hidhide             Mark installed HidHide session control available\n"
+        << "  --hidhide-unverified  Record HidHide evidence without a verified contract\n"
+        << "  --hidhide-verified    Record a verified-supported read-only probe result\n"
         << "  --directinput         Mark the controlled DirectInput visibility/order adapter available\n"
         << "  --allow-injection     Record approval; does not override a profile prohibition\n"
         << "  --admin               Record administrator access as available\n"
@@ -92,8 +93,12 @@ int main(int argc, char** argv) {
         const std::string option = argv[index];
         if (option == "--protoinput") {
             environment.protoInputAvailable = true;
-        } else if (option == "--hidhide") {
-            environment.hidHideAvailable = true;
+        } else if (option == "--hidhide-unverified") {
+            environment.hidHideAvailability =
+                hydra::HidHideAvailability::InstalledUnverified;
+        } else if (option == "--hidhide-verified") {
+            environment.hidHideAvailability =
+                hydra::HidHideAvailability::VerifiedSupported;
         } else if (option == "--directinput") {
             environment.directInputAdapterAvailable = true;
         } else if (option == "--allow-injection") {

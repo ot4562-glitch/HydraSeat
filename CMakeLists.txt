@@ -100,6 +100,7 @@ set(HYDRA_HARDWARE_HEADERS
 
 set(HYDRA_HEADERS
     include/hydra/directinput_policy.hpp
+    include/hydra/hidhide_probe.hpp
     include/hydra/input_metrics.hpp
     include/hydra/input_router.hpp
     include/hydra/input_isolation.hpp
@@ -152,6 +153,24 @@ if(MSVC)
     target_compile_options(hydra_directinput_policy PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_directinput_policy PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P3-D-01 read-only HidHide availability probe. The portable core interprets
+# bounded observations; the Windows path uses only service/interface/version
+# queries and the documented GET_ACTIVE/GET_WLINVERSE IOCTLs.
+add_library(hydra_hidhide_probe STATIC
+    src/hidhide_probe.cpp
+    include/hydra/hidhide_probe.hpp
+)
+if(WIN32)
+    target_link_libraries(hydra_hidhide_probe PRIVATE
+        Advapi32.lib Cfgmgr32.lib Version.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_hidhide_probe PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_hidhide_probe PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
@@ -320,6 +339,22 @@ if(MSVC)
     target_compile_options(hydra_plan PRIVATE /W4 /permissive-)
 endif()
 
+# P3-D-01 bounded read-only diagnostics CLI. It never requests elevation and
+# returns an observational report even when HidHide is absent or unverified.
+add_executable(hydra_hidhide_probe_cli
+    src/hidhide_probe_cli.cpp
+)
+set_target_properties(hydra_hidhide_probe_cli PROPERTIES
+    OUTPUT_NAME hydra_hidhide_probe
+)
+target_link_libraries(hydra_hidhide_probe_cli PRIVATE hydra_hidhide_probe)
+if(MSVC)
+    target_compile_options(hydra_hidhide_probe_cli PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_hidhide_probe_cli PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P3-MET-01 report/self-test CLI. Live producers use hydra_input_metrics
 # directly; report generation remains outside latency-sensitive callbacks.
 add_executable(hydra_input_metrics_cli
@@ -486,6 +521,25 @@ if(MSVC)
 endif()
 add_test(NAME IsolationPlannerTests COMMAND isolation_planner_tests)
 add_test(NAME IsolationPlanObservation COMMAND hydra_plan observation-harness)
+
+# P3-D-01 platform-independent policy/failure tests plus a bounded CLI test.
+add_executable(hidhide_probe_tests
+    tests/test_hidhide_probe.cpp
+)
+target_link_libraries(hidhide_probe_tests PRIVATE hydra_hidhide_probe)
+if(MSVC)
+    target_compile_options(hidhide_probe_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hidhide_probe_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME HidHideProbeTests COMMAND hidhide_probe_tests)
+add_test(NAME HidHideProbeCliSelfTest
+         COMMAND hydra_hidhide_probe_cli --self-test)
+if(WIN32)
+    add_test(NAME HidHideProbeNativeReadOnly
+             COMMAND hydra_hidhide_probe_cli --probe)
+endif()
 
 # Pure Gate A/B observation and explicit Seat-routing tests.
 add_executable(input_observation_tests
