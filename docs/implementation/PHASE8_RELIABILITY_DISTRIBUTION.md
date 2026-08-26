@@ -40,7 +40,7 @@ all -> P8-SOAK-01 -> P8-CLOSE-01
 
 ## P8-WATCH-01 — Independent watchdog lease and rollback protocol
 
-**State:** CODE_COMPLETE
+**State:** VALIDATED
 
 **Goal**
 
@@ -111,7 +111,7 @@ struct WatchdogStatus;
 
 **Done when**
 
-Gate C can register a harmless rollback plan, kill the host, and prove watchdog cleanup without UI participation.
+A HydraSeat-owned controlled-process harness can register a harmless rollback plan, kill its host, and prove independent watchdog cleanup without UI participation. Actual Gate C host/adapter integration and its larger crash matrix remain P3-REC-01.
 
 **P8-WATCH-01 implementation note (2026-08-26)**
 
@@ -122,6 +122,14 @@ Gate C can register a harmless rollback plan, kill the host, and prove watchdog 
 - `TerminateOwnedProcess` is the only OS-mutating executor implemented in this packet. It requires exact PID plus process-creation time and refuses watchdog/host self-targets. The other allowlisted action kinds remain typed but return `Unsupported`, causing `RecoveryRequired`, until the packet that owns that mutable subsystem supplies a narrow implementation;
 - `Disarm` is not trusted as proof by itself: the watchdog re-runs the registered idempotent rollback plan before releasing the lease. Any unresolved action keeps the watchdog in `RecoveryRequired`;
 - durable crash-journal persistence, safe-mode markers, emergency reset, Gate C host integration, HidHide state mutation, and production Seat activation remain outside this packet (`P8-JOURNAL-01`, `P8-RESET-01`, `P3-REC-01`, and later runtime packets). The restart/reload check here covers deterministic manifest reconstruction/idempotence only, not a persistent crash journal.
+
+**Validation evidence (2026-08-26)**
+
+- implementation commit `238dadb` plus Windows macro-safety fix `dceaab9` are validated by fork PR #21 run `32919928489` at exact head `dceaab9a6626eaac6848f0083fba586f716bf812`;
+- the native x64 and Win32/x86 jobs each configure and build the entire project and run the full unfiltered CTest suite. Therefore both architectures execute and pass `WatchdogProtocolTests` and the Windows-only `WatchdogProcessFaultTests` together with all existing native regressions;
+- `WatchdogProcessFaultTests` proves clean disarm, disarm rollback backstop, lease-expiry cleanup, stale-sequence fail-closed rollback, PID-creation-time mismatch without terminating the mismatched process, and forced host death followed by independent exact-target cleanup;
+- the existing Gate C cross-architecture job remains green in the same run. This is regression evidence only: Gate C watchdog integration, adapter/shim crash recovery, persistent journal replay, physical recovery, and device cloaking are not claimed by P8-WATCH-01;
+- initial run `32919575735` failed both native builds only because Windows `min`/`max` macros collided with standard-library `numeric_limits::max`; `dceaab9` adds targeted `NOMINMAX` guards and the fresh full matrix passes.
 
 **Suggested commit**
 

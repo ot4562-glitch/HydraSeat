@@ -3,9 +3,9 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P8-WATCH-01 — Independent watchdog lease and rollback protocol** (cross-phase prerequisite required to unblock P3-REC-01/P3-D-02)
-- Fork-main baseline used by P3-D-01 validation: `d61879ac2bda6bfef912b662d5d97cb9a8acb4ee` (P3-HW-01 tooling merged; physical acceptance remains pending)
-- Current validated Windows CI evidence: fork-side PR #20 run `32915683414` validates P3-D-01 head `146b3e6399dd2c9bc59052cdbc4a392bd4d7697e`: native x64 and Win32/x86 configure/build/CTest jobs pass and the Gate C cross-architecture regression job passes; this is read-only HidHide probe evidence and does not validate physical cloaking/suppression
+- Current default packet: **P8-JOURNAL-01 — Crash journal and safe-mode marker** (next cross-phase prerequisite required before P3-REC-01)
+- Parent fork-main baseline for P8-WATCH-01 validation: `494426e882832b0ae6d94a75d038473ba96f104a` (P3-D-01 integrated; physical acceptance remains pending)
+- Current validated Windows CI evidence: fork-side PR #21 run `32919928489` validates P8-WATCH-01 head `dceaab9a6626eaac6848f0083fba586f716bf812`: native x64 and Win32/x86 full-project build plus unfiltered CTest pass, and the Gate C cross-architecture regression job passes; this validates the independent watchdog foundation only, not Gate C crash recovery or physical/device-cloak recovery
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -41,7 +41,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-RAW-01 Raw Input registration/data probe | VALIDATED | P3-API-01 | Windows run `32800513365`: native x64/x86 28/28 CTest, retained observed registration traces, replacement/remove/destroyed-HWND evidence, and repeated process teardown passed |
 | P3-RAW-02 Raw Input virtualization shim | VALIDATED | P3-RAW-01, P3-API-02 | Windows run `32806163164`: native x64/x86 and x64-host-to-x64/x86 ordinary Raw Input API/two-process acceptance passed with zero cross-Seat/API/stale-token/queue-overflow counters |
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
-| P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
+| P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P8-JOURNAL-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
 | P3-HW-01 Gate A/B/C physical acceptance runner | CODE_COMPLETE | P3-QUEUE-01 | Fork PR #19 run `32911603828` validates the tooling on x64/x86 plus Gate C cross-architecture; real two-keyboard/two-pointing-device Gate A/B/C evidence remains manual and PENDING |
 | P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Remediation head `b351afdd` validated by fork PR #15 run `32832036967`: native x64/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance |
 | P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | VALIDATED | P3-CTRL-01, P3-ARCH-01 | Fork PR #16 run `32840474306`: native x64 and Win32/x86 full CTest passed with controlled DirectInput policy/probes plus read-only `DirectInputNativeObservationSelfTest`; Gate C cross-architecture regressions stayed green |
@@ -56,7 +56,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 
 | Packet | State | Reason |
 | --- | --- | --- |
-| P8-WATCH-01 Watchdog protocol and lease model | CODE_COMPLETE | Portable protocol/registry and independent watchdog plus Windows host-kill/lease/process-identity fault harness are implemented; local 32/32 selected CTest passes, fresh Windows x64/x86 CI pending |
+| P8-WATCH-01 Watchdog protocol and lease model | VALIDATED | Fork PR #21 run `32919928489` validates head `dceaab9`: native x64/x86 full CTest including `WatchdogProcessFaultTests` plus Gate C cross-architecture pass; actual Gate C recovery integration remains P3-REC-01 |
 | P8-RESET-01 Emergency reset CLI contract | BLOCKED | Depends on watchdog rollback registry/contracts |
 | P8-JOURNAL-01 Crash journal and safe-mode marker | READY | Required before external game experiments |
 | P4-RUN-01 Production host service/process skeleton | BLOCKED | Start after P3 controlled shim contract stabilizes |
@@ -272,32 +272,33 @@ Next packet: P8-WATCH-01 became the current cross-phase prerequisite because P3-
 
 ### 2026-08-26 — P8-WATCH-01
 
-State: CODE_COMPLETE
-Branch/commit: `feat/p8-watch-01-watchdog-rollback`; implementation commit pending
-Windows CI: pending fresh native x64, Win32/x86, and existing Gate C cross-architecture regression evidence for the final implementation SHA
+State: VALIDATED
+Branch/commit: `feat/p8-watch-01-watchdog-rollback`; implementation `238dadb` (`feat: implement P8-WATCH-01 watchdog lease and rollback`); Windows macro-safety fix `dceaab9a6626eaac6848f0083fba586f716bf812` (`fix: make P8-WATCH-01 Windows headers macro-safe`)
+Windows CI: fork PR #21 run `32919928489` validates exact head `dceaab9a6626eaac6848f0083fba586f716bf812`: native x64 and Win32/x86 full-project builds and unfiltered CTest pass, including the new watchdog protocol/process fault tests, and the existing Gate C cross-architecture regression job passes. Initial run `32919575735` exposed only the Windows `min`/`max` macro collision fixed by `dceaab9`.
 Automated/local evidence:
 - strict GCC 15 builds pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror` for the watchdog executable plus protocol/rollback registry; `WatchdogProtocolTests` pass;
 - the complete locally available selected portable suite passes 32/32, preserving engine/hardware, planner, HidHide, observation, Raw Input, XInput, DirectInput, metrics, P3-HW parser, Gate C protocol/ABI/shim, target, and host regressions;
 - protocol tests cover fixed-width round trip, future/bad magic/reserved/truncated/oversized rejection, zero/duplicate/unknown manifest identities, maximum action count, lease/disarm/status framing, reverse activation order, idempotent replay, partial failure/retry, armed-plan replacement rejection, and reconstructed-manifest already-satisfied behavior;
-- declared Windows process/fault coverage launches `hydra_watchdog.exe` through an explicit inherited-handle allowlist and tests clean disarm after host rollback, disarm safety-backstop rollback, lease expiry, stale-sequence protocol failure, PID creation-time mismatch without killing the unrelated process, and host death with independent target cleanup.
+- Windows process/fault coverage launches `hydra_watchdog.exe` through an explicit inherited-handle allowlist and passes on both x64 and Win32/x86 for clean disarm after host rollback, disarm safety-backstop rollback, lease expiry, stale-sequence protocol failure, PID creation-time mismatch without killing the unrelated process, and host death with independent target cleanup.
 Security/recovery boundary: the control plane is an anonymous inherited-pipe capability with session/generation/sequence correlation; the manifest carries no arbitrary command/path field. Only exact `PID + creation time` process termination mutates OS state in this packet. Other typed rollback actions fail closed as `RecoveryRequired` until their owning packet supplies a narrow executor.
 Manual evidence: none claimed. P3-HW-01 remains `CODE_COMPLETE`; physical Gate A/B/C, production Gate C watchdog integration, durable crash journal/safe mode, emergency reset, device cloaking, and game compatibility remain pending/later packets.
 Known limitation: P8-WATCH-01 does not persist a crash journal and does not implement cryptographic signing for its non-nameable inherited local transport. Durable journal/restart recovery belongs to P8-JOURNAL-01; any future named/cross-trust transport requires explicit authenticated framing.
-Next packet after fresh Windows validation: P8-JOURNAL-01 is the next critical prerequisite; P3-REC-01 depends on both P8-WATCH-01 and P8-JOURNAL-01.
+Next packet: P8-JOURNAL-01 is now the current critical prerequisite; P3-REC-01 remains blocked until the durable journal/safe-mode contract is also validated.
 
 ## Next Codex task
 
 Use:
 
 ```text
-Implement P8-WATCH-01 exactly as specified in
+Implement P8-JOURNAL-01 exactly as specified in
   docs/implementation/PHASE8_RELIABILITY_DISTRIBUTION.md
 
-Build only the independent watchdog lease and bounded rollback protocol needed to
-unblock P3-REC-01. Preserve the rule that watchdog actions are allowlisted,
-versioned, idempotent, and cannot execute arbitrary shell commands or activate a
-Seat. Do not start P3-D-02. Keep P3-HW-01 CODE_COMPLETE and all physical Gate
-A/B/C rows PENDING until real hardware evidence is recorded.
+Build only the bounded durable crash journal and safe-mode marker required before
+P3-REC-01. Record versioned session/plan identity, transition/action markers,
+lease identity, snapshot references/hashes, and clean/recovery-required outcomes;
+corruption or write failure must fail safe and journal data must never become an
+arbitrary-action instruction channel. Do not start P3-REC-01 or P3-D-02 yet. Keep
+P3-HW-01 CODE_COMPLETE and all physical Gate A/B/C rows PENDING.
 
 
 ```
