@@ -223,6 +223,22 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P3-REC-01 Gate C recovery contract. The trusted rollback manifest contains
+# only exact controlled-process termination identities; process-local shim and
+# adapter state disappears with the owned target process.
+add_library(hydra_gate_c_recovery STATIC
+    src/gate_c_recovery.cpp
+    include/hydra/gate_c_recovery.hpp
+)
+target_link_libraries(hydra_gate_c_recovery PUBLIC
+    hydra_crash_journal hydra_watchdog_core)
+if(MSVC)
+    target_compile_options(hydra_gate_c_recovery PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_gate_c_recovery PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # Phase 3 controlled-process protocol and virtual input-state core.
 add_library(hydra_gate_c_core STATIC
     src/gate_c_architecture.cpp
@@ -519,10 +535,16 @@ add_executable(hydra_gate_c_host
     include/hydra/workspace_manager.hpp
 )
 target_link_libraries(hydra_gate_c_host PRIVATE
-    hydra_gate_c_core hydra_hardware hydra_input_metrics)
+    hydra_gate_c_core hydra_gate_c_recovery hydra_hardware hydra_input_metrics)
 hydra_set_gate_c_output(hydra_gate_c_host)
 if(WIN32)
     target_link_libraries(hydra_gate_c_host PRIVATE ${WIN32_LIBS})
+    add_dependencies(hydra_gate_c_host hydra_watchdog)
+    add_custom_command(TARGET hydra_gate_c_host POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:hydra_watchdog>
+            $<TARGET_FILE_DIR:hydra_gate_c_host>/hydra_watchdog.exe
+        VERBATIM)
 endif()
 if(MSVC)
     target_compile_options(hydra_gate_c_host PRIVATE /W4 /permissive-)
@@ -625,6 +647,37 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 add_test(NAME CrashJournalTests COMMAND crash_journal_tests)
+
+# P3-REC-01 portable trusted-plan and durable recovery-journal lifecycle tests.
+add_executable(gate_c_recovery_tests
+    tests/test_gate_c_recovery.cpp
+)
+target_link_libraries(gate_c_recovery_tests PRIVATE hydra_gate_c_recovery)
+if(MSVC)
+    target_compile_options(gate_c_recovery_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(gate_c_recovery_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME GateCRecoveryCoreTests COMMAND gate_c_recovery_tests)
+if(WIN32)
+    add_executable(gate_c_watchdog_recovery_tests
+        tests/test_gate_c_watchdog_recovery.cpp
+    )
+    target_link_libraries(gate_c_watchdog_recovery_tests PRIVATE
+        hydra_crash_journal)
+    hydra_set_gate_c_output(gate_c_watchdog_recovery_tests)
+    add_dependencies(gate_c_watchdog_recovery_tests
+        hydra_gate_c_host hydra_gate_c_target hydra_gate_c_api_probe
+        hydra_gate_c_shim hydra_watchdog)
+    if(MSVC)
+        target_compile_options(gate_c_watchdog_recovery_tests PRIVATE
+            /W4 /permissive-)
+    endif()
+    add_test(NAME GateCWatchdogRecoveryTests
+             COMMAND gate_c_watchdog_recovery_tests)
+    set_tests_properties(GateCWatchdogRecoveryTests PROPERTIES TIMEOUT 180)
+endif()
 
 # Pure Gate A/B observation and explicit Seat-routing tests.
 add_executable(input_observation_tests

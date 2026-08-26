@@ -1,5 +1,7 @@
 #include "hydra/gate_c_adapter.h"
 #include "hydra/gate_c_architecture.hpp"
+#include "hydra/gate_c_recovery.hpp"
+#include "hydra/rollback_registry.hpp"
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/gate_c_probe_snapshot.hpp"
 #include "hydra/gate_c_transport.hpp"
@@ -9,9 +11,12 @@
 #include "hydra/virtual_input_state.hpp"
 #include "hydra/workspace_manager.hpp"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <cstdlib>
@@ -22,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -66,6 +72,9 @@ struct HostOptions {
     std::string profilePath{"workspace_config.json"};
     std::string tracePath{"hydra_gate_c_host.jsonl"};
     std::string metricsReportPath{"hydra_gate_c_metrics.json"};
+    std::wstring recoveryDirectory;
+    std::string recoveryScenario;
+    bool recoverySelfTest{false};
     bool metricsDiagnostic{false};
     bool traceSensitiveKeyIds{false};
     bool selfTest{false};
@@ -95,6 +104,7 @@ void printUsage(std::ostream& output) {
         << "  hydra_gate_c_host --raw-input-shim-self-test --target <hydra_gate_c_api_probe.exe>\n"
         << "                     --shim <hydra_gate_c_shim.dll>\n"
         << "  hydra_gate_c_host --protocol-error-self-test [--target <hydra_gate_c_target.exe>]\n"
+        << "  hydra_gate_c_host --recovery-self-test <scenario> --recovery-dir <path>\n"
         << "  hydra_gate_c_host [--profile <workspace_config.json>] [--trace <file.jsonl>]\n"
         << "                     [--metrics-report <file.json>] [--metrics-diagnostic]\n"
         << "                     [--trace-sensitive-keys]\n"
@@ -220,6 +230,11 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
             options.tracePath = wideToUtf8(argv[++index]);
         } else if (argument == L"--metrics-report" && index + 1 < argc) {
             options.metricsReportPath = wideToUtf8(argv[++index]);
+        } else if (argument == L"--recovery-dir" && index + 1 < argc) {
+            options.recoveryDirectory = argv[++index];
+        } else if (argument == L"--recovery-self-test" && index + 1 < argc) {
+            options.recoveryScenario = wideToUtf8(argv[++index]);
+            options.recoverySelfTest = !options.recoveryScenario.empty();
         } else if (argument == L"--metrics-diagnostic") {
             options.metricsDiagnostic = true;
         } else if (argument == L"--trace-sensitive-keys") {
@@ -253,7 +268,8 @@ bool parseOptions(int argc, wchar_t** argv, HostOptions& options) {
         static_cast<int>(options.cursorFocusShimSelfTest) +
         static_cast<int>(options.rawInputShimSelfTest) +
         static_cast<int>(options.xinputSelfTest) +
-        static_cast<int>(options.protocolErrorSelfTest);
+        static_cast<int>(options.protocolErrorSelfTest) +
+        static_cast<int>(options.recoverySelfTest);
     if (selfTestModes > 1) {
         return false;
     }
@@ -286,6 +302,20 @@ std::wstring siblingShimPath() {
     return path;
 }
 
+std::wstring siblingWatchdogPath() {
+    std::vector<wchar_t> buffer(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(
+        nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size()) {
+        return L"hydra_watchdog.exe";
+    }
+    std::wstring path(buffer.data(), length);
+    const auto separator = path.find_last_of(L"\\/");
+    path.resize(separator == std::wstring::npos ? 0 : separator + 1);
+    path += L"hydra_watchdog.exe";
+    return path;
+}
+
 std::wstring siblingTargetPath(bool apiProbe) {
     std::vector<wchar_t> buffer(32768, L'\0');
     const DWORD length = GetModuleFileNameW(
@@ -314,11 +344,13 @@ public:
     ChildProcess& operator=(const ChildProcess&) = delete;
     ChildProcess(ChildProcess&& other) noexcept
         : m_process(std::exchange(other.m_process, nullptr)),
+          m_primaryThread(std::exchange(other.m_primaryThread, nullptr)),
           m_processId(std::exchange(other.m_processId, 0)) {}
     ChildProcess& operator=(ChildProcess&& other) noexcept {
         if (this == &other) return *this;
         close();
         m_process = std::exchange(other.m_process, nullptr);
+        m_primaryThread = std::exchange(other.m_primaryThread, nullptr);
         m_processId = std::exchange(other.m_processId, 0);
         return *this;
     }
@@ -326,11 +358,25 @@ public:
     bool valid() const noexcept { return m_process != nullptr; }
     HANDLE handle() const noexcept { return m_process; }
     std::uint32_t processId() const noexcept { return m_processId; }
+    bool suspended() const noexcept { return m_primaryThread != nullptr; }
 
-    void assign(HANDLE process, std::uint32_t processId) noexcept {
+    void assign(HANDLE process, HANDLE primaryThread,
+                std::uint32_t processId) noexcept {
         close();
         m_process = process;
+        m_primaryThread = primaryThread;
         m_processId = processId;
+    }
+
+    bool resume() noexcept {
+        if (!valid()) return false;
+        if (m_primaryThread == nullptr) return true;
+        if (ResumeThread(m_primaryThread) == static_cast<DWORD>(-1)) {
+            return false;
+        }
+        CloseHandle(m_primaryThread);
+        m_primaryThread = nullptr;
+        return true;
     }
 
     bool running() const noexcept {
@@ -359,6 +405,10 @@ public:
     }
 
     void close() noexcept {
+        if (m_primaryThread != nullptr) {
+            CloseHandle(m_primaryThread);
+            m_primaryThread = nullptr;
+        }
         if (m_process != nullptr) {
             CloseHandle(m_process);
             m_process = nullptr;
@@ -368,7 +418,377 @@ public:
 
 private:
     HANDLE m_process{nullptr};
+    HANDLE m_primaryThread{nullptr};
     std::uint32_t m_processId{0};
+};
+
+class GateCWatchdogClient {
+public:
+    GateCWatchdogClient() = default;
+    ~GateCWatchdogClient() { closeTransport(); }
+
+    GateCWatchdogClient(const GateCWatchdogClient&) = delete;
+    GateCWatchdogClient& operator=(const GateCWatchdogClient&) = delete;
+
+    bool start(const hydra::watchdog::RollbackPlanManifest& manifest,
+               std::string* error = nullptr) {
+        closeTransport();
+        m_watchdog.terminate(0x52454357u); // "RECW".
+        m_watchdog.close();
+
+        SECURITY_ATTRIBUTES security{};
+        security.nLength = sizeof(security);
+        security.bInheritHandle = TRUE;
+
+        HANDLE controlRead = nullptr;
+        HANDLE controlWrite = nullptr;
+        HANDLE statusRead = nullptr;
+        HANDLE statusWrite = nullptr;
+        if (CreatePipe(&controlRead, &controlWrite, &security, 0) == FALSE ||
+            CreatePipe(&statusRead, &statusWrite, &security, 0) == FALSE) {
+            const DWORD systemError = GetLastError();
+            if (controlRead != nullptr) CloseHandle(controlRead);
+            if (controlWrite != nullptr) CloseHandle(controlWrite);
+            if (statusRead != nullptr) CloseHandle(statusRead);
+            if (statusWrite != nullptr) CloseHandle(statusWrite);
+            setError(error, "watchdog pipe creation failed", systemError);
+            return false;
+        }
+        if (SetHandleInformation(controlWrite, HANDLE_FLAG_INHERIT, 0) == FALSE ||
+            SetHandleInformation(statusRead, HANDLE_FLAG_INHERIT, 0) == FALSE) {
+            const DWORD systemError = GetLastError();
+            CloseHandle(controlRead);
+            CloseHandle(controlWrite);
+            CloseHandle(statusRead);
+            CloseHandle(statusWrite);
+            setError(error, "watchdog host handle inheritance setup failed",
+                     systemError);
+            return false;
+        }
+
+        hydra::watchdog::ProcessIdentity hostIdentity;
+        std::uint32_t identityError = 0;
+        if (!hydra::watchdog::queryProcessIdentity(
+                GetCurrentProcessId(), hostIdentity, &identityError)) {
+            CloseHandle(controlRead);
+            CloseHandle(controlWrite);
+            CloseHandle(statusRead);
+            CloseHandle(statusWrite);
+            setError(error, "host creation identity query failed", identityError);
+            return false;
+        }
+
+        const auto watchdogPath = siblingWatchdogPath();
+        std::wstring command = quoteArgument(watchdogPath) +
+            L" --control-handle " + handleNumber(controlRead) +
+            L" --status-handle " + handleNumber(statusWrite) +
+            L" --host-pid " + std::to_wstring(hostIdentity.processId) +
+            L" --host-created " +
+            std::to_wstring(hostIdentity.creationTime100ns) +
+            L" --session " + sessionHex(manifest.lease.sessionId);
+        std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+        mutableCommand.push_back(L'\0');
+
+        STARTUPINFOEXW startup{};
+        startup.StartupInfo.cb = sizeof(startup);
+        SIZE_T attributeBytes = 0;
+        if (InitializeProcThreadAttributeList(nullptr, 1, 0,
+                                              &attributeBytes) != FALSE ||
+            GetLastError() != ERROR_INSUFFICIENT_BUFFER ||
+            attributeBytes == 0) {
+            CloseHandle(controlRead);
+            CloseHandle(controlWrite);
+            CloseHandle(statusRead);
+            CloseHandle(statusWrite);
+            setError(error, "watchdog handle-list sizing failed", GetLastError());
+            return false;
+        }
+        std::vector<std::byte> attributeStorage(attributeBytes);
+        startup.lpAttributeList = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(
+            attributeStorage.data());
+        if (InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0,
+                                              &attributeBytes) == FALSE) {
+            const DWORD systemError = GetLastError();
+            CloseHandle(controlRead);
+            CloseHandle(controlWrite);
+            CloseHandle(statusRead);
+            CloseHandle(statusWrite);
+            setError(error, "watchdog handle-list initialization failed",
+                     systemError);
+            return false;
+        }
+        const std::array<HANDLE, 2> inherited{controlRead, statusWrite};
+        if (UpdateProcThreadAttribute(
+                startup.lpAttributeList, 0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                const_cast<HANDLE*>(inherited.data()),
+                inherited.size() * sizeof(HANDLE), nullptr, nullptr) == FALSE) {
+            const DWORD systemError = GetLastError();
+            DeleteProcThreadAttributeList(startup.lpAttributeList);
+            CloseHandle(controlRead);
+            CloseHandle(controlWrite);
+            CloseHandle(statusRead);
+            CloseHandle(statusWrite);
+            setError(error, "watchdog inherited-handle allowlist failed",
+                     systemError);
+            return false;
+        }
+
+        PROCESS_INFORMATION process{};
+        const BOOL created = CreateProcessW(
+            watchdogPath.c_str(), mutableCommand.data(), nullptr, nullptr, TRUE,
+            CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT |
+                CREATE_UNICODE_ENVIRONMENT,
+            nullptr, nullptr, &startup.StartupInfo, &process);
+        const DWORD createError = created == FALSE ? GetLastError() : 0;
+        DeleteProcThreadAttributeList(startup.lpAttributeList);
+        CloseHandle(controlRead);
+        CloseHandle(statusWrite);
+        if (created == FALSE) {
+            CloseHandle(controlWrite);
+            CloseHandle(statusRead);
+            setError(error, "hydra_watchdog launch failed", createError);
+            return false;
+        }
+        CloseHandle(process.hThread);
+        m_watchdog.assign(process.hProcess, nullptr, process.dwProcessId);
+        m_controlWrite = controlWrite;
+        m_statusRead = statusRead;
+        m_manifest = manifest;
+        m_sequence = 1;
+
+        if (!sendFrame(hydra::watchdog::encodeRegisterPlan(
+                m_sequence, m_manifest), error)) {
+            failStart();
+            return false;
+        }
+        hydra::watchdog::WatchdogStatus status;
+        if (!waitStatus(status, kHandshakeTimeoutMs, error) ||
+            status.state != hydra::watchdog::WatchdogRunState::Armed ||
+            status.sessionId != m_manifest.lease.sessionId ||
+            status.generation != m_manifest.lease.generation) {
+            if (error != nullptr && error->empty()) {
+                *error = "watchdog did not confirm the registered Gate C plan";
+            }
+            failStart();
+            return false;
+        }
+        return true;
+    }
+
+    bool renew(std::string* error = nullptr) {
+        if (!running()) {
+            if (error != nullptr) *error = "watchdog is not running";
+            return false;
+        }
+        return sendFrame(hydra::watchdog::encodeLeaseRenewal(
+            ++m_sequence, m_manifest.lease), error);
+    }
+
+    bool disarm(std::string* error = nullptr) {
+        if (!running()) {
+            if (error != nullptr) *error = "watchdog is not running";
+            return false;
+        }
+        const auto sequence = ++m_sequence;
+        if (!sendFrame(hydra::watchdog::encodeDisarm(
+                sequence, m_manifest.lease), error)) {
+            return false;
+        }
+        hydra::watchdog::WatchdogStatus status;
+        if (!waitStatus(status, kHandshakeTimeoutMs, error)) return false;
+        if (status.state != hydra::watchdog::WatchdogRunState::Disarmed ||
+            status.reason != hydra::watchdog::WatchdogTriggerReason::CleanDisarm ||
+            status.sessionId != m_manifest.lease.sessionId ||
+            status.generation != m_manifest.lease.generation) {
+            if (error != nullptr) {
+                *error = "watchdog refused clean Gate C disarm";
+            }
+            return false;
+        }
+        DWORD exitCode = 0;
+        if (!m_watchdog.wait(kProcessExitTimeoutMs, &exitCode) ||
+            exitCode != 0) {
+            if (error != nullptr) {
+                *error = "watchdog did not exit cleanly after disarm";
+            }
+            return false;
+        }
+        closeTransport();
+        return true;
+    }
+
+    bool restartForVerification(std::string* error = nullptr) {
+        const auto manifest = m_manifest;
+        return start(manifest, error);
+    }
+
+    bool running() const noexcept { return m_watchdog.running(); }
+    std::uint32_t processId() const noexcept { return m_watchdog.processId(); }
+
+    bool terminateForTest() noexcept {
+        if (!m_watchdog.running()) return true;
+        m_watchdog.terminate(0x5744474bu); // "WDGK".
+        closeTransport();
+        return !m_watchdog.running();
+    }
+
+private:
+    static void setError(std::string* error, std::string_view message,
+                         std::uint32_t systemError) {
+        if (error != nullptr) {
+            *error = std::string(message) + " (" +
+                std::to_string(systemError) + ")";
+        }
+    }
+
+    static std::wstring handleNumber(HANDLE handle) {
+        return std::to_wstring(static_cast<std::uint64_t>(
+            reinterpret_cast<std::uintptr_t>(handle)));
+    }
+
+    static std::wstring sessionHex(
+        const hydra::watchdog::SessionId& sessionId) {
+        constexpr wchar_t digits[] = L"0123456789abcdef";
+        std::wstring result;
+        result.reserve(sessionId.size() * 2);
+        for (const auto byte : sessionId) {
+            result.push_back(digits[(byte >> 4u) & 0x0fu]);
+            result.push_back(digits[byte & 0x0fu]);
+        }
+        return result;
+    }
+
+    bool writeAll(const void* bytes, std::size_t size) {
+        const auto* cursor = static_cast<const std::byte*>(bytes);
+        std::size_t remaining = size;
+        while (remaining != 0) {
+            const DWORD chunk = static_cast<DWORD>((std::min)(
+                remaining,
+                static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
+            DWORD written = 0;
+            if (WriteFile(m_controlWrite, cursor, chunk, &written,
+                          nullptr) == FALSE || written == 0) {
+                return false;
+            }
+            cursor += written;
+            remaining -= written;
+        }
+        return true;
+    }
+
+    bool sendFrame(const std::vector<std::byte>& frame,
+                   std::string* error) {
+        if (m_controlWrite == nullptr || frame.empty() ||
+            frame.size() > (std::numeric_limits<std::uint32_t>::max)()) {
+            if (error != nullptr) *error = "watchdog frame is invalid";
+            return false;
+        }
+        const auto frameBytes = static_cast<std::uint32_t>(frame.size());
+        const std::array<std::byte, 4> prefix{
+            static_cast<std::byte>(frameBytes & 0xffu),
+            static_cast<std::byte>((frameBytes >> 8u) & 0xffu),
+            static_cast<std::byte>((frameBytes >> 16u) & 0xffu),
+            static_cast<std::byte>((frameBytes >> 24u) & 0xffu)};
+        if (!writeAll(prefix.data(), prefix.size()) ||
+            !writeAll(frame.data(), frame.size())) {
+            const DWORD systemError = GetLastError();
+            setError(error, "watchdog frame write failed", systemError);
+            return false;
+        }
+        return true;
+    }
+
+    bool waitStatus(hydra::watchdog::WatchdogStatus& status,
+                    std::uint32_t timeoutMilliseconds,
+                    std::string* error) {
+        const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(timeoutMilliseconds);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (m_statusRead == nullptr) return false;
+            DWORD available = 0;
+            std::array<std::byte, 4> prefix{};
+            DWORD peeked = 0;
+            if (PeekNamedPipe(m_statusRead, prefix.data(),
+                              static_cast<DWORD>(prefix.size()),
+                              &peeked, &available, nullptr) == FALSE) {
+                setError(error, "watchdog status pipe failed", GetLastError());
+                return false;
+            }
+            if (available < prefix.size() || peeked < prefix.size()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
+            const auto frameBytes =
+                static_cast<std::uint32_t>(
+                    std::to_integer<std::uint8_t>(prefix[0])) |
+                (static_cast<std::uint32_t>(
+                    std::to_integer<std::uint8_t>(prefix[1])) << 8u) |
+                (static_cast<std::uint32_t>(
+                    std::to_integer<std::uint8_t>(prefix[2])) << 16u) |
+                (static_cast<std::uint32_t>(
+                    std::to_integer<std::uint8_t>(prefix[3])) << 24u);
+            if (frameBytes < hydra::watchdog::kWatchdogFrameHeaderBytes ||
+                frameBytes > hydra::watchdog::kWatchdogMaxFrameBytes) {
+                if (error != nullptr) *error = "watchdog status frame length is invalid";
+                return false;
+            }
+            const std::uint64_t totalBytes =
+                static_cast<std::uint64_t>(prefix.size()) + frameBytes;
+            if (static_cast<std::uint64_t>(available) < totalBytes) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
+            std::vector<std::byte> combined(static_cast<std::size_t>(totalBytes));
+            DWORD read = 0;
+            if (ReadFile(m_statusRead, combined.data(),
+                         static_cast<DWORD>(combined.size()), &read,
+                         nullptr) == FALSE ||
+                static_cast<std::size_t>(read) != combined.size()) {
+                setError(error, "watchdog status read failed", GetLastError());
+                return false;
+            }
+            const auto decoded = hydra::watchdog::decodeWatchdogFrame(
+                std::span<const std::byte>(combined).subspan(prefix.size()));
+            std::string decodeError;
+            if (!decoded ||
+                !hydra::watchdog::decodeWatchdogStatus(
+                    *decoded.frame, status, &decodeError)) {
+                if (error != nullptr) {
+                    *error = decodeError.empty()
+                        ? "watchdog status decode failed"
+                        : decodeError;
+                }
+                return false;
+            }
+            return true;
+        }
+        if (error != nullptr) *error = "watchdog status timed out";
+        return false;
+    }
+
+    void failStart() noexcept {
+        closeTransport();
+        m_watchdog.terminate(0x52454346u); // "RECF".
+        m_watchdog.close();
+    }
+
+    void closeTransport() noexcept {
+        if (m_controlWrite != nullptr) {
+            CloseHandle(m_controlWrite);
+            m_controlWrite = nullptr;
+        }
+        if (m_statusRead != nullptr) {
+            CloseHandle(m_statusRead);
+            m_statusRead = nullptr;
+        }
+    }
+
+    HANDLE m_controlWrite{nullptr};
+    HANDLE m_statusRead{nullptr};
+    ChildProcess m_watchdog;
+    hydra::watchdog::RollbackPlanManifest m_manifest;
+    std::uint64_t m_sequence{0};
 };
 
 struct TargetSession {
@@ -382,6 +802,17 @@ struct TargetSession {
     std::uint64_t targetWindow{0};
     std::uint64_t nextSequence{2};
     bool connected{false};
+};
+
+struct GateCRecoveryContext {
+    explicit GateCRecoveryContext(std::filesystem::path directory)
+        : storage(std::move(directory)), store(storage) {}
+
+    hydra::recovery::NativeCrashJournalStorage storage;
+    hydra::recovery::CrashJournalStore store;
+    GateCWatchdogClient watchdog;
+    std::optional<hydra::gatec::GateCRecoveryJournal> journal;
+    std::uint64_t runtimeGeneration{0};
 };
 
 class TargetInputWriter {
@@ -624,17 +1055,19 @@ class GateCHost {
 public:
     explicit GateCHost(HostOptions options)
         : m_options(std::move(options)) {
+        const bool recoveryShimProbe = m_options.recoverySelfTest &&
+            m_options.recoveryScenario == "shim-abnormal-exit";
         if (m_options.targetPath.empty() && m_options.artifactRoot.empty()) {
             m_options.targetPath = siblingTargetPath(
                 m_options.baselineSelfTest ||
                 m_options.pollingShimSelfTest ||
                 m_options.cursorFocusShimSelfTest ||
                 m_options.rawInputShimSelfTest ||
-                m_options.xinputSelfTest);
+                m_options.xinputSelfTest || recoveryShimProbe);
         }
         if ((m_options.pollingShimSelfTest ||
              m_options.cursorFocusShimSelfTest ||
-             m_options.rawInputShimSelfTest) &&
+             m_options.rawInputShimSelfTest || recoveryShimProbe) &&
             m_options.shimPath.empty() && m_options.artifactRoot.empty()) {
             m_options.shimPath = siblingShimPath();
         }
@@ -695,7 +1128,9 @@ public:
         }
         if (m_options.pollingShimSelfTest ||
             m_options.cursorFocusShimSelfTest ||
-            m_options.rawInputShimSelfTest) {
+            m_options.rawInputShimSelfTest ||
+            (m_options.recoverySelfTest &&
+             m_options.recoveryScenario == "shim-abnormal-exit")) {
             if (GetFileAttributesW(m_options.shimPath.c_str()) ==
                 INVALID_FILE_ATTRIBUTES) {
                 std::cerr << "Controlled polling shim was not found.\n";
@@ -732,14 +1167,366 @@ public:
         if (m_options.protocolErrorSelfTest) {
             return runProtocolErrorSelfTest();
         }
+        if (m_options.recoverySelfTest) {
+            return runRecoverySelfTest();
+        }
         return runInteractive();
     }
 
 private:
+    std::optional<std::filesystem::path> recoveryDirectory(
+        std::string* error = nullptr) const {
+        if (!m_options.recoveryDirectory.empty()) {
+            return std::filesystem::path(m_options.recoveryDirectory);
+        }
+        std::uint32_t systemError = 0;
+        const auto directory = hydra::recovery::defaultCrashJournalDirectory(
+            &systemError);
+        if (!directory && error != nullptr) {
+            *error = "default recovery directory resolution failed (" +
+                std::to_string(systemError) + ")";
+        }
+        return directory;
+    }
+
+    bool preflightRecovery(GateCRecoveryContext& recovery,
+                           std::string* error = nullptr) {
+        const auto assessment = recovery.store.assessStartupAndEnterSafeMode();
+        if (assessment.state != hydra::recovery::StartupRecoveryState::Clean) {
+            if (error != nullptr) {
+                *error = assessment.diagnostic.empty()
+                    ? "Gate C recovery preflight is not clean"
+                    : assessment.diagnostic;
+            }
+            return false;
+        }
+        if (assessment.journal) {
+            if (assessment.journal->runtimeGeneration ==
+                (std::numeric_limits<std::uint64_t>::max)()) {
+                if (error != nullptr) *error = "runtime generation exhausted";
+                return false;
+            }
+            recovery.runtimeGeneration =
+                assessment.journal->runtimeGeneration + 1;
+        } else {
+            recovery.runtimeGeneration = 1;
+        }
+        return true;
+    }
+
+    void terminateSessionsNoJournal(
+        std::vector<TargetSession>& sessions) noexcept {
+        for (auto it = sessions.rbegin(); it != sessions.rend(); ++it) {
+            it->process.terminate(0x52454346u); // "RECF".
+            it->channel.close();
+            it->connected = false;
+        }
+    }
+
+    bool rollbackGuardedSessions(GateCRecoveryContext& recovery,
+                                 std::vector<TargetSession>& sessions,
+                                 bool forceTerminate = false) {
+        std::string error;
+        bool journalHealthy = recovery.journal.has_value() &&
+            recovery.journal->beginRollback(&error);
+        bool processesClean = true;
+
+        for (std::size_t reverse = sessions.size(); reverse != 0; --reverse) {
+            const std::size_t index = reverse - 1;
+            auto& session = sessions[index];
+            if (session.process.running()) {
+                bool graceful = false;
+                if (!forceTerminate && session.connected) {
+                    graceful = sendShutdown(session);
+                }
+                std::uint32_t exitCode = 0;
+                if (!graceful ||
+                    !session.process.wait(kProcessExitTimeoutMs, &exitCode)) {
+                    session.process.terminate(0x52454354u); // "RECT".
+                }
+            }
+            if (session.process.running()) processesClean = false;
+            session.channel.close();
+            session.connected = false;
+            if (journalHealthy) {
+                journalHealthy = recovery.journal->markActionRolledBack(
+                    static_cast<std::uint32_t>(index + 1), &error);
+            }
+        }
+
+        bool watchdogVerified = processesClean;
+        if (watchdogVerified && !recovery.watchdog.running()) {
+            watchdogVerified = recovery.watchdog.restartForVerification(&error);
+        }
+        if (watchdogVerified) {
+            watchdogVerified = recovery.watchdog.disarm(&error);
+        }
+
+        if (journalHealthy && processesClean && watchdogVerified) {
+            journalHealthy = recovery.journal->verifyRollback(&error) &&
+                recovery.journal->markCleanStop(&error);
+        }
+        if (!journalHealthy || !processesClean || !watchdogVerified) {
+            if (recovery.journal) {
+                std::string ignored;
+                (void)recovery.journal->markRecoveryRequired(&ignored);
+            }
+            if (!error.empty()) {
+                std::cerr << "Gate C recovery rollback failed: " << error << '\n';
+            }
+            return false;
+        }
+        return true;
+    }
+
+    bool activateGuardedSessions(
+        GateCRecoveryContext& recovery,
+        std::vector<TargetSession>& sessions,
+        bool headless,
+        std::wstring_view extraArguments = {},
+        bool requireOwnedWindow = false,
+        std::optional<hydra::gatec::TestCapability> grantedOverride =
+            std::nullopt,
+        std::uint32_t leaseTimeoutMilliseconds = 20'000) {
+        std::string error;
+        if (!preflightRecovery(recovery, &error)) {
+            std::cerr << "Gate C recovery preflight blocked activation: "
+                      << error << '\n';
+            return false;
+        }
+
+        for (auto& session : sessions) {
+            if (!launchTarget(session, headless, extraArguments,
+                              kHandshakeTimeoutMs, requireOwnedWindow, true)) {
+                terminateSessionsNoJournal(sessions);
+                return false;
+            }
+        }
+
+        const auto recoveryToken = hydra::gatec::generateSessionToken();
+        if (!recoveryToken) {
+            terminateSessionsNoJournal(sessions);
+            return false;
+        }
+        hydra::watchdog::SessionId sessionId = *recoveryToken;
+        std::vector<hydra::gatec::GateCRecoveryTarget> targets;
+        targets.reserve(sessions.size());
+        for (std::size_t index = 0; index < sessions.size(); ++index) {
+            hydra::watchdog::ProcessIdentity identity;
+            std::uint32_t systemError = 0;
+            if (!hydra::watchdog::queryProcessIdentity(
+                    sessions[index].process.processId(), identity,
+                    &systemError)) {
+                terminateSessionsNoJournal(sessions);
+                return false;
+            }
+            targets.push_back(hydra::gatec::GateCRecoveryTarget{
+                static_cast<std::uint32_t>(index + 1),
+                static_cast<std::uint32_t>(index + 1),
+                recovery.runtimeGeneration, identity});
+        }
+        const auto manifest = hydra::gatec::makeGateCRecoveryPlan(
+            sessionId, recovery.runtimeGeneration, leaseTimeoutMilliseconds,
+            6'000, targets, &error);
+        if (!manifest || !recovery.watchdog.start(*manifest, &error)) {
+            std::cerr << "Gate C watchdog arm failed: " << error << '\n';
+            terminateSessionsNoJournal(sessions);
+            return false;
+        }
+
+        recovery.journal.emplace(recovery.store, *manifest,
+                                 recovery.runtimeGeneration);
+        if (!recovery.journal->begin({}, &error)) {
+            std::cerr << "Gate C journal begin failed: " << error << '\n';
+            terminateSessionsNoJournal(sessions);
+            (void)recovery.watchdog.disarm();
+            return false;
+        }
+        for (const auto& action : manifest->actions) {
+            if (!recovery.journal->prepareAction(action.actionId, &error)) {
+                std::cerr << "Gate C journal prepare failed: " << error << '\n';
+                terminateSessionsNoJournal(sessions);
+                (void)recovery.watchdog.disarm();
+                return false;
+            }
+        }
+
+        for (std::size_t index = 0; index < sessions.size(); ++index) {
+            auto& session = sessions[index];
+            if (!completeStagedTarget(session, kHandshakeTimeoutMs,
+                                      requireOwnedWindow, grantedOverride) ||
+                !recovery.journal->markActionApplied(
+                    static_cast<std::uint32_t>(index + 1), &error) ||
+                !recovery.journal->markActionVerified(
+                    static_cast<std::uint32_t>(index + 1), &error)) {
+                std::cerr << "Gate C guarded target activation failed for Seat "
+                          << session.seatId << ": " << error << '\n';
+                (void)rollbackGuardedSessions(recovery, sessions, true);
+                return false;
+            }
+        }
+        if (!recovery.journal->commitActivation(&error)) {
+            std::cerr << "Gate C activation commit failed: " << error << '\n';
+            (void)rollbackGuardedSessions(recovery, sessions, true);
+            return false;
+        }
+        return true;
+    }
+
+    bool recoveryEndedClean(GateCRecoveryContext& recovery) {
+        return recovery.store.assessStartupAndEnterSafeMode().state ==
+            hydra::recovery::StartupRecoveryState::Clean;
+    }
+
+    int runRecoverySelfTest() {
+        if (m_options.recoveryDirectory.empty()) {
+            std::cerr << "Recovery self-test requires --recovery-dir.\n";
+            return 120;
+        }
+        const auto directory = std::filesystem::path(
+            m_options.recoveryDirectory);
+
+        if (m_options.recoveryScenario == "stale-journal") {
+            GateCRecoveryContext seed(directory);
+            std::string error;
+            if (!preflightRecovery(seed, &error)) return 121;
+            hydra::watchdog::ProcessIdentity identity;
+            std::uint32_t systemError = 0;
+            if (!hydra::watchdog::queryProcessIdentity(
+                    GetCurrentProcessId(), identity, &systemError)) {
+                return 122;
+            }
+            const auto token = hydra::gatec::generateSessionToken();
+            if (!token) return 123;
+            const std::vector targets{hydra::gatec::GateCRecoveryTarget{
+                1, 1, seed.runtimeGeneration, identity}};
+            const auto manifest = hydra::gatec::makeGateCRecoveryPlan(
+                *token, seed.runtimeGeneration, 2'000, 3'000,
+                targets, &error);
+            if (!manifest) return 124;
+            seed.journal.emplace(seed.store, *manifest,
+                                 seed.runtimeGeneration);
+            if (!seed.journal->begin({}, &error) ||
+                !seed.journal->prepareAction(1, &error)) {
+                return 125;
+            }
+            GateCRecoveryContext restart(directory);
+            if (preflightRecovery(restart, &error) ||
+                !restart.store.loadSafeMode()) {
+                return 126;
+            }
+            std::cout << "Gate C stale-journal startup block self-test passed.\n";
+            return EXIT_SUCCESS;
+        }
+
+        GateCRecoveryContext recovery(directory);
+        const bool shimScenario =
+            m_options.recoveryScenario == "shim-abnormal-exit";
+        const bool adapterScenario =
+            m_options.recoveryScenario == "adapter-failure";
+        std::vector<TargetSession> sessions(shimScenario || adapterScenario ? 1 : 2);
+        for (std::size_t index = 0; index < sessions.size(); ++index) {
+            sessions[index].seatId = static_cast<SeatId>(index + 1);
+        }
+        std::wstring extraArguments;
+        bool requireOwnedWindow = false;
+        std::optional<hydra::gatec::TestCapability> capabilities;
+        if (adapterScenario) {
+            extraArguments = L"--test-adapter-failure-after-handshake";
+        } else if (shimScenario) {
+            extraArguments = L"--polling-shim --shim " +
+                quoteArgument(m_options.shimPath);
+            requireOwnedWindow = true;
+            capabilities = hydra::gatec::kControlledPollingProbeCapabilities;
+        }
+
+        if (!activateGuardedSessions(recovery, sessions, true,
+                                     extraArguments, requireOwnedWindow,
+                                     capabilities, 2'000)) {
+            return 127;
+        }
+
+        if (m_options.recoveryScenario == "wait-host-kill") {
+            std::cout << "recovery_host_ready watchdog_pid="
+                      << recovery.watchdog.processId();
+            for (const auto& session : sessions) {
+                std::cout << " target_pid=" << session.process.processId();
+            }
+            std::cout << '\n' << std::flush;
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                std::string error;
+                if (!recovery.watchdog.renew(&error)) {
+                    (void)rollbackGuardedSessions(recovery, sessions, true);
+                    return 128;
+                }
+            }
+        }
+
+        if (m_options.recoveryScenario == "lease-stall") {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2'500));
+        } else if (m_options.recoveryScenario == "target-killed") {
+            sessions.front().process.terminate(0x544b494cu); // "TKIL".
+        } else if (m_options.recoveryScenario == "watchdog-killed") {
+            if (!recovery.watchdog.terminateForTest()) return 129;
+        } else if (m_options.recoveryScenario == "pipe-disconnect") {
+            sessions.front().connected = false;
+            sessions.front().channel.close();
+            std::uint32_t ignored = 0;
+            if (!sessions.front().process.wait(kProcessExitTimeoutMs, &ignored)) {
+                return 130;
+            }
+        } else if (m_options.recoveryScenario == "adapter-failure") {
+            std::uint32_t exitCode = 0;
+            if (!sessions.front().process.wait(kProcessExitTimeoutMs, &exitCode) ||
+                exitCode != 82u) {
+                return 131;
+            }
+        } else if (m_options.recoveryScenario == "shim-abnormal-exit") {
+            sessions.front().process.terminate(0x53484b4cu); // "SHKL".
+            std::uint32_t exitCode = 0;
+            if (!sessions.front().process.wait(kProcessExitTimeoutMs, &exitCode) ||
+                sessions.front().process.running()) {
+                return 132;
+            }
+        } else if (m_options.recoveryScenario == "console-logoff" ||
+                   m_options.recoveryScenario == "console-shutdown") {
+            gStopRequested.store(false);
+            const DWORD controlType = m_options.recoveryScenario == "console-logoff"
+                ? CTRL_LOGOFF_EVENT
+                : CTRL_SHUTDOWN_EVENT;
+            if (consoleControlHandler(controlType) == FALSE ||
+                !gStopRequested.load()) {
+                return 133;
+            }
+            gStopRequested.store(false);
+        } else if (m_options.recoveryScenario == "ui-killed") {
+            for (int index = 0; index < 5; ++index) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                std::string error;
+                if (!recovery.watchdog.renew(&error)) return 136;
+            }
+        } else if (m_options.recoveryScenario != "clean") {
+            std::cerr << "Unknown recovery self-test scenario: "
+                      << m_options.recoveryScenario << '\n';
+            (void)rollbackGuardedSessions(recovery, sessions, true);
+            return 134;
+        }
+
+        if (!rollbackGuardedSessions(recovery, sessions) ||
+            !recoveryEndedClean(recovery)) {
+            return 135;
+        }
+        std::cout << "Gate C recovery self-test passed: "
+                  << m_options.recoveryScenario << "\n";
+        return EXIT_SUCCESS;
+    }
+
     bool launchTarget(TargetSession& session, bool headless,
                       std::wstring_view extraArguments = {},
                       std::uint32_t handshakeTimeoutMs = kHandshakeTimeoutMs,
-                      bool requireOwnedWindow = false) {
+                      bool requireOwnedWindow = false,
+                      bool stageOnly = false) {
         const auto token = hydra::gatec::generateSessionToken();
         if (!token) {
             std::cerr << "Cryptographic session-token generation failed for Seat "
@@ -791,14 +1578,15 @@ private:
         PROCESS_INFORMATION process{};
         if (!CreateProcessW(
                 m_options.targetPath.c_str(), commandLine.data(), nullptr,
-                nullptr, FALSE, CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr,
-                &startup, &process)) {
+                nullptr, FALSE,
+                CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
+                nullptr, nullptr, &startup, &process)) {
             std::cerr << "CreateProcessW failed for Seat " << session.seatId
                       << ": " << GetLastError() << '\n';
             return false;
         }
-        CloseHandle(process.hThread);
-        session.process.assign(process.hProcess, process.dwProcessId);
+        session.process.assign(process.hProcess, process.hThread,
+                               process.dwProcessId);
 
         const auto processArchitecture =
             hydra::gatec::detectProcessArchitecture(session.process.handle());
@@ -815,6 +1603,27 @@ private:
         }
         session.architecture = processArchitecture.architecture;
 
+        if (stageOnly) return true;
+        return completeStagedTarget(session, handshakeTimeoutMs,
+                                    requireOwnedWindow);
+    }
+
+    bool completeStagedTarget(
+        TargetSession& session,
+        std::uint32_t handshakeTimeoutMs = kHandshakeTimeoutMs,
+        bool requireOwnedWindow = false,
+        std::optional<hydra::gatec::TestCapability> grantedOverride =
+            std::nullopt) {
+        if (!session.process.valid() || !session.process.suspended() ||
+            !session.process.resume()) {
+            std::cerr << "Controlled child resume failed for Seat "
+                      << session.seatId << ": " << GetLastError() << '\n';
+            session.process.terminate(90);
+            return false;
+        }
+
+        std::string error;
+        std::uint32_t systemError = 0;
         if (!hydra::gatec::waitForGateCClient(
                 session.channel, handshakeTimeoutMs, &error, &systemError)) {
             std::cerr << "Pipe connection failed for Seat " << session.seatId
@@ -865,9 +1674,9 @@ private:
         HelloAckMessage ack;
         ack.accepted = true;
         ack.serverProcessId = GetCurrentProcessId();
-        auto grantedCapabilities =
-            hydra::gatec::kControlledTargetCapabilities;
-        if (requireOwnedWindow) {
+        auto grantedCapabilities = grantedOverride.value_or(
+            hydra::gatec::kControlledTargetCapabilities);
+        if (!grantedOverride && requireOwnedWindow) {
             if (m_options.xinputSelfTest) {
                 grantedCapabilities =
                     hydra::gatec::kControlledXInputProbeCapabilities;
@@ -2048,15 +2857,23 @@ private:
         }
         activeSeats.resize(2);
 
+        std::string recoveryError;
+        const auto recoveryPath = recoveryDirectory(&recoveryError);
+        if (!recoveryPath) {
+            std::cerr << "Gate C recovery directory failed: "
+                      << recoveryError << '\n';
+            return 42;
+        }
+        GateCRecoveryContext recovery(*recoveryPath);
         std::vector<TargetSession> sessions(2);
         for (std::size_t index = 0; index < sessions.size(); ++index) {
             sessions[index].seatId = activeSeats[index];
-            if (!launchTarget(sessions[index], false)) {
-                cleanupSessions(sessions, true);
-                return 42;
-            }
-            seats.assignTargetWindow(sessions[index].seatId,
-                                     sessions[index].targetWindow);
+        }
+        if (!activateGuardedSessions(recovery, sessions, false)) {
+            return 42;
+        }
+        for (auto& session : sessions) {
+            seats.assignTargetWindow(session.seatId, session.targetWindow);
         }
 
         ControlStateMessage control;
@@ -2071,7 +2888,7 @@ private:
         control.clipBottom = 600;
         for (auto& session : sessions) {
             if (!sendControl(session, control)) {
-                cleanupSessions(sessions, true);
+                (void)rollbackGuardedSessions(recovery, sessions, true);
                 return 43;
             }
         }
@@ -2089,7 +2906,7 @@ private:
             auto writer = std::make_unique<TargetInputWriter>(session, &metrics);
             if (!writer->start()) {
                 for (auto& started : writers) started->stop();
-                cleanupSessions(sessions, true);
+                (void)rollbackGuardedSessions(recovery, sessions, true);
                 return 44;
             }
             writerBySeat.emplace(session.seatId, writer.get());
@@ -2148,7 +2965,7 @@ private:
         if (!router.initialize()) {
             std::cerr << "Raw Input host initialization failed.\n";
             for (auto& writer : writers) writer->stop();
-            cleanupSessions(sessions, true);
+            (void)rollbackGuardedSessions(recovery, sessions, true);
             return 45;
         }
 
@@ -2162,6 +2979,9 @@ private:
             << "Press Ctrl+C or close either controlled target to stop.\n";
 
         bool writerFailure = false;
+        bool recoveryFailure = false;
+        auto nextLeaseRenewal = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(500);
         while (!gStopRequested.load()) {
             router.processMessages();
             bool allRunning = true;
@@ -2175,6 +2995,17 @@ private:
                     writerFailure = true;
                     break;
                 }
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= nextLeaseRenewal) {
+                std::string error;
+                if (!recovery.watchdog.renew(&error)) {
+                    std::cerr << "Gate C watchdog lease renewal failed: "
+                              << error << '\n';
+                    recoveryFailure = true;
+                    break;
+                }
+                nextLeaseRenewal = now + std::chrono::milliseconds(500);
             }
             if (!allRunning || writerFailure) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -2202,7 +3033,8 @@ private:
         rollbackStart.stage = hydra::InputMetricStage::RollbackStarted;
         (void)metrics.tryRecord(rollbackStart);
 
-        const bool cleanExit = cleanupSessions(sessions, writerFailure);
+        const bool cleanExit = rollbackGuardedSessions(
+            recovery, sessions, writerFailure || recoveryFailure);
 
         auto rollbackComplete = rollbackStart;
         rollbackComplete.timestampMicros = hydra::monotonicInputMetricTimestampMicros();
@@ -2238,7 +3070,7 @@ private:
             }
         }
         SetConsoleCtrlHandler(consoleControlHandler, FALSE);
-        return writerFailure || !cleanExit || metricsFailure
+        return writerFailure || recoveryFailure || !cleanExit || metricsFailure
                    ? 46
                    : EXIT_SUCCESS;
     }

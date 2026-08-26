@@ -106,7 +106,7 @@ Research:
 - [x] Input latency, queue, drop, and receiver-evidence-aware cross-Seat metrics (`P3-MET-01`; fork PR #18 run `32857666855` validates native x64/x86 43/43 CTest; physical zero-bleed/latency remains manual)
 - [ ] Physical Gate A/B/C acceptance with two input sets (`P3-HW-01` tooling `CODE_COMPLETE`; real hardware manifest/report still pending)
 - [x] Independent watchdog lease and bounded rollback foundation (`P8-WATCH-01`; fork PR #21 run `32919928489` validates native x64/x86 full CTest including forced host-death cleanup while Gate C cross-architecture remains green)
-- [ ] Durable crash journal/safe-mode marker is `VALIDATED` (`P8-JOURNAL-01`; fork PR #22 run `32947110442` passes native x64/x86 plus Gate C cross-architecture); Gate C watchdog/crash rollback acceptance is now READY as `P3-REC-01`
+- [ ] Durable crash journal/safe-mode marker is `VALIDATED` (`P8-JOURNAL-01`; fork PR #22 run `32947110442` passes native x64/x86 plus Gate C cross-architecture); Gate C watchdog/crash rollback acceptance is `IN_PROGRESS` as `P3-REC-01` with local 34/34 portable recovery regressions green, while native Windows CI and manual crash/logoff/shutdown acceptance remain pending
 - [x] Read-only HidHide availability/capability probe (`P3-D-01`; fork PR #20 run `32915683414` validates final head `146b3e6` on native x64/x86 while Gate C cross-architecture remains green)
 - [ ] Guarded HidHide session-cloak experiment (`P3-D-02`; blocked by watchdog/crash-recovery and physical safety prerequisites)
 - [ ] Open-source application profile

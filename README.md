@@ -455,7 +455,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-REC-01 — Gate C watchdog and crash recovery acceptance (READY)
+P3-REC-01 — Gate C watchdog and crash recovery acceptance (IN_PROGRESS; Windows CI/manual crash acceptance pending)
 ```
 
 Start every coding task by reading:

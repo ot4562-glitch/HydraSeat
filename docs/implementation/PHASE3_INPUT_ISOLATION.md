@@ -880,7 +880,7 @@ The planner can distinguish unavailable, installed-unverified, and verified-supp
 
 ## P3-REC-01 — Gate C watchdog and crash recovery acceptance
 
-**State:** READY
+**State:** IN_PROGRESS
 
 **Goal**
 
@@ -921,6 +921,16 @@ Prove that host, target, shim, and adapter failure cannot leave a controlled ses
 **Done when**
 
 Automated process tests and manual Windows crash acceptance both pass.
+
+**P3-REC-01 implementation note (2026-08-26)**
+
+- Gate C now stages controlled targets with `CREATE_SUSPENDED`, validates their architecture and exact `PID + creation time`, then arms the already-validated P8 watchdog and persists `ActionPrepared` journal boundaries before any target thread resumes. Production recovery leases are longer than the synchronous handshake budget; fault tests use a deliberately short lease.
+- The watchdog rollback manifest is intentionally narrow: one `TerminateOwnedProcess` action per exact controlled target, with duplicate action IDs, ordinals, or exact process identities rejected. Journal bytes remain evidence only and cannot introduce rollback commands. Process-local adapter/IAT/shim state is therefore removed by exact owned-process exit rather than by a new remote-unpatch command.
+- The host renews the watchdog lease only from its control loop, never from Raw Input callbacks. Clean stop persists `RollbackStarted`, tears targets down in reverse order, verifies they are gone, re-arms the same trusted manifest if the watchdog itself died, uses watchdog `Disarm` as an idempotent postcondition backstop, then persists `RollbackVerified` and `CleanStop`. Any unresolved process/watchdog/journal cleanup is recorded as `RecoveryRequired` when possible.
+- Recovery self-test modes cover clean/repeated cycles, lease stall, target kill, watchdog kill/restart, pipe disconnect, adapter loss, abrupt shim-owning process exit, UI-surrogate death, logoff/shutdown notification handling, stale-journal startup blocking, and an external host-kill path. The Windows `GateCWatchdogRecoveryTests` process test additionally kills the real Gate C host and waits on exact watchdog/target handles to prove no guarded child/helper remains.
+- Existing `GateCPollingShimTests` remain the coupled shim-initialization evidence: partial IAT install failure restores all already-patched pointers, protection/rollback failure is surfaced, incomplete rollback remains retryable, and repeated uninstall is idempotent. Gate C still owns no global cursor/clip/device mutation in this packet.
+- Local portable validation currently passes 34/34 CTest, including the new recovery core plus existing watchdog/journal/Gate C regressions. Focused GCC 15 strict recovery tests pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror`. The pre-existing Linux-only whole-build blocker remains `reset_input.cpp` including `windows.h`; `make -k` builds the remaining portable targets successfully.
+- Native Windows/MSVC x64 and Win32/x86 `GateCWatchdogRecoveryTests` plus the existing Gate C cross-architecture matrix are still pending. The packet cannot advance beyond `CODE_COMPLETE` until those automated checks pass, and it cannot become `VALIDATED` until the declared manual Windows crash/logoff/shutdown acceptance is performed by a human tester.
 
 **Suggested commit**
 
