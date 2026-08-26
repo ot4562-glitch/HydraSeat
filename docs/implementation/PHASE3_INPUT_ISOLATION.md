@@ -783,7 +783,7 @@ Physical Gate A/B/C results remain pending. CI/self-test evidence validates only
 
 ## P3-D-01 — HidHide read-only availability probe
 
-**State:** READY
+**State:** VALIDATED
 
 **Goal**
 
@@ -816,6 +816,61 @@ Detect whether a supported HidHide control interface/version is present without 
 **Done when**
 
 The planner can distinguish unavailable, installed-unverified, and verified-supported HidHide environments.
+
+**Implementation note (2026-08-26)**
+
+- `HidHideAvailability` is explicitly tri-state: `Unavailable`,
+  `InstalledUnverified`, and `VerifiedSupported`. There is no boolean
+  conversion and installed-unverified never makes the backend available.
+- The Windows observer checks the exact `HidHide` service, enumerates the
+  documented control-interface GUID
+  `{0C320FF7-BD9B-42B6-BDAF-49FEB9C91649}`, reads the driver file version from
+  the service's configured binary, opens that interface with `GENERIC_READ`,
+  and issues only `GET_ACTIVE` (function 2052) and `GET_WLINVERSE` (function
+  2054). Responses must be exactly one byte with value zero or one.
+- The exact known contract allowlist is `1.7.339.0`, `1.7.344.0`, and
+  `1.7.346.0`. Their tag commits (`98ccf172`, `0aa3c946`, and `22a1ff5f`)
+  contain session-blacklist functions 2056/2057. No version range is inferred;
+  every other version remains installed-unverified.
+- Session-blacklist support is inferred only after an allowlisted version and
+  both read-only queries succeed. The probe never calls functions 2056/2057,
+  never queries allow/deny/session-list contents, never requests elevation,
+  and never installs, starts, stops, or reconfigures a service or device.
+- Access denial, unknown versions, missing interface/version evidence,
+  malformed/truncated values, and oversized results all fail closed with a
+  bounded diagnostic and optional system error. Non-Windows builds report
+  `Unavailable` / `unsupported-platform`.
+- `external.hidhide-session` retains administrator, kernel-driver,
+  recovery-guard, session-scope, and high-risk production requirements. Even a
+  verified probe supplies only `PhysicalDeviceCloaking`; it does not satisfy
+  `PhysicalInputSuppression` or make a zero-bleed profile runnable.
+
+**Clean-room/source record**
+
+- Repository: `https://github.com/nefarius/HidHide`, MIT-licensed upstream;
+  studied revision `2b950fd9393e1644b4199f6eb4999e1720f0c6e9`.
+- Public contract consulted: `DEVELOPER.md`, `HidHide/HidHide.inf`,
+  `HidHide/Version.rc`, and the minimal IOCTL/GUID declarations in
+  `Shared/HidHideIoctlContract.h` at that revision, plus the same contract in
+  the three exact tag commits above.
+- No HidHide implementation code, binary, installer, dependency, or build
+  input is copied or vendored. HydraSeat independently represents only the
+  documented identity, numeric query contract, exact tagged versions, and
+  bounded one-byte Boolean response needed by this read-only probe.
+
+**Validation evidence (2026-08-26)**
+
+- fork PR #20 Windows run `32915683414` validates final implementation head
+  `146b3e6399dd2c9bc59052cdbc4a392bd4d7697e`: native x64 and Win32/x86
+  configure/build/CTest jobs pass and the existing Gate C cross-architecture
+  job remains green;
+- the preceding run `32914259441` correctly exposed a Windows-only build defect:
+  the independently defined documented IOCTL values used `CTL_CODE` /
+  `METHOD_BUFFERED` without including `<winioctl.h>`. Commit `146b3e6` fixes only
+  that SDK declaration dependency; the read-only probe contract is unchanged;
+- portable strict-GCC tests and the complete locally available selected Phase 3
+  CTest set pass 31/31 after the fix. No physical HidHide cloaking, mutation,
+  suppression, game, or P3-D-02 evidence is inferred from this validation.
 
 **Suggested commit**
 

@@ -624,7 +624,9 @@ BackendDescriptor protoInputBackend(bool available) {
     return result;
 }
 
-BackendDescriptor hidHideSessionBackend(bool available) {
+BackendDescriptor hidHideSessionBackend(HidHideAvailability availability) {
+    const bool available =
+        availability == HidHideAvailability::VerifiedSupported;
     auto result = makeDescriptor(
         "external.hidhide-session",
         L"External HidHide session control",
@@ -639,9 +641,13 @@ BackendDescriptor hidHideSessionBackend(bool available) {
     result.reversible = true;
     result.sessionScoped = true;
     result.requiresRecoveryGuard = true;
-    if (!available) {
+    if (availability == HidHideAvailability::InstalledUnverified) {
         result.unavailableReason =
-            L"Installed and verified HidHide session control is not available.";
+            L"HidHide evidence was detected, but the exact installed control "
+             "interface/version contract was not verified.";
+    } else if (!available) {
+        result.unavailableReason =
+            L"A verified HidHide installation and control interface were not detected.";
     }
     return result;
 }
@@ -693,7 +699,7 @@ std::vector<BackendDescriptor> builtInIsolationBackends(
         rawInputHostBackend(),
         legacyMessageRouterBackend(),
         protoInputBackend(environment.protoInputAvailable),
-        hidHideSessionBackend(environment.hidHideAvailable),
+        hidHideSessionBackend(environment.hidHideAvailability),
         directInputAdapterBackend(
             environment.directInputAdapterAvailable),
         controlledXInputAdapterBackend(

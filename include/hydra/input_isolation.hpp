@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hydra/directinput_policy.hpp"
+#include "hydra/hidhide_probe.hpp"
 #include "hydra/workspace_manager.hpp"
 
 #include <chrono>
@@ -239,7 +240,8 @@ struct BackendEnvironment {
     bool recoveryGuardReady{false};
 
     bool protoInputAvailable{false};
-    bool hidHideAvailable{false};
+    HidHideAvailability hidHideAvailability{
+        HidHideAvailability::Unavailable};
     bool directInputAdapterAvailable{false};
     bool controlledXInputAdapterAvailable{false};
 };
@@ -306,7 +308,8 @@ private:
 BackendDescriptor rawInputHostBackend();
 BackendDescriptor legacyMessageRouterBackend();
 BackendDescriptor protoInputBackend(bool available = false);
-BackendDescriptor hidHideSessionBackend(bool available = false);
+BackendDescriptor hidHideSessionBackend(
+    HidHideAvailability availability = HidHideAvailability::Unavailable);
 BackendDescriptor directInputAdapterBackend(bool available = false);
 BackendDescriptor controlledXInputAdapterBackend(bool available = false);
 std::vector<BackendDescriptor> builtInIsolationBackends(

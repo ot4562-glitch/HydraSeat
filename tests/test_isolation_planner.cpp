@@ -218,7 +218,8 @@ void testControlledDirectInputCapabilityBoundary() {
 void testConfiguredReferencesStillFailWithoutVerifiedSuppression() {
     BackendEnvironment environment;
     environment.protoInputAvailable = true;
-    environment.hidHideAvailable = true;
+    environment.hidHideAvailability =
+        hydra::HidHideAvailability::VerifiedSupported;
     environment.processInjectionApproved = true;
     environment.administratorAvailable = true;
     environment.recoveryGuardReady = true;
@@ -256,10 +257,63 @@ void testConfiguredReferencesStillFailWithoutVerifiedSuppression() {
           "an already-selected backend reports optional capability coverage consistently");
 }
 
+void testHidHideAvailabilityStates() {
+    GameCompatibilityProfile profile;
+    profile.id = "hidhide-availability";
+    profile.name = L"HidHide availability test";
+    profile.requiredCapabilities =
+        InputIsolationCapability::PhysicalDeviceCloaking;
+    profile.driverPolicy = hydra::DriverPolicy::InstalledOnly;
+    profile.recoveryPolicy = hydra::RecoveryPolicy::Required;
+    profile.allowGlobalInputSuppression = true;
+
+    BackendEnvironment environment;
+    environment.administratorAvailable = true;
+    environment.recoveryGuardReady = true;
+
+    auto plan = IsolationPlanner(
+        hydra::builtInIsolationBackends(environment)).plan(
+            profile, environment);
+    check(plan.status == PlanStatus::Unsupported &&
+              rejectedWith(plan, "external.hidhide-session",
+                           IsolationDiagnosticCode::BackendUnavailable),
+          "unavailable HidHide cannot be planned");
+
+    environment.hidHideAvailability =
+        hydra::HidHideAvailability::InstalledUnverified;
+    const auto unverifiedCatalog =
+        hydra::builtInIsolationBackends(environment);
+    const auto unverifiedBackend = std::find_if(
+        unverifiedCatalog.begin(), unverifiedCatalog.end(),
+        [](const auto& backend) {
+            return backend.id == "external.hidhide-session";
+        });
+    check(unverifiedBackend != unverifiedCatalog.end() &&
+              unverifiedBackend->availability ==
+                  BackendAvailability::Unavailable &&
+              unverifiedBackend->unavailableReason.find(L"not verified") !=
+                  std::wstring::npos,
+          "installed-unverified HidHide remains unavailable with an explicit reason");
+    plan = IsolationPlanner(unverifiedCatalog).plan(profile, environment);
+    check(plan.status == PlanStatus::Unsupported &&
+              !selected(plan, "external.hidhide-session"),
+          "installed-unverified HidHide is never selected");
+
+    environment.hidHideAvailability =
+        hydra::HidHideAvailability::VerifiedSupported;
+    plan = IsolationPlanner(
+        hydra::builtInIsolationBackends(environment)).plan(
+            profile, environment);
+    check(plan.status == PlanStatus::SupportedWithWarnings &&
+              selected(plan, "external.hidhide-session"),
+          "verified-supported HidHide is an installed backend environment");
+}
+
 void testVerifiedSuppressionBackendCanCompletePlan() {
     BackendEnvironment environment;
     environment.protoInputAvailable = true;
-    environment.hidHideAvailable = true;
+    environment.hidHideAvailability =
+        hydra::HidHideAvailability::VerifiedSupported;
     environment.processInjectionApproved = true;
     environment.administratorAvailable = true;
     environment.recoveryGuardReady = true;
@@ -290,7 +344,8 @@ void testVerifiedSuppressionBackendCanCompletePlan() {
 void testAntiCheatRejectsInvasiveBackends() {
     BackendEnvironment environment;
     environment.protoInputAvailable = true;
-    environment.hidHideAvailable = true;
+    environment.hidHideAvailability =
+        hydra::HidHideAvailability::VerifiedSupported;
     environment.processInjectionApproved = true;
     environment.administratorAvailable = true;
     environment.recoveryGuardReady = true;
@@ -319,7 +374,8 @@ void testAntiCheatRejectsInvasiveBackends() {
 void testRecoveryGuardIsRequired() {
     BackendEnvironment environment;
     environment.protoInputAvailable = true;
-    environment.hidHideAvailable = true;
+    environment.hidHideAvailability =
+        hydra::HidHideAvailability::VerifiedSupported;
     environment.processInjectionApproved = true;
     environment.administratorAvailable = true;
     environment.recoveryGuardReady = false;
@@ -368,7 +424,8 @@ void testLegacyRouterNeverClaimsRawInputIsolation() {
 void testRegistrationOrderDoesNotChangePlan() {
     BackendEnvironment environment;
     environment.protoInputAvailable = true;
-    environment.hidHideAvailable = true;
+    environment.hidHideAvailability =
+        hydra::HidHideAvailability::VerifiedSupported;
     environment.processInjectionApproved = true;
     environment.administratorAvailable = true;
     environment.recoveryGuardReady = true;
@@ -514,7 +571,8 @@ void testRequiredInjectionPolicyNeedsInjectionBackend() {
 
 void testDriverInstallationConsentPolicy() {
     BackendEnvironment environment;
-    environment.hidHideAvailable = true;
+    environment.hidHideAvailability =
+        hydra::HidHideAvailability::VerifiedSupported;
     environment.administratorAvailable = true;
     environment.recoveryGuardReady = true;
     environment.driverInstallationApproved = false;
@@ -546,7 +604,8 @@ void testDriverInstallationConsentPolicy() {
 void testProtectedObservationTemplate() {
     BackendEnvironment environment;
     environment.protoInputAvailable = true;
-    environment.hidHideAvailable = true;
+    environment.hidHideAvailability =
+        hydra::HidHideAvailability::VerifiedSupported;
     environment.processInjectionApproved = true;
     environment.administratorAvailable = true;
     environment.recoveryGuardReady = true;
@@ -574,6 +633,7 @@ int main() {
     testControlledXInputCapabilityBoundary();
     testControlledDirectInputCapabilityBoundary();
     testConfiguredReferencesStillFailWithoutVerifiedSuppression();
+    testHidHideAvailabilityStates();
     testVerifiedSuppressionBackendCanCompletePlan();
     testAntiCheatRejectsInvasiveBackends();
     testRecoveryGuardIsRequired();

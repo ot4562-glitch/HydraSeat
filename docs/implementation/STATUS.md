@@ -3,9 +3,9 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-HW-01 — Gate A/B/C physical acceptance runner**
-- Current validated fork-main baseline: `f73634600dfdfcdcd65185d84b275db47258d30b` (merged P3-MET-01 via fork PR #18)
-- Current validated Windows CI evidence: fork-side PR #18 run `32857666855` validates P3-MET-01 head `55953b2205d0bb1f9f929c542fcb837a543e0824` against fork `main` via merge ref `13dc288b47ea271aec7cd50620fee0fc8fc71116`: native x64 and Win32/x86 each passed 43/43 CTest, including `InputMetricsTests`, `InputMetricsCliSelfTest`, and `InputMetricsFixtureReport`; both architectures built the instrumented `hydra_gate_c_host`, and the Gate C cross-architecture regression job also passed
+- Current default packet: **P8-WATCH-01 — Independent watchdog lease and rollback protocol** (cross-phase prerequisite required to unblock P3-REC-01/P3-D-02)
+- Fork-main baseline used by P3-D-01 validation: `d61879ac2bda6bfef912b662d5d97cb9a8acb4ee` (P3-HW-01 tooling merged; physical acceptance remains pending)
+- Current validated Windows CI evidence: fork-side PR #20 run `32915683414` validates P3-D-01 head `146b3e6399dd2c9bc59052cdbc4a392bd4d7697e`: native x64 and Win32/x86 configure/build/CTest jobs pass and the Gate C cross-architecture regression job passes; this is read-only HidHide probe evidence and does not validate physical cloaking/suppression
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -42,10 +42,10 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-RAW-02 Raw Input virtualization shim | VALIDATED | P3-RAW-01, P3-API-02 | Windows run `32806163164`: native x64/x86 and x64-host-to-x64/x86 ordinary Raw Input API/two-process acceptance passed with zero cross-Seat/API/stale-token/queue-overflow counters |
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
 | P3-REC-01 Host/target/adapter crash and watchdog recovery | BLOCKED | P8-WATCH-01, P3-API-03 | No orphan target/helper, shim uninstalled, state reset after forced failures |
-| P3-HW-01 Gate A/B/C physical acceptance runner | CODE_COMPLETE | P3-QUEUE-01 | Guided/resumable runner, bounded manifest/parser, shared/unassigned negative cases, P3-MET report review, and default trace key-ID redaction implemented; CI/tooling validation pending, real two-keyboard/two-pointing-device Gate A/B/C evidence remains manual |
+| P3-HW-01 Gate A/B/C physical acceptance runner | CODE_COMPLETE | P3-QUEUE-01 | Fork PR #19 run `32911603828` validates the tooling on x64/x86 plus Gate C cross-architecture; real two-keyboard/two-pointing-device Gate A/B/C evidence remains manual and PENDING |
 | P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Remediation head `b351afdd` validated by fork PR #15 run `32832036967`: native x64/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance |
 | P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | VALIDATED | P3-CTRL-01, P3-ARCH-01 | Fork PR #16 run `32840474306`: native x64 and Win32/x86 full CTest passed with controlled DirectInput policy/probes plus read-only `DirectInputNativeObservationSelfTest`; Gate C cross-architecture regressions stayed green |
-| P3-D-01 HidHide read-only availability/capability probe | READY | P3-PLAN-01 | No mutation; exact installed/version/control-interface report |
+| P3-D-01 HidHide read-only availability/capability probe | VALIDATED | P3-PLAN-01 | Fork PR #20 run `32915683414` validates head `146b3e6`: native x64/x86 build/CTest plus Gate C cross-architecture pass; exact-version tri-state probe remains read-only and P3-D-02 stays blocked |
 | P3-D-02 Guarded HidHide session-cloak lab | BLOCKED | P3-REC-01, P3-D-01 | Spare input/watchdog/timeout/crash rollback and physical evidence |
 | P3-E-01 Open-source non-protected application profile | BLOCKED | P3-RAW-02, P3-API-03 | Reproducible profile and measured no-cross-state result |
 | P3-E-02 First non-anti-cheat game profile | BLOCKED | P3-E-01, P3-D-02 or proven non-cloak suppression path | Explicit experimental compatibility entry |
@@ -252,19 +252,37 @@ Manual evidence: PENDING. No claim is made yet for the user's two keyboards, two
 Rollback/cleanup: the runner mutates no persistent/device state and derives shared-case data only in ignored session output; it tracks only processes it starts and attempts tree cleanup in `finally`, while failed evidence remains on disk for review/resume.
 Next packet after tooling CI/merge: P3-D-01 may proceed independently as the read-only HidHide availability probe, but P3-HW-01 remains `CODE_COMPLETE` until real physical evidence is recorded and must not be treated as a completed Phase 3 gate.
 
+### 2026-08-26 — P3-D-01
+
+State: VALIDATED
+Branch/commit: `feat/p3-d-01-hidhide-readonly-probe`; implementation commit `6b354c216f30cfdec755f993553d270b536ddb50` (`feat: implement P3-D-01 read-only HidHide probe`); Windows SDK include fix `146b3e6399dd2c9bc59052cdbc4a392bd4d7697e` (`fix: include Windows IOCTL definitions for P3-D-01`)
+Windows CI: fork PR #20 final run `32915683414` validates exact head `146b3e6399dd2c9bc59052cdbc4a392bd4d7697e`: native x64 and Win32/x86 configure/build/CTest jobs pass and the existing Gate C cross-architecture job passes. Initial run `32914259441` failed both native builds because `CTL_CODE` / `METHOD_BUFFERED` were used without the Windows SDK `<winioctl.h>` declaration; `146b3e6` fixes that declaration-only defect and the fresh matrix is green.
+Automated/local evidence:
+- strict GCC 15 builds pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror` for the probe library/CLI, fake-platform tests, planner tests, and coupled Phase 3 targets;
+- focused `HidHideProbeTests`, `HidHideProbeCliSelfTest`, `IsolationPlannerTests`, and `IsolationPlanObservation` pass 4/4;
+- the full locally available selected Phase 3 CTest set passes 31/31 across engine/hardware identity, planner, observation, Raw Input, XInput, DirectInput, P3-MET, P3-HW parser, Gate C protocol/architecture/snapshot, C++/C adapter ABI, polling/cursor/Raw Input shims, and target/host self-tests;
+- fake-platform coverage includes no evidence, installed-without-interface, OS query failure, access denial without elevation, exact supported/unknown versions, canonical active/inverse values, malformed/truncated/oversized responses, contract-only session capability inference, zero mutation calls, bounded privacy-preserving output, deterministic repeat, and non-Windows unsupported behavior;
+- roadmap validation and current-packet lookup pass; Windows Git `git diff --check` passes.
+Read-only evidence: exact `HidHide` SCM service identity/configuration, documented interface GUID `{0C320FF7-BD9B-42B6-BDAF-49FEB9C91649}`, driver file version, and only function 2052 (`GET_ACTIVE`) plus function 2054 (`GET_WLINVERSE`) with canonical one-byte Boolean responses. Exact known versions are `1.7.339.0`, `1.7.344.0`, and `1.7.346.0`; every other version is installed-unverified.
+Mutation/privacy: no installer, service/device mutation, administrator-elevation request, set/list/session IOCTL, allow/deny/session-list read, device-path output, or third-party binary exists in this packet.
+Planner behavior: unavailable and installed-unverified HidHide remain unavailable; verified-supported may advertise only `PhysicalDeviceCloaking` while retaining administrator, kernel-driver, recovery-guard, session-scope, and high-risk requirements. `PhysicalInputSuppression` remains missing, so production zero-bleed profiles remain unsupported.
+Manual evidence: none claimed. P3-HW-01 remains `CODE_COMPLETE`, and physical Gate A/B/C remain PENDING.
+Known limitation: authoritative compatibility is deliberately an exact three-version allowlist; newer or otherwise unknown builds require a separate public-contract review before recognition.
+Next packet: P8-WATCH-01 becomes the current READY cross-phase prerequisite because P3-REC-01 depends on it and P3-D-02 remains blocked by P3-REC-01 plus physical/recovery prerequisites. Do not start P3-D-02 directly.
+
 ## Next Codex task
 
 Use:
 
 ```text
-After P3-HW-01 tooling integration, implement P3-D-01 exactly as specified in
-  docs/implementation/PHASE3_INPUT_ISOLATION.md
+Implement P8-WATCH-01 exactly as specified in
+  docs/implementation/PHASE8_RELIABILITY_DISTRIBUTION.md
 
-Build only the read-only HidHide availability/capability probe and planner/backend
-availability integration. Do not install HidHide, mutate driver state, enumerate
-private allow/deny-list contents, enable cloaking, or start P3-D-02. Unknown or
-unsupported versions fail closed. Keep P3-HW-01 CODE_COMPLETE and all physical
-Gate A/B/C rows PENDING until real hardware evidence is recorded.
+Build only the independent watchdog lease and bounded rollback protocol needed to
+unblock P3-REC-01. Preserve the rule that watchdog actions are allowlisted,
+versioned, idempotent, and cannot execute arbitrary shell commands or activate a
+Seat. Do not start P3-D-02. Keep P3-HW-01 CODE_COMPLETE and all physical Gate
+A/B/C rows PENDING until real hardware evidence is recorded.
 
 
 ```

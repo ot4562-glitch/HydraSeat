@@ -358,6 +358,24 @@ ProtoInput is the primary public reference and possible external adapter, but di
 
 An optional installed-driver adapter may use HidHide's documented control API. It can hide selected physical devices but does not create replacement Seat-local input. Activation is forbidden without a recovery guard, explicit consent and Gate D evidence. The current descriptor advertises device cloaking only, not verified physical input suppression.
 
+P3-D-01 adds observation only. A platform-independent interpreter consumes a
+narrow injectable evidence source; the Windows source checks the exact service,
+documented device-interface GUID, driver file version, and the bounded
+read-only active/inverse queries. It does not expose a general driver-control
+surface. Availability is `Unavailable`, `InstalledUnverified`, or
+`VerifiedSupported`; only exact tagged versions whose public contract defines
+the session blacklist can reach the final state, and only after both read-only
+queries return canonical one-byte Boolean values. Unknown versions and access
+denial remain unavailable to the planner. No allow/deny/session-list contents
+or device paths enter the public report.
+
+This probe does not weaken activation policy. The production descriptor still
+requires administrator access, an installed kernel driver, a recovery guard,
+session scope, and explicit high-risk planning. `VerifiedSupported` proves only
+that the known read-only environment is present; it neither invokes session
+cloaking nor proves physical keyboard/mouse suppression, recovery safety, game
+compatibility, anti-cheat compatibility, or zero bleed.
+
 #### Controller visibility adapters
 
 Separate XInput slot-remapping and DirectInput order/visibility components are selected according to the target game's actual input API. The P3-CTRL-02 controlled DirectInput component represents `guidInstance` as fixed-width fields, validates a bounded ordered allowlist, and derives the visible enumeration strictly from profile order. Native/friendly enumeration order, product GUID, and friendly names are metadata only. Missing/duplicate/invalid instance IDs fail closed with an empty visible set. A HydraSeat-owned Windows probe creates `IDirectInput8W` and observes attached game-controller enumeration only; it never creates/acquires a device, changes cooperative level, sends force feedback, hides a physical device, replaces `dinput8.dll`, or claims SDL/Raw-HID coverage. Production per-game interposition remains a later deployment boundary.

@@ -526,7 +526,8 @@ Only after Gate E may Phase 3 be marked complete.
 | Controlled normalized XInput state/remapping | Yes | Remediation Windows x64/x86 36/36 + cross-architecture validated (`32832036967`, head `b351afdd`); old `32816241577` is pre-fix only | Physical controller evidence pending | Direct adapter facade; no ordinary XInput hook |
 | Controlled DirectInput visibility/order policy | Yes | Fork PR #16 run `32840474306`: native x64/x86 full CTest passes controlled policy/two-probe and read-only DirectInput 8 observation; portable strict-GCC regressions also pass | Physical controller/game evidence pending | HydraSeat-owned policy/probe only; no system DLL replacement or production interposition |
 | Input latency/queue/bleed metrics harness | Yes | Fork PR #18 run `32857666855`: native x64/x86 43/43 CTest, metrics CLI/report tests and instrumented Gate C host pass; strict GCC/schema/portable 24/24 also pass | Physical latency/zero-bleed/overhead evidence pending under D-027 | Bounded nonblocking recorder; host physical/enqueue/dequeue/write only; receiver identity remains unknown until target apply/query evidence, so zero cross counters alone are not zero-bleed proof |
-| P3-HW-01 physical acceptance runner/report tooling | Yes | Local PowerShell 5 + Python self-tests and focused portable CTest pass; fresh Windows x64/x86 CI pending | Gate A/B/C real two-input-set session remains pending | Resumable SHA-pinned manifest, derived shared-case profile, fail-closed parser, P3-MET review; JSONL key IDs redacted by default and physical PASS requires explicit human evidence |
+| P3-HW-01 physical acceptance runner/report tooling | Yes | Fork PR #19 run `32911603828`: native x64/x86 full 45-test CTest plus Gate C cross-architecture pass | Gate A/B/C real two-input-set session remains pending | Resumable SHA-pinned manifest, derived shared-case profile, fail-closed parser, P3-MET review; JSONL key IDs redacted by default and physical PASS requires explicit human evidence |
+| HidHide read-only availability probe | Yes | Portable strict fake-platform tests pass; fresh Windows x64/x86 native observation pending | No physical cloaking evidence | Exact service/interface/version plus active/inverse query only; unknown versions fail closed and no private lists are read |
 | Polling API interposition | Yes | CI pending | No | Controlled probe only |
 | Cursor/focus API interposition | No | Pending | Pending | Controlled probe only |
 | HidHide session lifecycle | No | Yes | Yes | No |
@@ -544,6 +545,16 @@ The non-invasive Phase 3 foundation now contains five implementation slices.
 4. Deterministic planner tests prove that unsupported capabilities remain visible and safety policies fail closed.
 5. `hydra_plan` prints selected, rejected, covered and missing capabilities without activating any backend.
 6. HidHide advertises **device cloaking only**, not verified physical input suppression. Therefore zero-bleed profiles remain unsupported until Gate D proves a real suppression path.
+7. P3-D-01 replaces the former HidHide availability boolean with
+   `Unavailable`, `InstalledUnverified`, and `VerifiedSupported`. The Windows
+   probe uses the documented interface GUID and exact driver version, then
+   reads only canonical active/inverse Boolean values. Exact versions
+   `1.7.339.0`, `1.7.344.0`, and `1.7.346.0` are recognized from their public
+   tagged contracts; no surrounding range is assumed.
+8. The probe has no list-content or mutation operation. Session-blacklist
+   capability is inferred from a known contract only and does not mean that
+   HydraSeat invoked it. Access denial, unknown versions, malformed results,
+   and non-Windows platforms remain unavailable to planning.
 
 ### Gate A/B implementation slice
 
