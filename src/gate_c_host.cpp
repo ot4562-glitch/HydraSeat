@@ -1440,9 +1440,11 @@ private:
             capabilities = hydra::gatec::kControlledPollingProbeCapabilities;
         }
 
+        const std::uint32_t leaseTimeoutMilliseconds =
+            m_options.recoveryScenario == "lease-stall" ? 2'000u : 20'000u;
         if (!activateGuardedSessions(recovery, sessions, true,
                                      extraArguments, requireOwnedWindow,
-                                     capabilities, 2'000)) {
+                                     capabilities, leaseTimeoutMilliseconds)) {
             return 127;
         }
 
