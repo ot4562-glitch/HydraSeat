@@ -190,6 +190,21 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P8-WATCH-01 versioned lease/rollback protocol and idempotent rollback registry.
+# The portable core contains no arbitrary command execution or persistent-state I/O.
+add_library(hydra_watchdog_core STATIC
+    src/watchdog_protocol.cpp
+    src/rollback_registry.cpp
+    include/hydra/watchdog_protocol.hpp
+    include/hydra/rollback_registry.hpp
+)
+if(MSVC)
+    target_compile_options(hydra_watchdog_core PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_watchdog_core PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # Phase 3 controlled-process protocol and virtual input-state core.
 add_library(hydra_gate_c_core STATIC
     src/gate_c_architecture.cpp
@@ -352,6 +367,19 @@ if(MSVC)
     target_compile_options(hydra_hidhide_probe_cli PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_hidhide_probe_cli PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P8-WATCH-01 independent rollback-only watchdog executable. The host-side
+# launcher is intentionally deferred to the owning runtime/recovery packet.
+add_executable(hydra_watchdog
+    src/watchdog_main.cpp
+)
+target_link_libraries(hydra_watchdog PRIVATE hydra_watchdog_core)
+if(MSVC)
+    target_compile_options(hydra_watchdog PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_watchdog PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
@@ -539,6 +567,31 @@ add_test(NAME HidHideProbeCliSelfTest
 if(WIN32)
     add_test(NAME HidHideProbeNativeReadOnly
              COMMAND hydra_hidhide_probe_cli --probe)
+endif()
+
+# P8-WATCH-01 portable protocol/registry tests and Windows process/fault tests.
+add_executable(watchdog_protocol_tests
+    tests/test_watchdog_protocol.cpp
+)
+target_link_libraries(watchdog_protocol_tests PRIVATE hydra_watchdog_core)
+if(MSVC)
+    target_compile_options(watchdog_protocol_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(watchdog_protocol_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME WatchdogProtocolTests COMMAND watchdog_protocol_tests)
+if(WIN32)
+    add_executable(watchdog_process_tests
+        tests/test_watchdog_process.cpp
+    )
+    target_link_libraries(watchdog_process_tests PRIVATE hydra_watchdog_core)
+    add_dependencies(watchdog_process_tests hydra_watchdog)
+    if(MSVC)
+        target_compile_options(watchdog_process_tests PRIVATE /W4 /permissive-)
+    endif()
+    add_test(NAME WatchdogProcessFaultTests COMMAND watchdog_process_tests)
+    set_tests_properties(WatchdogProcessFaultTests PROPERTIES TIMEOUT 60)
 endif()
 
 # Pure Gate A/B observation and explicit Seat-routing tests.

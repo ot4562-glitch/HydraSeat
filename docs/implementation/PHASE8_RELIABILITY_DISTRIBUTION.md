@@ -40,7 +40,7 @@ all -> P8-SOAK-01 -> P8-CLOSE-01
 
 ## P8-WATCH-01 — Independent watchdog lease and rollback protocol
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -73,7 +73,7 @@ struct WatchdogStatus;
 **Implementation skeleton**
 
 1. host starts watchdog before risky activation and establishes a versioned lease;
-2. host sends a bounded signed/correlated rollback manifest containing only allowlisted action types;
+2. host sends a bounded authenticated/correlated rollback manifest containing only allowlisted action types;
 3. host renews lease on a dedicated path not blocked by UI/input queues;
 4. watchdog monitors host/process handles and expiry;
 5. on clean stop, host requests disarm after verified rollback;
@@ -112,6 +112,16 @@ struct WatchdogStatus;
 **Done when**
 
 Gate C can register a harmless rollback plan, kill the host, and prove watchdog cleanup without UI participation.
+
+**P8-WATCH-01 implementation note (2026-08-26)**
+
+- protocol v1 uses a fixed 24-byte little-endian frame header, a 4096-byte payload ceiling, nonzero monotonic control sequences, a 128-bit session identity, explicit lease generation, bounded lease/action/total timeouts, and at most 32 rollback actions;
+- the manifest contains only fixed-width action enums and identities. It has no command string, executable path, registry path, file path, or arbitrary payload field, so the watchdog cannot become a shell/command runner;
+- the local launch contract authenticates the control plane with Windows handle capabilities: the host creates anonymous control/status pipes and must pass only the intended pipe handles through `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`. Session/generation/sequence checks provide correlation. P8-WATCH-01 deliberately does not invent a cryptographic signature/key scheme for this non-nameable inherited transport; any later named or cross-trust-boundary transport must add an explicit authenticated framing design before use;
+- rollback actions execute in reverse activation order. Successful/already-satisfied action IDs are remembered so retry is idempotent, and a different plan cannot replace an armed registry implicitly;
+- `TerminateOwnedProcess` is the only OS-mutating executor implemented in this packet. It requires exact PID plus process-creation time and refuses watchdog/host self-targets. The other allowlisted action kinds remain typed but return `Unsupported`, causing `RecoveryRequired`, until the packet that owns that mutable subsystem supplies a narrow implementation;
+- `Disarm` is not trusted as proof by itself: the watchdog re-runs the registered idempotent rollback plan before releasing the lease. Any unresolved action keeps the watchdog in `RecoveryRequired`;
+- durable crash-journal persistence, safe-mode markers, emergency reset, Gate C host integration, HidHide state mutation, and production Seat activation remain outside this packet (`P8-JOURNAL-01`, `P8-RESET-01`, `P3-REC-01`, and later runtime packets). The restart/reload check here covers deterministic manifest reconstruction/idempotence only, not a persistent crash journal.
 
 **Suggested commit**
 

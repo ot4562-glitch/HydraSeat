@@ -56,7 +56,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 
 | Packet | State | Reason |
 | --- | --- | --- |
-| P8-WATCH-01 Watchdog protocol and lease model | READY | Required before device cloaking and crash acceptance |
+| P8-WATCH-01 Watchdog protocol and lease model | CODE_COMPLETE | Portable protocol/registry and independent watchdog plus Windows host-kill/lease/process-identity fault harness are implemented; local 32/32 selected CTest passes, fresh Windows x64/x86 CI pending |
 | P8-RESET-01 Emergency reset CLI contract | BLOCKED | Depends on watchdog rollback registry/contracts |
 | P8-JOURNAL-01 Crash journal and safe-mode marker | READY | Required before external game experiments |
 | P4-RUN-01 Production host service/process skeleton | BLOCKED | Start after P3 controlled shim contract stabilizes |
@@ -268,7 +268,22 @@ Mutation/privacy: no installer, service/device mutation, administrator-elevation
 Planner behavior: unavailable and installed-unverified HidHide remain unavailable; verified-supported may advertise only `PhysicalDeviceCloaking` while retaining administrator, kernel-driver, recovery-guard, session-scope, and high-risk requirements. `PhysicalInputSuppression` remains missing, so production zero-bleed profiles remain unsupported.
 Manual evidence: none claimed. P3-HW-01 remains `CODE_COMPLETE`, and physical Gate A/B/C remain PENDING.
 Known limitation: authoritative compatibility is deliberately an exact three-version allowlist; newer or otherwise unknown builds require a separate public-contract review before recognition.
-Next packet: P8-WATCH-01 becomes the current READY cross-phase prerequisite because P3-REC-01 depends on it and P3-D-02 remains blocked by P3-REC-01 plus physical/recovery prerequisites. Do not start P3-D-02 directly.
+Next packet: P8-WATCH-01 became the current cross-phase prerequisite because P3-REC-01 depends on it; P3-D-02 remains blocked. Do not start P3-D-02 directly.
+
+### 2026-08-26 — P8-WATCH-01
+
+State: CODE_COMPLETE
+Branch/commit: `feat/p8-watch-01-watchdog-rollback`; implementation commit pending
+Windows CI: pending fresh native x64, Win32/x86, and existing Gate C cross-architecture regression evidence for the final implementation SHA
+Automated/local evidence:
+- strict GCC 15 builds pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror` for the watchdog executable plus protocol/rollback registry; `WatchdogProtocolTests` pass;
+- the complete locally available selected portable suite passes 32/32, preserving engine/hardware, planner, HidHide, observation, Raw Input, XInput, DirectInput, metrics, P3-HW parser, Gate C protocol/ABI/shim, target, and host regressions;
+- protocol tests cover fixed-width round trip, future/bad magic/reserved/truncated/oversized rejection, zero/duplicate/unknown manifest identities, maximum action count, lease/disarm/status framing, reverse activation order, idempotent replay, partial failure/retry, armed-plan replacement rejection, and reconstructed-manifest already-satisfied behavior;
+- declared Windows process/fault coverage launches `hydra_watchdog.exe` through an explicit inherited-handle allowlist and tests clean disarm after host rollback, disarm safety-backstop rollback, lease expiry, stale-sequence protocol failure, PID creation-time mismatch without killing the unrelated process, and host death with independent target cleanup.
+Security/recovery boundary: the control plane is an anonymous inherited-pipe capability with session/generation/sequence correlation; the manifest carries no arbitrary command/path field. Only exact `PID + creation time` process termination mutates OS state in this packet. Other typed rollback actions fail closed as `RecoveryRequired` until their owning packet supplies a narrow executor.
+Manual evidence: none claimed. P3-HW-01 remains `CODE_COMPLETE`; physical Gate A/B/C, production Gate C watchdog integration, durable crash journal/safe mode, emergency reset, device cloaking, and game compatibility remain pending/later packets.
+Known limitation: P8-WATCH-01 does not persist a crash journal and does not implement cryptographic signing for its non-nameable inherited local transport. Durable journal/restart recovery belongs to P8-JOURNAL-01; any future named/cross-trust transport requires explicit authenticated framing.
+Next packet after fresh Windows validation: P8-JOURNAL-01 is the next critical prerequisite; P3-REC-01 depends on both P8-WATCH-01 and P8-JOURNAL-01.
 
 ## Next Codex task
 
