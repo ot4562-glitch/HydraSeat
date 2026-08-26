@@ -5,7 +5,7 @@ This file is the phase-level summary. The implementation source of truth is the 
 Current default implementation packet:
 
 ```text
-P3-HW-01 — Gate A/B/C physical acceptance runner
+P8-WATCH-01 — Independent watchdog lease and rollback protocol
 ```
 
 Validate the roadmap with:
@@ -106,7 +106,8 @@ Research:
 - [x] Input latency, queue, drop, and receiver-evidence-aware cross-Seat metrics (`P3-MET-01`; fork PR #18 run `32857666855` validates native x64/x86 43/43 CTest; physical zero-bleed/latency remains manual)
 - [ ] Physical Gate A/B/C acceptance with two input sets (`P3-HW-01` tooling `CODE_COMPLETE`; real hardware manifest/report still pending)
 - [ ] Watchdog/crash rollback acceptance
-- [ ] Read-only HidHide probe, then guarded session-cloak experiment
+- [x] Read-only HidHide availability/capability probe (`P3-D-01`; fork PR #20 run `32915683414` validates final head `146b3e6` on native x64/x86 while Gate C cross-architecture remains green)
+- [ ] Guarded HidHide session-cloak experiment (`P3-D-02`; blocked by watchdog/crash-recovery and physical safety prerequisites)
 - [ ] Open-source application profile
 - [ ] First non-anti-cheat game profile
 - [ ] Two different target/game zero-bleed proof

@@ -783,7 +783,7 @@ Physical Gate A/B/C results remain pending. CI/self-test evidence validates only
 
 ## P3-D-01 — HidHide read-only availability probe
 
-**State:** CODE_COMPLETE
+**State:** VALIDATED
 
 **Goal**
 
@@ -857,6 +857,20 @@ The planner can distinguish unavailable, installed-unverified, and verified-supp
   input is copied or vendored. HydraSeat independently represents only the
   documented identity, numeric query contract, exact tagged versions, and
   bounded one-byte Boolean response needed by this read-only probe.
+
+**Validation evidence (2026-08-26)**
+
+- fork PR #20 Windows run `32915683414` validates final implementation head
+  `146b3e6399dd2c9bc59052cdbc4a392bd4d7697e`: native x64 and Win32/x86
+  configure/build/CTest jobs pass and the existing Gate C cross-architecture
+  job remains green;
+- the preceding run `32914259441` correctly exposed a Windows-only build defect:
+  the independently defined documented IOCTL values used `CTL_CODE` /
+  `METHOD_BUFFERED` without including `<winioctl.h>`. Commit `146b3e6` fixes only
+  that SDK declaration dependency; the read-only probe contract is unchanged;
+- portable strict-GCC tests and the complete locally available selected Phase 3
+  CTest set pass 31/31 after the fix. No physical HidHide cloaking, mutation,
+  suppression, game, or P3-D-02 evidence is inferred from this validation.
 
 **Suggested commit**
 
