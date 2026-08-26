@@ -1576,16 +1576,23 @@ private:
         STARTUPINFOW startup{};
         startup.cb = sizeof(startup);
         PROCESS_INFORMATION process{};
+        const DWORD creationFlags = CREATE_UNICODE_ENVIRONMENT |
+            (stageOnly ? CREATE_SUSPENDED : 0u);
         if (!CreateProcessW(
                 m_options.targetPath.c_str(), commandLine.data(), nullptr,
-                nullptr, FALSE,
-                CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
+                nullptr, FALSE, creationFlags,
                 nullptr, nullptr, &startup, &process)) {
             std::cerr << "CreateProcessW failed for Seat " << session.seatId
                       << ": " << GetLastError() << '\n';
             return false;
         }
-        session.process.assign(process.hProcess, process.hThread,
+        HANDLE primaryThread = nullptr;
+        if (stageOnly) {
+            primaryThread = process.hThread;
+        } else {
+            CloseHandle(process.hThread);
+        }
+        session.process.assign(process.hProcess, primaryThread,
                                process.dwProcessId);
 
         const auto processArchitecture =
@@ -1614,8 +1621,10 @@ private:
         bool requireOwnedWindow = false,
         std::optional<hydra::gatec::TestCapability> grantedOverride =
             std::nullopt) {
-        if (!session.process.valid() || !session.process.suspended() ||
-            !session.process.resume()) {
+        if (!session.process.valid()) {
+            return false;
+        }
+        if (session.process.suspended() && !session.process.resume()) {
             std::cerr << "Controlled child resume failed for Seat "
                       << session.seatId << ": " << GetLastError() << '\n';
             session.process.terminate(90);
