@@ -3,9 +3,9 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-REC-01 — Gate C watchdog and crash recovery acceptance** (`IN_PROGRESS`; P8-WATCH-01 and P8-JOURNAL-01 prerequisites validated, Windows x64/x86 recovery CI and manual crash acceptance pending)
+- Current default packet: **P3-REC-01 — Gate C watchdog and crash recovery acceptance** (`CODE_COMPLETE`; automated Windows x64/x86 and Gate C cross-architecture evidence is green, while real Windows acceptance remains pending)
 - Parent fork-main baseline for P8-WATCH-01 validation: `494426e882832b0ae6d94a75d038473ba96f104a` (P3-D-01 integrated; physical acceptance remains pending)
-- Current validated Windows CI evidence: fork-side PR #22 run `32947110442` validates P8-JOURNAL-01 exact implementation head `2b42d9a7e585a2629f27911ed7a8683298ec9ab8`: native x64 and Win32/x86 full-project configure/build plus unfiltered CTest pass, and the Gate C cross-architecture regression job passes; this validates the durable journal/safe-mode foundation only, not Gate C crash recovery or physical/device-cloak recovery
+- Current automated Windows CI evidence: fork PR #23 run `32957740991` validates P3-REC-01 implementation head `3d2ec9e33bcf016d38086bb75b97c819f643eda8`: native x64 and Win32/x86 each pass the complete 53/53 CTest suite, and the x64-host-to-x64/x86 Gate C cross-architecture matrix passes. The later documentation-closure head on the same branch changes status/evidence text only. This is automated controlled-process evidence, not physical/device-cloak or human desktop-session acceptance.
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -41,7 +41,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-RAW-01 Raw Input registration/data probe | VALIDATED | P3-API-01 | Windows run `32800513365`: native x64/x86 28/28 CTest, retained observed registration traces, replacement/remove/destroyed-HWND evidence, and repeated process teardown passed |
 | P3-RAW-02 Raw Input virtualization shim | VALIDATED | P3-RAW-01, P3-API-02 | Windows run `32806163164`: native x64/x86 and x64-host-to-x64/x86 ordinary Raw Input API/two-process acceptance passed with zero cross-Seat/API/stale-token/queue-overflow counters |
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
-| P3-REC-01 Host/target/adapter crash and watchdog recovery | IN_PROGRESS | P8-WATCH-01, P8-JOURNAL-01, P3-API-03 | Local portable 34/34 plus strict recovery core pass; native x64/x86 `GateCWatchdogRecoveryTests` and manual Windows crash/logoff/shutdown acceptance pending |
+| P3-REC-01 Host/target/adapter crash and watchdog recovery | CODE_COMPLETE | P8-WATCH-01, P8-JOURNAL-01, P3-API-03 | Fork PR #23 run `32957740991` validates implementation head `3d2ec9e`: native x64 and Win32/x86 53/53 plus Gate C cross-architecture; local portable 34/34 and strict recovery checks remain green; real Windows acceptance is PENDING |
 | P3-HW-01 Gate A/B/C physical acceptance runner | CODE_COMPLETE | P3-QUEUE-01 | Fork PR #19 run `32911603828` validates the tooling on x64/x86 plus Gate C cross-architecture; real two-keyboard/two-pointing-device Gate A/B/C evidence remains manual and PENDING |
 | P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Remediation head `b351afdd` validated by fork PR #15 run `32832036967`: native x64/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance |
 | P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | VALIDATED | P3-CTRL-01, P3-ARCH-01 | Fork PR #16 run `32840474306`: native x64 and Win32/x86 full CTest passed with controlled DirectInput policy/probes plus read-only `DirectInputNativeObservationSelfTest`; Gate C cross-architecture regressions stayed green |
@@ -71,7 +71,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | Gate C polling API interposition | VALIDATED (CONTROLLED CI) | HydraSeat-owned x64/x86 probes call the three ordinary polling APIs through the opt-in shim; physical/game acceptance is still separate |
 | Gate C Raw Input API behavior baseline | VALIDATED (CONTROLLED CI) | Run `32800513365` retained native x64/x86 registration traces and validated replacement/remove/destroyed-HWND/process teardown; physical `WM_INPUT` and hot-plug remain P3-HW-01 |
 | Gate C Raw Input API virtualization | VALIDATED (CONTROLLED CI) | Run `32806163164` passed native x64/x86 plus x64-host-to-x64/x86 ordinary registration/data/buffer APIs, two-process zero-cross counters, rollback, and existing polling/cursor regressions; physical evidence remains P3-HW-01 |
-| Gate C watchdog/crash recovery | IN PROGRESS | Automated host/target/watchdog/pipe/adapter/shim/UI/logoff/shutdown/stale-journal matrix implemented; native Windows CI and real manual crash/logoff/shutdown acceptance remain PENDING |
+| Gate C watchdog/crash recovery | CODE COMPLETE (AUTOMATED) | PR #23 run `32957740991` passed the real-process host/target/watchdog/pipe/adapter/shim/UI/stale-journal matrix and controlled logoff/shutdown handler paths on native x64/x86; actual human Windows forced-failure/restart acceptance and disruptive logoff/shutdown remain PENDING |
 | Gate D device cloaking | NOT IMPLEMENTED | Guarded session-cloak experiment with spare input and automatic rollback |
 | Gate E two-game zero bleed | NOT IMPLEMENTED | Two distinct profile entries and objective cross-Seat metrics |
 
@@ -304,9 +304,9 @@ Next packet: P3-REC-01 is READY and becomes the current default packet. Implemen
 
 ### 2026-08-26 — P3-REC-01
 
-State: IN_PROGRESS
-Branch/commit: `feat/p3-rec-01-gate-c-recovery`; packet-scoped recovery wiring and automated fault matrix are implemented locally, with an exact CI commit to be recorded after the Windows matrix.
-Windows CI: PENDING. Native MSVC x64/Win32-x86 full-project `GateCWatchdogRecoveryTests` and the existing Gate C cross-architecture job have not yet run for this branch.
+State: CODE_COMPLETE
+Branch/commit: `feat/p3-rec-01-gate-c-recovery`; implementation/CI head `3d2ec9e33bcf016d38086bb75b97c819f643eda8`. The documentation closure is a later commit on the same branch and changes evidence/status text only.
+Windows CI: fork PR #23 run `32957740991` passed native MSVC x64 and Win32/x86 complete 53/53 CTest suites, including `GateCWatchdogRecoveryTests`, plus the x64-host-to-x64/x86 Gate C cross-architecture matrix, roadmap validation, current Codex packet validation, and Raw Input observed-trace checks.
 Automated/local evidence:
 - `GateCRecoveryCoreTests`, `GateCTargetSelfTest`, and `GateCHostPortableSelfTest` pass after the recovery integration; the complete locally available portable CTest suite passes 34/34;
 - focused GCC 15 recovery core builds/tests pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror`;
@@ -315,23 +315,25 @@ Automated/local evidence:
 - the Windows process matrix is implemented for clean/repeated cycles, lease stall, exact target kill, watchdog kill/restart, pipe disconnect, controlled adapter loss, abrupt exit of a polling-shim process, independent UI-surrogate death, logoff/shutdown notification handlers, stale-journal startup blocking, and a real host-kill case that waits on exact watchdog/target process handles for orphan detection;
 - existing `GateCPollingShimTests` provide the coupled partial-init proof: partial IAT patch failure rolls back earlier slots, failed rollback remains explicit/retryable, complete uninstall restores every original pointer, and repeated uninstall is idempotent.
 Ownership/recovery boundary: the host remains authoritative; UI death does not own or stop the session. All watchdog/journal I/O is on the control path, not Raw Input callbacks. Targets are created suspended, exact process identities are registered with the independent watchdog, and journal prepare boundaries are durable before target threads resume. The watchdog manifest contains no arbitrary command/path action and cannot target the host, watchdog, unrelated process, or device/global state.
-Known limits/manual gate: Windows x64/x86 execution evidence is still pending, and real manual host kill, watchdog kill, target/shim/adapter fault, actual logoff/shutdown, and restart review are still required by P3-REC-01 before `VALIDATED`. Automated CI success can advance this packet only to `CODE_COMPLETE`. P3-D-02 and P8-RESET-01 remain outside this task and blocked/not started.
-Next action: commit this exact packet snapshot, run the fork Windows x64/x86 + Gate C cross-architecture CI matrix without weakening assertions, repair only P3-REC-01 defects if exposed, then record `CODE_COMPLETE` while leaving manual crash acceptance PENDING.
+Automated acceptance: clean and repeated start/stop, forced real host death, controlled target death, watchdog death/restart verification, pipe disconnect, adapter failure, shim-owning process abnormal exit, independent UI-surrogate death, stale-journal startup refusal, and restart blocking after forced failure all execute with actual built Windows processes in `GateCWatchdogRecoveryTests`. Controlled `CTRL_LOGOFF_EVENT` / `CTRL_SHUTDOWN_EVENT` handler paths also pass. Exact-process handles prove guarded children exit after host death; the durable journal/safe-mode assertions verify clean versus incomplete recovery transitions.
+Known limits/manual gate: real human Windows host/watchdog/target/shim/adapter forced-failure and restart review, actual logoff, and actual shutdown/reboot remain required before `VALIDATED`. CI handler simulation and real-process automation do not replace that evidence. P3-D-02 and P8-RESET-01 remain outside this task and blocked/not started.
+Next action: execute the P3-REC-01 real Windows acceptance checklist on a sacrificial/test desktop session, retaining concise journal and exact-process evidence for clean/repeated stop, forced host/target/watchdog/pipe/adapter/shim/UI failures, stale-journal restart refusal, and post-failure recovery review. Perform actual logoff/shutdown only under human control. Keep the packet `CODE_COMPLETE` until every mandatory manual case is recorded.
 
 ## Next Codex task
 
 Use:
 
 ```text
-Implement P3-REC-01 exactly as specified in
+Close the P3-REC-01 real Windows acceptance gate exactly as specified in
   docs/implementation/PHASE3_INPUT_ISOLATION.md
 
-Wire the already-validated P8-WATCH-01 watchdog and P8-JOURNAL-01 durable
-recovery evidence into Gate C only. Add the declared rollback registrations,
-crash-injection modes, and GateCWatchdogRecoveryTests for host/target/shim/adapter
-failure paths. Prove no orphan controlled process/helper, no surviving process-local
-shim state after exit, repeatable reset semantics, and RecoveryRequired on unresolved
-cleanup. Do not start P3-D-02, P8-RESET-01, physical cloaking, or game profiles in
-this task. Keep P3-HW-01 CODE_COMPLETE and physical Gate A/B/C rows PENDING.
+Use the existing CODE_COMPLETE implementation and PR #23 automated evidence.
+On a sacrificial/test Windows desktop session, execute and record the declared
+clean/repeated and forced host/target/watchdog/pipe/adapter/shim/UI failure cases,
+stale-journal startup refusal, and restart/recovery review. Verify exact process
+identity, no orphan controlled process/helper, durable journal transitions, and
+RecoveryRequired/safe-mode behavior. Actual logoff/shutdown must remain under
+human control. Do not start P3-D-02, P8-RESET-01, physical cloaking, or game
+profiles. Keep P3-HW-01 CODE_COMPLETE and physical Gate A/B/C rows PENDING.
 
 ```

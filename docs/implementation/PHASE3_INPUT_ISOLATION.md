@@ -880,7 +880,7 @@ The planner can distinguish unavailable, installed-unverified, and verified-supp
 
 ## P3-REC-01 — Gate C watchdog and crash recovery acceptance
 
-**State:** IN_PROGRESS
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -930,7 +930,8 @@ Automated process tests and manual Windows crash acceptance both pass.
 - Recovery self-test modes cover clean/repeated cycles, lease stall, target kill, watchdog kill/restart, pipe disconnect, adapter loss, abrupt shim-owning process exit, UI-surrogate death, logoff/shutdown notification handling, stale-journal startup blocking, and an external host-kill path. The Windows `GateCWatchdogRecoveryTests` process test additionally kills the real Gate C host and waits on exact watchdog/target handles to prove no guarded child/helper remains.
 - Existing `GateCPollingShimTests` remain the coupled shim-initialization evidence: partial IAT install failure restores all already-patched pointers, protection/rollback failure is surfaced, incomplete rollback remains retryable, and repeated uninstall is idempotent. Gate C still owns no global cursor/clip/device mutation in this packet.
 - Local portable validation currently passes 34/34 CTest, including the new recovery core plus existing watchdog/journal/Gate C regressions. Focused GCC 15 strict recovery tests pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror`. The pre-existing Linux-only whole-build blocker remains `reset_input.cpp` including `windows.h`; `make -k` builds the remaining portable targets successfully.
-- Native Windows/MSVC x64 and Win32/x86 `GateCWatchdogRecoveryTests` plus the existing Gate C cross-architecture matrix are still pending. The packet cannot advance beyond `CODE_COMPLETE` until those automated checks pass, and it cannot become `VALIDATED` until the declared manual Windows crash/logoff/shutdown acceptance is performed by a human tester.
+- Fork PR #23 run `32957740991` validates implementation/CI head `3d2ec9e33bcf016d38086bb75b97c819f643eda8`: native Windows/MSVC x64 and Win32/x86 each pass the complete 53/53 CTest suite, including `GateCWatchdogRecoveryTests`, and the x64-host-to-x64/x86 Gate C cross-architecture matrix passes. The later documentation-closure commit on the same branch changes evidence/status text only; it does not replace the exact implementation head validated by this run.
+- Real human Windows acceptance remains pending, including actual logoff/shutdown and the declared desktop-session forced-failure/restart review. Handler-path simulation and automated real-process tests do not satisfy that gate, so this packet remains `CODE_COMPLETE`, not `VALIDATED`.
 
 **Suggested commit**
 

@@ -368,7 +368,7 @@ Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe
 当前默认 packet：
 
 ```text
-P3-REC-01 — Gate C 看门狗与崩溃恢复验收（IN_PROGRESS；等待 Windows CI/人工崩溃验收）
+P3-REC-01 — Gate C 看门狗与崩溃恢复验收（CODE_COMPLETE；fork PR #23 run `32957740991` 已通过 native x64/x86 53/53 和 Gate C 跨架构矩阵；真实 Windows 崩溃/重启及注销/关机验收仍为 PENDING）
 ```
 
 开始编码前阅读：
