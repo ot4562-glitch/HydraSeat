@@ -3,7 +3,7 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-REC-01 — Gate C watchdog and crash recovery acceptance** (`CODE_COMPLETE`; automated Windows x64/x86 and Gate C cross-architecture evidence is green, while real Windows acceptance remains pending)
+- Current default packet: **P3-REC-01 — Gate C watchdog and crash recovery acceptance** (`CODE_COMPLETE`; automated Windows x64/x86/cross-architecture and non-disruptive local x64 real-process acceptance are green, while human-observed actual logoff/shutdown/restart acceptance remains pending)
 - Parent fork-main baseline for P8-WATCH-01 validation: `494426e882832b0ae6d94a75d038473ba96f104a` (P3-D-01 integrated; physical acceptance remains pending)
 - Current automated Windows CI evidence: fork PR #23 run `32957740991` validates P3-REC-01 implementation head `3d2ec9e33bcf016d38086bb75b97c819f643eda8`: native x64 and Win32/x86 each pass the complete 53/53 CTest suite, and the x64-host-to-x64/x86 Gate C cross-architecture matrix passes. The later documentation-closure head on the same branch changes status/evidence text only. This is automated controlled-process evidence, not physical/device-cloak or human desktop-session acceptance.
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
@@ -41,7 +41,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-RAW-01 Raw Input registration/data probe | VALIDATED | P3-API-01 | Windows run `32800513365`: native x64/x86 28/28 CTest, retained observed registration traces, replacement/remove/destroyed-HWND evidence, and repeated process teardown passed |
 | P3-RAW-02 Raw Input virtualization shim | VALIDATED | P3-RAW-01, P3-API-02 | Windows run `32806163164`: native x64/x86 and x64-host-to-x64/x86 ordinary Raw Input API/two-process acceptance passed with zero cross-Seat/API/stale-token/queue-overflow counters |
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
-| P3-REC-01 Host/target/adapter crash and watchdog recovery | CODE_COMPLETE | P8-WATCH-01, P8-JOURNAL-01, P3-API-03 | Fork PR #23 run `32957740991` validates implementation head `3d2ec9e`: native x64 and Win32/x86 53/53 plus Gate C cross-architecture; local portable 34/34 and strict recovery checks remain green; real Windows acceptance is PENDING |
+| P3-REC-01 Host/target/adapter crash and watchdog recovery | CODE_COMPLETE | P8-WATCH-01, P8-JOURNAL-01, P3-API-03 | Fork PR #23 run `32957740991` validates implementation head `3d2ec9e`: native x64 and Win32/x86 53/53 plus Gate C cross-architecture; committed docs-head `0c24fb0` also passes local native x64 53/53 and a non-disruptive exact-process acceptance matrix with no orphans/unrelated-process loss; human actual logoff/shutdown/restart acceptance remains PENDING |
 | P3-HW-01 Gate A/B/C physical acceptance runner | CODE_COMPLETE | P3-QUEUE-01 | Fork PR #19 run `32911603828` validates the tooling on x64/x86 plus Gate C cross-architecture; real two-keyboard/two-pointing-device Gate A/B/C evidence remains manual and PENDING |
 | P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Remediation head `b351afdd` validated by fork PR #15 run `32832036967`: native x64/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance |
 | P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | VALIDATED | P3-CTRL-01, P3-ARCH-01 | Fork PR #16 run `32840474306`: native x64 and Win32/x86 full CTest passed with controlled DirectInput policy/probes plus read-only `DirectInputNativeObservationSelfTest`; Gate C cross-architecture regressions stayed green |
@@ -71,7 +71,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | Gate C polling API interposition | VALIDATED (CONTROLLED CI) | HydraSeat-owned x64/x86 probes call the three ordinary polling APIs through the opt-in shim; physical/game acceptance is still separate |
 | Gate C Raw Input API behavior baseline | VALIDATED (CONTROLLED CI) | Run `32800513365` retained native x64/x86 registration traces and validated replacement/remove/destroyed-HWND/process teardown; physical `WM_INPUT` and hot-plug remain P3-HW-01 |
 | Gate C Raw Input API virtualization | VALIDATED (CONTROLLED CI) | Run `32806163164` passed native x64/x86 plus x64-host-to-x64/x86 ordinary registration/data/buffer APIs, two-process zero-cross counters, rollback, and existing polling/cursor regressions; physical evidence remains P3-HW-01 |
-| Gate C watchdog/crash recovery | CODE COMPLETE (AUTOMATED) | PR #23 run `32957740991` passed the real-process host/target/watchdog/pipe/adapter/shim/UI/stale-journal matrix and controlled logoff/shutdown handler paths on native x64/x86; actual human Windows forced-failure/restart acceptance and disruptive logoff/shutdown remain PENDING |
+| Gate C watchdog/crash recovery | CODE_COMPLETE / LOCAL REAL-PROCESS PASS | PR #23 run `32957740991` passed native x64/x86 recovery CI; local x64 acceptance on `0c24fb0` reran 53/53 plus 12 safe real-process cases and an external exact-identity host-kill/restart refusal with zero HydraSeat orphans and an unrelated sentinel preserved. Actual human-observed desktop review, OS logoff, and shutdown/reboot remain PENDING |
 | Gate D device cloaking | NOT IMPLEMENTED | Guarded session-cloak experiment with spare input and automatic rollback |
 | Gate E two-game zero bleed | NOT IMPLEMENTED | Two distinct profile entries and objective cross-Seat metrics |
 
@@ -316,24 +316,28 @@ Automated/local evidence:
 - existing `GateCPollingShimTests` provide the coupled partial-init proof: partial IAT patch failure rolls back earlier slots, failed rollback remains explicit/retryable, complete uninstall restores every original pointer, and repeated uninstall is idempotent.
 Ownership/recovery boundary: the host remains authoritative; UI death does not own or stop the session. All watchdog/journal I/O is on the control path, not Raw Input callbacks. Targets are created suspended, exact process identities are registered with the independent watchdog, and journal prepare boundaries are durable before target threads resume. The watchdog manifest contains no arbitrary command/path action and cannot target the host, watchdog, unrelated process, or device/global state.
 Automated acceptance: clean and repeated start/stop, forced real host death, controlled target death, watchdog death/restart verification, pipe disconnect, adapter failure, shim-owning process abnormal exit, independent UI-surrogate death, stale-journal startup refusal, and restart blocking after forced failure all execute with actual built Windows processes in `GateCWatchdogRecoveryTests`. Controlled `CTRL_LOGOFF_EVENT` / `CTRL_SHUTDOWN_EVENT` handler paths also pass. Exact-process handles prove guarded children exit after host death; the durable journal/safe-mode assertions verify clean versus incomplete recovery transitions.
-Known limits/manual gate: real human Windows host/watchdog/target/shim/adapter forced-failure and restart review, actual logoff, and actual shutdown/reboot remain required before `VALIDATED`. CI handler simulation and real-process automation do not replace that evidence. P3-D-02 and P8-RESET-01 remain outside this task and blocked/not started.
-Next action: execute the P3-REC-01 real Windows acceptance checklist on a sacrificial/test desktop session, retaining concise journal and exact-process evidence for clean/repeated stop, forced host/target/watchdog/pipe/adapter/shim/UI failures, stale-journal restart refusal, and post-failure recovery review. Perform actual logoff/shutdown only under human control. Keep the packet `CODE_COMPLETE` until every mandatory manual case is recorded.
+Local real-process acceptance: on committed docs-head `0c24fb04df145c94946dfd4bb4cc250d1fb7723b`, a newly provisioned native MSVC x64 Release build reruns the complete 53/53 CTest suite successfully. The ignored local acceptance evidence under `out/p3-rec-acceptance/20260826-local` separately runs 12 safe x64 real-process cases: two clean cycles with generation `1 -> 2`, lease stall, target kill, watchdog kill/restart, pipe disconnect, adapter failure, shim-owner abnormal exit, UI-surrogate loss, controlled logoff/shutdown handler paths, and stale-journal startup refusal. Every case preserves the same unrelated sentinel identity and leaves zero HydraSeat target/watchdog orphans; cleanable faults end with durable `RollbackVerified` + `CleanStop`, while the stale journal remains `preparing` with `safe_mode_reason=incomplete-session`.
+External host-death acceptance: a dedicated local harness captures exact `PID + creation time` identities for the real x64 host, watchdog, two controlled targets, and an unrelated sentinel, revalidates the host identity immediately before terminating only that host PID, and does not manually terminate its guarded children. The independent watchdog removes both targets and itself with no PID-reuse mismatch, the unrelated sentinel remains the same live identity, a subsequent real Gate C start returns `127` with `previous runtime session is incomplete`, and no target/watchdog process is created. The durable journal remains `active` with `safe_mode_reason=incomplete-session`, which is the intentional fail-closed evidence for abrupt host death rather than a forged `CleanStop`.
+Known limits/manual gate: these local executions are `REAL-PROCESS LOCAL`, not a human final verdict. Actual OS logoff, actual shutdown/reboot, and the declared human-observed desktop-session forced-failure/restart review remain required before `VALIDATED`; controlled console-handler execution does not substitute for those disruptive OS events. P3-D-02 and P8-RESET-01 remain outside this task and blocked/not started.
+Next action: perform only the remaining human/disruptive P3-REC-01 acceptance: review the retained forced-failure/restart evidence on the desktop session, then under explicit human control execute actual Windows logoff and actual shutdown/reboot with pre-action evidence retained and post-login/post-reboot recovery state inspected. Keep the packet `CODE_COMPLETE` until those mandatory cases are explicitly recorded.
 
 ## Next Codex task
 
 Use:
 
 ```text
-Close the P3-REC-01 real Windows acceptance gate exactly as specified in
-  docs/implementation/PHASE3_INPUT_ISOLATION.md
+Finish only the remaining human/disruptive P3-REC-01 Windows acceptance gate.
 
-Use the existing CODE_COMPLETE implementation and PR #23 automated evidence.
-On a sacrificial/test Windows desktop session, execute and record the declared
-clean/repeated and forced host/target/watchdog/pipe/adapter/shim/UI failure cases,
-stale-journal startup refusal, and restart/recovery review. Verify exact process
-identity, no orphan controlled process/helper, durable journal transitions, and
-RecoveryRequired/safe-mode behavior. Actual logoff/shutdown must remain under
-human control. Do not start P3-D-02, P8-RESET-01, physical cloaking, or game
-profiles. Keep P3-HW-01 CODE_COMPLETE and physical Gate A/B/C rows PENDING.
+The CODE_COMPLETE implementation, PR #23 CI, local native x64 53/53 rerun, safe
+12-scenario real-process matrix, and exact-identity external host-kill/restart
+refusal evidence are already complete. Review those retained local results with
+the human tester; do not rerun destructive cases merely to manufacture a human
+verdict. Then prepare pre-action recovery evidence for actual Windows logoff and
+actual shutdown/reboot, have those OS actions initiated only under explicit human
+control, and after sign-in/reboot inspect the preserved journal, safe-mode state,
+and orphan-process postconditions before recording any PASS. Until that evidence
+exists, keep P3-REC-01 CODE_COMPLETE and P3-D-02 BLOCKED. Do not start P3-D-02,
+P8-RESET-01, physical cloaking, or game profiles; keep P3-HW-01 CODE_COMPLETE and
+physical Gate A/B/C rows PENDING.
 
 ```
