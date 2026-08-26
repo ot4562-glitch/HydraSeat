@@ -606,7 +606,7 @@ public:
             }
             return false;
         }
-        DWORD exitCode = 0;
+        std::uint32_t exitCode = 0;
         if (!m_watchdog.wait(kProcessExitTimeoutMs, &exitCode) ||
             exitCode != 0) {
             if (error != nullptr) {
