@@ -148,6 +148,150 @@ BOOL WINAPI consoleControlHandler(DWORD controlType) {
     return FALSE;
 }
 
+enum class SessionEndKind : std::uint32_t {
+    None = 0,
+    Logoff = 1,
+    Shutdown = 2,
+};
+
+// Interactive Gate C loads user32 for Raw Input and controlled windows. Windows
+// does not reliably deliver CTRL_LOGOFF_EVENT/CTRL_SHUTDOWN_EVENT to such a
+// console process, so real desktop-session termination is observed through a
+// dedicated hidden top-level window instead. Its window procedure performs no
+// cleanup itself: it only records the bounded signal and asks the ordinary host
+// control loop to execute the existing guarded rollback path.
+class GateCSessionEndWindow {
+public:
+    GateCSessionEndWindow() = default;
+    GateCSessionEndWindow(const GateCSessionEndWindow&) = delete;
+    GateCSessionEndWindow& operator=(const GateCSessionEndWindow&) = delete;
+
+    ~GateCSessionEndWindow() {
+        close();
+    }
+
+    bool initialize(std::string* error = nullptr) {
+        if (m_window != nullptr) return true;
+
+        WNDCLASSEXW windowClass{};
+        windowClass.cbSize = sizeof(windowClass);
+        windowClass.lpfnWndProc = GateCSessionEndWindow::WndProc;
+        windowClass.hInstance = GetModuleHandleW(nullptr);
+        windowClass.lpszClassName = kWindowClass;
+
+        if (RegisterClassExW(&windowClass) == 0) {
+            const DWORD systemError = GetLastError();
+            if (systemError != ERROR_CLASS_ALREADY_EXISTS) {
+                if (error != nullptr) {
+                    *error = "RegisterClassExW(session-end) failed: " +
+                             std::to_string(systemError);
+                }
+                return false;
+            }
+        }
+
+        m_window = CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            kWindowClass,
+            L"HydraSeat Session End Monitor",
+            WS_POPUP,
+            0, 0, 0, 0,
+            nullptr,
+            nullptr,
+            GetModuleHandleW(nullptr),
+            this);
+        if (m_window == nullptr) {
+            const DWORD systemError = GetLastError();
+            if (error != nullptr) {
+                *error = "CreateWindowExW(session-end) failed: " +
+                         std::to_string(systemError);
+            }
+            return false;
+        }
+        return true;
+    }
+
+    void processMessages() {
+        MSG message{};
+        while (m_window != nullptr &&
+               PeekMessageW(&message, m_window, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+
+    void close() noexcept {
+        if (m_window != nullptr) {
+            if (IsWindow(m_window)) {
+                (void)DestroyWindow(m_window);
+            }
+            m_window = nullptr;
+        }
+    }
+
+    [[nodiscard]] HWND window() const noexcept {
+        return m_window;
+    }
+
+    [[nodiscard]] SessionEndKind lastKind() const noexcept {
+        return m_lastKind.load();
+    }
+
+    [[nodiscard]] UINT lastMessage() const noexcept {
+        return m_lastMessage.load();
+    }
+
+private:
+    static constexpr wchar_t kWindowClass[] =
+        L"HydraSeatGateCSessionEndMonitor";
+
+    static SessionEndKind kindFromFlags(LPARAM flags) noexcept {
+        return (static_cast<std::uintptr_t>(flags) & ENDSESSION_LOGOFF) != 0
+                   ? SessionEndKind::Logoff
+                   : SessionEndKind::Shutdown;
+    }
+
+    void requestStop(UINT message, LPARAM flags) noexcept {
+        m_lastKind.store(kindFromFlags(flags));
+        m_lastMessage.store(message);
+        gStopRequested.store(true);
+    }
+
+    static LRESULT CALLBACK WndProc(HWND window, UINT message,
+                                    WPARAM wParam, LPARAM lParam) {
+        auto* self = reinterpret_cast<GateCSessionEndWindow*>(
+            GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+            self = static_cast<GateCSessionEndWindow*>(create->lpCreateParams);
+            SetLastError(ERROR_SUCCESS);
+            const LONG_PTR previous = SetWindowLongPtrW(
+                window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            if (previous == 0 && GetLastError() != ERROR_SUCCESS) {
+                return FALSE;
+            }
+        }
+
+        if (self != nullptr) {
+            if (message == WM_QUERYENDSESSION) {
+                self->requestStop(message, lParam);
+                return TRUE;
+            }
+            if (message == WM_ENDSESSION) {
+                if (wParam != FALSE) {
+                    self->requestStop(message, lParam);
+                }
+                return 0;
+            }
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+
+    HWND m_window{nullptr};
+    std::atomic<SessionEndKind> m_lastKind{SessionEndKind::None};
+    std::atomic<UINT> m_lastMessage{0};
+};
+
 std::wstring utf8ToWide(std::string_view value) {
     if (value.empty()) {
         return {};
@@ -1493,12 +1637,40 @@ private:
             }
         } else if (m_options.recoveryScenario == "console-logoff" ||
                    m_options.recoveryScenario == "console-shutdown") {
+            GateCSessionEndWindow sessionEndWindow;
+            std::string sessionEndError;
+            if (!sessionEndWindow.initialize(&sessionEndError)) {
+                std::cerr << "Gate C session-end window self-test setup failed: "
+                          << sessionEndError << '\n';
+                return 133;
+            }
+
+            const bool logoffScenario =
+                m_options.recoveryScenario == "console-logoff";
+            const LPARAM sessionFlags = logoffScenario
+                ? static_cast<LPARAM>(ENDSESSION_LOGOFF)
+                : static_cast<LPARAM>(0);
+            const SessionEndKind expectedKind = logoffScenario
+                ? SessionEndKind::Logoff
+                : SessionEndKind::Shutdown;
+
             gStopRequested.store(false);
-            const DWORD controlType = m_options.recoveryScenario == "console-logoff"
-                ? CTRL_LOGOFF_EVENT
-                : CTRL_SHUTDOWN_EVENT;
-            if (consoleControlHandler(controlType) == FALSE ||
-                !gStopRequested.load()) {
+            const LRESULT queryResult = SendMessageW(
+                sessionEndWindow.window(), WM_QUERYENDSESSION,
+                static_cast<WPARAM>(0), sessionFlags);
+            if (queryResult == FALSE || !gStopRequested.load() ||
+                sessionEndWindow.lastKind() != expectedKind ||
+                sessionEndWindow.lastMessage() != WM_QUERYENDSESSION) {
+                return 133;
+            }
+
+            gStopRequested.store(false);
+            (void)SendMessageW(
+                sessionEndWindow.window(), WM_ENDSESSION,
+                static_cast<WPARAM>(TRUE), sessionFlags);
+            if (!gStopRequested.load() ||
+                sessionEndWindow.lastKind() != expectedKind ||
+                sessionEndWindow.lastMessage() != WM_ENDSESSION) {
                 return 133;
             }
             gStopRequested.store(false);
@@ -2896,6 +3068,14 @@ private:
             return 42;
         }
         GateCRecoveryContext recovery(*recoveryPath);
+        GateCSessionEndWindow sessionEndWindow;
+        std::string sessionEndError;
+        if (!sessionEndWindow.initialize(&sessionEndError)) {
+            std::cerr << "Gate C session-end monitor initialization failed: "
+                      << sessionEndError << '\n';
+            return 42;
+        }
+
         std::vector<TargetSession> sessions(2);
         for (std::size_t index = 0; index < sessions.size(); ++index) {
             sessions[index].seatId = activeSeats[index];
@@ -3001,7 +3181,16 @@ private:
         }
 
         gStopRequested.store(false);
-        SetConsoleCtrlHandler(consoleControlHandler, TRUE);
+        if (!SetConsoleCtrlHandler(consoleControlHandler, TRUE)) {
+            const DWORD systemError = GetLastError();
+            std::cerr << "Gate C console control handler registration failed: "
+                      << systemError << '\n';
+            router.stop();
+            trace.flush();
+            for (auto& writer : writers) writer->stop();
+            (void)rollbackGuardedSessions(recovery, sessions, true);
+            return 47;
+        }
         std::cout
             << "Gate C controlled-process host is running.\n"
             << "Each target uses a separate process-local adapter DLL and virtual "
@@ -3014,6 +3203,8 @@ private:
         auto nextLeaseRenewal = std::chrono::steady_clock::now() +
             std::chrono::milliseconds(500);
         while (!gStopRequested.load()) {
+            sessionEndWindow.processMessages();
+            if (gStopRequested.load()) break;
             router.processMessages();
             bool allRunning = true;
             for (const auto& session : sessions) {
