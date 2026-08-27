@@ -368,7 +368,7 @@ Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled prob
 현재 기본 packet:
 
 ```text
-P3-E-01 — 오픈소스 비보호 애플리케이션 프로필 (READY; P3-REC-01은 PR #23 복구 CI와 실제 Windows 로그아웃 및 실제 다시 시작 승인까지 통과해 VALIDATED; P3-D-02는 P3-HW-01 물리 승인과 P8-RESET-01 때문에 계속 BLOCKED)
+P3-E-01 — 오픈소스 비보호 애플리케이션 프로필 (CODE_COMPLETE; 실제 GLFW 3.5.1 x64 로컬 검증에서 receiver-verified 이벤트 8개, 교차 패턴 0개, Job Object 강제 정리와 native 재실행까지 PASS; exact-head Windows x64/x86/cross 및 실제 GLFW CI는 PENDING)
 ```
 
 작업 시작 전:

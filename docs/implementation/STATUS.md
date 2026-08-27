@@ -3,7 +3,7 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-E-01 — Open-source non-protected application profile** (`READY`; P3-REC-01 is now `VALIDATED`, while P3-D-02 remains blocked by P3-HW-01 physical acceptance and P8-RESET-01. P8-RESET-01 is also `READY` as a cross-phase prerequisite; neither READY packet is started by this closure task.)
+- Current default packet: **P3-E-01 — Open-source non-protected application profile** (`CODE_COMPLETE`; local real GLFW 3.5.1 x64 acceptance passes with 8 receiver-verified events, zero cross-pattern callbacks, forced Job-object cleanup, and native relaunch. Exact-head Windows x64/x86/cross plus dedicated real-GLFW CI remain required before `VALIDATED`.)
 - Parent fork-main baseline for P8-WATCH-01 validation: `494426e882832b0ae6d94a75d038473ba96f104a` (P3-D-01 integrated; physical acceptance remains pending)
 - Current P3-REC evidence: fork PR #23 run `32973197727` validates session-end repair head `bb8fd28` on Windows x64, Win32/x86, and Gate C cross-architecture. Human actual Sign out and actual Restart both pass on the repaired binary with exact-identity cleanup, zero HydraSeat orphans, durable `RollbackVerified`/`CleanStop`, and the Restart re-test additionally proves a real boot transition (`LastBootUpTime` `2026-08-25T09:52:03.9523380+09:00` -> `2026-08-27T07:46:40.5000000+09:00`).
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
@@ -47,7 +47,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | VALIDATED | P3-CTRL-01, P3-ARCH-01 | Fork PR #16 run `32840474306`: native x64 and Win32/x86 full CTest passed with controlled DirectInput policy/probes plus read-only `DirectInputNativeObservationSelfTest`; Gate C cross-architecture regressions stayed green |
 | P3-D-01 HidHide read-only availability/capability probe | VALIDATED | P3-PLAN-01 | Fork PR #20 run `32915683414` validates head `146b3e6`: native x64/x86 build/CTest plus Gate C cross-architecture pass; exact-version tri-state probe remains read-only and P3-D-02 stays blocked |
 | P3-D-02 Guarded HidHide session-cloak lab | BLOCKED | P3-D-01, P3-REC-01, P3-HW-01, P8-RESET-01 | P3-REC is validated, but physical P3-HW-01 acceptance and the emergency reset CLI still block guarded cloaking |
-| P3-E-01 Open-source non-protected application profile | READY | P3-API-03, P3-RAW-02, P3-MET-01, P3-REC-01 | All declared prerequisites are validated; next task may build the reproducible profile and measured no-cross-state result |
+| P3-E-01 Open-source non-protected application profile | CODE_COMPLETE | P3-API-03, P3-RAW-02, P3-MET-01, P3-REC-01 | GLFW 3.5.1 exact commit is exercised through the profiled external shim: local x64 real-process run records 4 expected receiver callbacks per Seat, 0 cross callbacks, 8 receiver-verified events, separated adapter state, Job-object forced cleanup, unchanged target hash, and native relaunch. Exact-head CI pending |
 | P3-E-02 First non-anti-cheat game profile | BLOCKED | P3-E-01, P3-D-02 or proven non-cloak suppression path | Explicit experimental compatibility entry |
 | P3-E-03 Two different game zero-bleed proof | BLOCKED | P3-E-02, P3-CTRL-01 | Measured keyboard/mouse/controller bleed and latency report |
 | P3-MET-01 Input latency and bleed measurement harness | VALIDATED | P3-QUEUE-01 | Fork PR #18 run `32857666855`: native x64 and Win32/x86 43/43 CTest pass metrics library/CLI/report plus instrumented Gate C host; receiver evidence remains explicit and physical zero-bleed/latency stays manual |
@@ -335,24 +335,38 @@ Manual gate result: P3-REC-01 manual Windows crash/session-end acceptance is com
 Downstream readiness: P3-E-01 is READY because all of its declared prerequisites are validated. P8-RESET-01 is also READY because P8-WATCH-01 and P8-JOURNAL-01 are validated. P3-D-02 remains BLOCKED by P3-HW-01 physical acceptance and P8-RESET-01. None of those packets has been started in this closure task.
 Phase-close rule: Phase 3 is not complete, so the dedicated whole-Phase-3 audit is not run yet.
 
+### 2026-08-27 — P3-E-01
+
+State: CODE_COMPLETE
+Branch: `test/p3-e-01-open-source-profile`
+Selected target: upstream GLFW 3.5.1 `tests/cursor.c`, exact commit `d9d6f0f1f967807ffade6598ea9a631ebaf37a56`, zlib/libpng license. External source and built target remain outside the HydraSeat repository.
+Implementation: shim ABI v4 adds an explicit `required_api_mask` and separate profiled IAT transaction while V1/V2 retain strict complete-group semantics. The measured GLFW controlled import mask is `0x0000b93a`. A new high-risk `hydra.controlled-external-shim` planner backend requires explicit process-injection approval and a recovery guard, is anti-cheat sensitive, and never advertises physical suppression/cloaking.
+Launch/ownership: `hydra_gate_c_external_harness` creates targets suspended itself, records exact process identity, assigns a private kill-on-close Job Object before bridge load/resume, verifies x64 architecture, and validates the existing Gate C token/Seat/PID/window handshake. There is no attach-to-existing-process CLI. The fixed bridge reuses the existing adapter, protocol, Raw Input, polling, cursor/focus, and exact uninstall paths.
+Application lifecycle finding: the first two-instance GLFW runs proved that native focus loss caused one GLFW process to unregister its raw mouse request. P3-E therefore synthesizes process-local `WM_ACTIVATE` / `WM_SETFOCUS` for each controlled window while retaining logical foreground virtualization; it does not call `SetForegroundWindow` or mutate global desktop focus.
+Local real-application evidence: reproducible preparation verified exact source commit and exact PE controlled API mask, producing target SHA-256 `84931e1874ecc5badb8d9bae713b75f701e79112923d90f7303c5d35d3f92d15`. Final x64 run reports Seat 1 expected raw callbacks `4`, Seat 2 expected `4`, Seat 1 cross `0`, Seat 2 cross `0`, `receiver_verified_events=8`, independent adapter state, forced Job-object cleanup PASS, target hash unchanged, zero remaining owned processes, and native relaunch PASS.
+Automated/local regression: Windows x64 full project CTest passes 54/54. GCC 15 strict `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror` builds the changed planner/shim surfaces and focused planner/polling/cursor/Raw Input tests pass 4/4. Fresh Win32/x86 full project build succeeds including shim ABI v4, bridge, and harness; local interactive full CTest is not used as final evidence because the pre-existing cursor/focus self-test deliberately compares host desktop cursor/foreground before/after and can observe unrelated live-user desktop movement. Exact-head non-interactive Windows CI remains required.
+CI contract: `.github/workflows/ci.yml` adds a dedicated Windows job that explicitly clones GLFW 3.5.1 outside HydraSeat, lets the preparation script reject any commit/import-mask drift, builds the HydraSeat bridge/harness, runs the same real two-process acceptance, and uploads ignored evidence. Existing x64/x86 full CTest and Gate C cross-architecture jobs remain mandatory.
+Manual/known limits: synthetic Gate C Seat events exercise the real external app, but physical Gate A/B/C remains P3-HW-01. No physical input suppression, HidHide cloaking, x86 GLFW compatibility, commercial game, anti-cheat, DRM, protected-process, or existing-process injection claim is made.
+Next action: push the exact implementation head and require Windows x64, Win32/x86, Gate C cross-architecture, and the dedicated real-GLFW CI job to pass before promoting P3-E-01 to `VALIDATED`. Do not start P3-E-02, P3-D-02, or P8-RESET-01 in this task.
+
 ## Next Codex task
 
 Use:
 
 ```text
-Implement only P3-E-01 — Open-source non-protected application profile.
+Finish only P3-E-01 exact-head validation.
 
-P3-REC-01 is VALIDATED after automated Windows x64/x86/cross recovery coverage plus
-human actual Sign out and actual Restart acceptance. Preserve that recovery contract.
-P3-E-01 is READY because P3-API-03, P3-RAW-02, P3-MET-01, and P3-REC-01 are all
-validated. Keep the target open-source, inspectable, non-protected, and outside any
-anti-cheat/DRM bypass. Produce a reproducible compatibility profile and measured
-no-cross-state evidence without weakening existing Gate C rollback or fail-closed
-behavior. P8-RESET-01 is separately READY but is not part of the P3-E-01 task.
-P3-D-02 remains BLOCKED until P3-HW-01 physical acceptance and P8-RESET-01 are complete.
-Do not mark physical Gate A/B/C, cloaking, or game-profile acceptance complete without
-its declared evidence. Do not run the whole-Phase-3 close audit until every Phase 3
-packet and required manual gate is genuinely complete. P3-HW-01 remains CODE_COMPLETE
-with physical Gate A/B/C rows still PENDING.
+The implementation is CODE_COMPLETE on branch test/p3-e-01-open-source-profile.
+Local real GLFW 3.5.1 x64 acceptance passes 4 expected receiver callbacks per Seat,
+0 cross-pattern callbacks, 8 receiver-verified events, separated adapter state,
+forced Job-object cleanup, unchanged target bytes, orphan-free teardown, and native
+relaunch. Existing V1/V2 shim semantics remain strict; only v4 profiled install uses
+the exact 0x0000b93a GLFW API subset.
+
+Push the exact head and require Windows x64 full CTest, Win32/x86 full CTest,
+Gate C cross-architecture, and the dedicated p3-e-open-source-application real-GLFW
+job to pass. If they pass, promote P3-E-01 to VALIDATED in a docs-only closure.
+Do not start P3-E-02, P3-D-02, P8-RESET-01, physical cloaking, or the whole-Phase-3
+audit. P3-HW-01 physical Gate A/B/C remains PENDING.
 
 ```

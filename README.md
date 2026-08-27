@@ -455,7 +455,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-E-01 — Open-source non-protected application profile (READY; P3-REC-01 is VALIDATED after PR #23 recovery CI plus human actual Sign out and actual Restart acceptance; P3-D-02 remains BLOCKED by physical P3-HW-01 acceptance and P8-RESET-01)
+P3-E-01 — Open-source non-protected application profile (CODE_COMPLETE; local real GLFW 3.5.1 x64 acceptance passes 8 receiver-verified events with zero cross-pattern callbacks, forced Job-object cleanup, and native relaunch; exact-head Windows x64/x86/cross plus real-GLFW CI are pending)
 ```
 
 Start every coding task by reading:

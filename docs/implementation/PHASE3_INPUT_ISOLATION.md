@@ -1001,7 +1001,7 @@ Required with spare recovery input and visible countdown.
 
 ## P3-E-01 — Open-source non-protected application profile
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -1032,6 +1032,16 @@ Validate the full controlled compatibility stack against an inspectable applicat
 **Done when**
 
 Two instances/processes use different Seat devices with zero measured cross-state for the declared duration and rollback returns the application to native behavior.
+
+**P3-E-01 implementation note (2026-08-27)**
+
+- The first real external profile is upstream GLFW 3.5.1 `tests/cursor.c`, exact commit `d9d6f0f1f967807ffade6598ea9a631ebaf37a56` under the zlib/libpng license. GLFW source/binaries are never vendored; `tools/prepare_p3_e_01_glfw.ps1` accepts an already-provided clean checkout, verifies the exact commit, builds the x64 target, measures its PE imports, and pins the resulting target SHA-256 in ignored evidence.
+- The measured Win32 subset is `GetKeyState`, `GetCursorPos`, `SetCursorPos`, `ClipCursor`, `GetActiveWindow`, `SetCapture`, `ReleaseCapture`, `RegisterRawInputDevices`, and `GetRawInputData`, encoded as shim mask `0x0000b93a`. Shim ABI v4 adds `HydraGateCShimConfigV3.required_api_mask` and a separate `installProfiled()` IAT transaction. Existing V1/V2 entry points keep their strict full-group import contract; the profiled path cannot silently weaken legacy fail-closed behavior.
+- `hydra_gate_c_external_harness.exe` can act only on processes it creates suspended itself. Each new target is placed in a private `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object before bridge loading/resume, exact process identity and x64 architecture are verified, and the PID-scoped fixed bridge mapping contains only Seat ID, fixed API mask, Gate C token, and bounded pipe name. No attach-to-existing-process command is exposed.
+- Real GLFW execution exposed an application lifecycle dependency: GLFW unregisters raw mouse input after native focus loss. The profile therefore synthesizes process-local `WM_ACTIVATE` / `WM_SETFOCUS` for each owned GLFW window while retaining existing virtual foreground/active/focus queries. It does not call `SetForegroundWindow` or mutate global desktop focus/cursor/clip state.
+- Local real-process acceptance against the reproducibly prepared x64 target SHA-256 `84931e1874ecc5badb8d9bae713b75f701e79112923d90f7303c5d35d3f92d15` passes: each of two independent GLFW processes reports exactly four expected raw-motion callbacks through its own upstream stdout telemetry, both report zero callbacks matching the other Seat pattern, receiver-verified event count is 8, adapter state is independently separated, a third target is successfully killed through Job-object guard closure, target bytes remain unchanged, no owned process remains, and an unmodified native relaunch succeeds after rollback.
+- Native Windows x64 full CTest passes 54/54 after the additive V3 refactor. Win32/x86 builds the complete project including the v4 shim, external bridge, and harness; all new/profiled component and ABI tests pass locally. On the interactive development desktop the existing cursor/focus process assertion can still observe unrelated user desktop cursor/foreground movement between its before/after snapshots, so exact-head non-interactive Windows CI remains authoritative for the final x86 full-suite decision.
+- P3-E-01 does not satisfy P3-HW-01 physical Gate A/B/C, physical input suppression, HidHide cloaking, P3-E-02 game compatibility, anti-cheat/DRM/protected-process support, or any x86 GLFW compatibility claim. Those remain separate gates.
 
 **Suggested commit**
 

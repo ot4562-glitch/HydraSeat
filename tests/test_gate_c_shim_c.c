@@ -8,6 +8,9 @@ _Static_assert(sizeof(HydraGateCShimConfigV1) ==
 _Static_assert(sizeof(HydraGateCShimConfigV2) ==
                    HYDRA_GATE_C_SHIM_CONFIG_V2_BYTES,
                "Gate C shim v2 config ABI size changed");
+_Static_assert(sizeof(HydraGateCShimConfigV3) ==
+                   HYDRA_GATE_C_SHIM_CONFIG_V3_BYTES,
+               "Gate C shim v3 config ABI size changed");
 _Static_assert(sizeof(HydraGateCShimStatusV1) ==
                    HYDRA_GATE_C_SHIM_STATUS_V1_BYTES,
                "Gate C shim status ABI size changed");

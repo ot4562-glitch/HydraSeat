@@ -344,6 +344,40 @@ if(MSVC)
     target_compile_options(hydra_gate_c_shim PRIVATE /W4 /permissive-)
 endif()
 
+# P3-E-01 narrow bridge for a newly created, suspended, non-protected external
+# acceptance target. It is not an attach/general injection surface and reuses
+# the existing Gate C adapter, profiled shim, transport, and rollback contract.
+if(WIN32)
+    add_library(hydra_gate_c_external_bridge SHARED
+        src/gate_c_external_bridge.cpp
+        include/hydra/gate_c_external_profile.hpp
+    )
+    target_link_libraries(hydra_gate_c_external_bridge PRIVATE
+        hydra_gate_c_core hydra_gate_c_adapter hydra_gate_c_shim User32.lib
+    )
+    set_target_properties(hydra_gate_c_external_bridge PROPERTIES
+        OUTPUT_NAME hydra_gate_c_external_bridge
+    )
+    hydra_set_gate_c_output(hydra_gate_c_external_bridge)
+    if(MSVC)
+        target_compile_options(hydra_gate_c_external_bridge PRIVATE /W4 /permissive-)
+    endif()
+
+    add_executable(hydra_gate_c_external_harness
+        src/gate_c_external_harness.cpp
+        include/hydra/gate_c_external_profile.hpp
+    )
+    target_link_libraries(hydra_gate_c_external_harness PRIVATE
+        hydra_gate_c_core User32.lib
+    )
+    hydra_set_gate_c_output(hydra_gate_c_external_harness)
+    if(MSVC)
+        target_compile_options(hydra_gate_c_external_harness PRIVATE /W4 /permissive-)
+    endif()
+    add_test(NAME GateCExternalHarnessHelp
+        COMMAND hydra_gate_c_external_harness --help)
+endif()
+
 # Core Executable target (Windows GUI subsystem)
 add_executable(HydraSeat WIN32 src/main.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(HydraSeat PRIVATE hydra_hardware)

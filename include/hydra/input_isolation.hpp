@@ -244,6 +244,7 @@ struct BackendEnvironment {
         HidHideAvailability::Unavailable};
     bool directInputAdapterAvailable{false};
     bool controlledXInputAdapterAvailable{false};
+    bool controlledExternalShimAvailable{false};
 };
 
 struct GameCompatibilityProfile {
@@ -312,6 +313,7 @@ BackendDescriptor hidHideSessionBackend(
     HidHideAvailability availability = HidHideAvailability::Unavailable);
 BackendDescriptor directInputAdapterBackend(bool available = false);
 BackendDescriptor controlledXInputAdapterBackend(bool available = false);
+BackendDescriptor controlledExternalShimBackend(bool available = false);
 std::vector<BackendDescriptor> builtInIsolationBackends(
     const BackendEnvironment& environment = {});
 
