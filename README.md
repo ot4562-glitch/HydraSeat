@@ -457,7 +457,7 @@ Current default packet:
 Total production progress: **14%** (`16 / 115` roadmap packets are `CODE_COMPLETE` or better; packet-count basis).
 
 ```text
-P8-RESET-01 — Emergency reset CLI (CODE_COMPLETE; fresh local x64/x86 full suites pass 56/56 and the prior x64-host-to-x64/x86 Gate C cross regressions pass. A real Windows scheduled-task launch returns 0 with clean JSON postconditions and no remaining reset process. Exact-head non-interactive fork CI remains required before VALIDATED; P3-D-02 remains BLOCKED by P3-HW-01 physical acceptance and validated P8-RESET-01)
+P3-HW-01 — Gate A/B/C physical acceptance runner (CODE_COMPLETE; tooling and CI are complete, but real two-keyboard/two-pointing-device guided acceptance remains pending. P8-RESET-01 is VALIDATED by PR #25 run 33050902127; P3-D-02 is blocked only by P3-HW-01 physical acceptance.)
 ```
 
 Start every coding task by reading:

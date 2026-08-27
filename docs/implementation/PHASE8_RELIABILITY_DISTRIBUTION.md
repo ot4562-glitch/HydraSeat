@@ -139,7 +139,7 @@ A HydraSeat-owned controlled-process harness can register a harmless rollback pl
 
 ## P8-RESET-01 — Emergency reset CLI
 
-**State:** CODE_COMPLETE
+**State:** VALIDATED
 
 **Goal**
 
@@ -211,7 +211,7 @@ A user can recover from a forced host/target failure through one documented comm
 - No broad process-name kill, arbitrary registry deletion, user-profile deletion, HidHide mutation, global Raw Input unregister, or arbitrary path command exists. The obsolete `src/reset_input.cpp` global Raw Input unregister helper is removed. Only the fixed reset registration files, crash-journal slots, and allowlisted watchdog actions are touched.
 - Verification failures preserve the trusted registration and persist `RecoveryRequired` evidence. The pre-journal crash window is also covered: if cleanup fails after the reset registration was written but before the host journal began, reset promotes that trusted manifest into a minimal durable `Preparing` journal plus correlated `RecoveryRequired` marker so a later reset can retry safely.
 - Real Windows process tests cover no-session/repeat, live owner + target cleanup, dead-owner/stale journal, wrong creation identity, unrelated same-name sentinel preservation, and a live Gate C host with an independently armed watchdog racing the same target teardown. Reset-focused unit/process/live-watchdog tests pass 3/3 on both local x64 and Win32/x86, and a fresh interactive full rerun passes 56/56 on both architectures, including the previously desktop-sensitive `GateCCursorFocusShimProcessSelfTest`. The prior x64 host-to-x64/x86 architecture/polling/cursor-focus/Raw Input/XInput cross matrix passes locally; exact-head non-interactive fork CI remains required by the packet.
-- Automated implementation is complete, and the user-facing launch gate passes locally on Windows 11 build 26200: a current-user scheduled task launched the exact x64 `hydra_reset.exe all --confirm --json` command from head `5f68173`, Task Scheduler reported result `0`, isolated pre/post JSON remained clean with safe mode off and no runtime registration, zero reset processes remained, and the temporary task was removed. The packet remains `CODE_COMPLETE` until exact-head non-interactive fork x64/x86/full-suite and Gate C cross-architecture CI passes. P3-D-02 therefore remains blocked, and P3-HW-01 physical Gate A/B/C acceptance is independently still pending.
+- Automated implementation and the user-facing launch gate are validated. On Windows 11 build 26200, a current-user scheduled task launched the exact x64 `hydra_reset.exe all --confirm --json` command from implementation head `5f68173`, Task Scheduler reported result `0`, isolated pre/post JSON remained clean with safe mode off and no runtime registration, zero reset processes remained, and the temporary task was removed. Fork PR #25 run `33050902127` validates exact documentation/acceptance head `3438301149f95a49f140ffcabddaabfdb877921a` with full Windows x64, Win32/x86, Gate C cross-architecture, and P3-E open-source application jobs all passing. P3-HW-01 physical Gate A/B/C acceptance remains independently pending and is now the only blocker before P3-D-02 can become ready.
 
 **Suggested commit**
 

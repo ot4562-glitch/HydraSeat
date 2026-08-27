@@ -370,7 +370,7 @@ Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe
 总制作进度：**14%**（`115` 个路线图 packet 中有 `16` 个已达到 `CODE_COMPLETE` 或更高状态，按 packet 数量计算）。
 
 ```text
-P8-RESET-01 — 紧急重置 CLI（CODE_COMPLETE；新的本地 x64/x86 完整 suite 均为 56/56 PASS，既有 x64 host→x64/x86 Gate C 跨架构回归也通过。真实 Windows 计划任务启动返回 0，JSON 后置状态为 clean，且无残留 reset 进程。在 VALIDATED 前仍需 exact-head non-interactive fork CI；P3-D-02 仍受 P3-HW-01 物理验收和已 VALIDATED 的 P8-RESET-01 阻塞）
+P3-HW-01 — Gate A/B/C 物理验收运行器（CODE_COMPLETE；工具和 CI 已完成，但使用两个物理键盘和两个指向设备的引导式验收仍为 PENDING。P8-RESET-01 已由 PR #25 run 33050902127 验证；P3-D-02 现在仅被 P3-HW-01 物理验收阻塞。）
 ```
 
 开始编码前阅读：

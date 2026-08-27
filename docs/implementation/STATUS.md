@@ -3,8 +3,8 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Total production progress: **14%** (`16 / 115` packets are `CODE_COMPLETE` or better: `14 VALIDATED`, `2 CODE_COMPLETE`; `99 BLOCKED`). This is a packet-count progress indicator, not a claim that all packets have equal effort.
-- Current default packet: **P8-RESET-01 — Emergency reset CLI** (`CODE_COMPLETE`; fresh local x64/x86 full suites pass 56/56, including reset-focused unit/process/live-watchdog coverage, and the prior x64-host-to-x64/x86 Gate C cross matrix passes. A real Windows scheduled-task launch now passes with result `0`, clean JSON postconditions, and zero remaining reset processes. Exact-head non-interactive fork CI remains required before `VALIDATED`. P3-D-02 remains blocked by P3-HW-01 physical acceptance and validated P8-RESET-01.)
+- Total production progress: **14%** (`16 / 115` packets are `CODE_COMPLETE` or better: `15 VALIDATED`, `1 CODE_COMPLETE`; `99 BLOCKED`). This is a packet-count progress indicator, not a claim that all packets have equal effort.
+- Current default packet: **P3-HW-01 — Gate A/B/C physical acceptance runner** (`CODE_COMPLETE`; tooling and CI are complete, but real two-keyboard/two-pointing-device guided acceptance remains required. P8-RESET-01 is now `VALIDATED` by PR #25 run `33050902127`. P3-D-02 remains blocked only by this physical acceptance.)
 - Parent fork-main baseline for P8-WATCH-01 validation: `494426e882832b0ae6d94a75d038473ba96f104a` (P3-D-01 integrated; physical acceptance remains pending)
 - Current P3-REC evidence: fork PR #23 run `32973197727` validates session-end repair head `bb8fd28` on Windows x64, Win32/x86, and Gate C cross-architecture. Human actual Sign out and actual Restart both pass on the repaired binary with exact-identity cleanup, zero HydraSeat orphans, durable `RollbackVerified`/`CleanStop`, and the Restart re-test additionally proves a real boot transition (`LastBootUpTime` `2026-08-25T09:52:03.9523380+09:00` -> `2026-08-27T07:46:40.5000000+09:00`).
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
@@ -47,7 +47,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Remediation head `b351afdd` validated by fork PR #15 run `32832036967`: native x64/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance |
 | P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | VALIDATED | P3-CTRL-01, P3-ARCH-01 | Fork PR #16 run `32840474306`: native x64 and Win32/x86 full CTest passed with controlled DirectInput policy/probes plus read-only `DirectInputNativeObservationSelfTest`; Gate C cross-architecture regressions stayed green |
 | P3-D-01 HidHide read-only availability/capability probe | VALIDATED | P3-PLAN-01 | Fork PR #20 run `32915683414` validates head `146b3e6`: native x64/x86 build/CTest plus Gate C cross-architecture pass; exact-version tri-state probe remains read-only and P3-D-02 stays blocked |
-| P3-D-02 Guarded HidHide session-cloak lab | BLOCKED | P3-D-01, P3-REC-01, P3-HW-01, P8-RESET-01 | P3-REC is validated, but physical P3-HW-01 acceptance and the emergency reset CLI still block guarded cloaking |
+| P3-D-02 Guarded HidHide session-cloak lab | BLOCKED | P3-D-01, P3-REC-01, P3-HW-01, P8-RESET-01 | P8-RESET-01 and P3-REC-01 are validated; real P3-HW-01 physical Gate A/B/C acceptance is the only remaining blocker |
 | P3-E-01 Open-source non-protected application profile | VALIDATED | P3-API-03, P3-RAW-02, P3-MET-01, P3-REC-01 | Exact code head `12957f0` is green in PR #24 run `33038227992`: Windows x64/x86, Gate C cross-architecture, and the dedicated pinned GLFW 3.5.1 real-application job all pass. Acceptance requires 4 measured receiver callbacks per Seat, 0 cross callbacks, 8 receiver-verified events, direct A/B key cross-state separation, forced Job cleanup, unchanged target bytes, no owned orphans, and native relaunch |
 | P3-E-02 First non-anti-cheat game profile | BLOCKED | P3-E-01, P3-D-02 or proven non-cloak suppression path | Explicit experimental compatibility entry |
 | P3-E-03 Two different game zero-bleed proof | BLOCKED | P3-E-02, P3-CTRL-01 | Measured keyboard/mouse/controller bleed and latency report |
@@ -58,7 +58,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | Packet | State | Reason |
 | --- | --- | --- |
 | P8-WATCH-01 Watchdog protocol and lease model | VALIDATED | Fork PR #21 run `32919928489` validates head `dceaab9`: native x64/x86 full CTest including `WatchdogProcessFaultTests` plus Gate C cross-architecture pass; its Gate C integration is now validated by P3-REC-01 |
-| P8-RESET-01 Emergency reset CLI contract | CODE_COMPLETE | Standalone `hydra_reset.exe` implements status/dry-run/session/all/safe-mode/diagnostics against a bounded exact-owner + trusted-watchdog-manifest registration. Real process tests preserve unrelated same-name/PID-reuse identities and recover both dead-host and live-host/watchdog races; fresh local x64/x86 full suites pass 56/56 and prior cross-architecture Gate C regressions pass. A real Windows scheduled task launched the exact x64 reset command and returned `0` with clean JSON postconditions and zero remaining reset processes. Exact-head non-interactive fork CI is the only remaining P8-RESET-01 validation gate. |
+| P8-RESET-01 Emergency reset CLI contract | VALIDATED | Standalone `hydra_reset.exe` implements bounded exact-owner reset and fail-closed recovery. Local x64/x86 full suites pass 56/56; the real scheduled-task launch returned `0` with clean JSON postconditions and zero remaining reset processes. Fork PR #25 run `33050902127` validates exact head `3438301` on Windows x64, Win32/x86, Gate C cross-architecture, and P3-E regression. |
 | P8-JOURNAL-01 Crash journal and safe-mode marker | VALIDATED | Fork PR #22 run `32947110442` validates exact implementation head `2b42d9a`: native x64/x86 full-project CTest plus Gate C cross-architecture pass; bounded durable journal/startup safe-mode contract is now integrated and validated by P3-REC-01 |
 | P4-RUN-01 Production host service/process skeleton | BLOCKED | Start after P3 controlled shim contract stabilizes |
 
@@ -360,30 +360,30 @@ Safety boundary: no process-name kill, arbitrary command/path field, registry sw
 Recovery evidence: no-session and repeated reset, live owner/target cleanup, dead-host/stale journal, wrong creation identity, unrelated same-name sentinel, transient rollback failure/retry, pre-journal failure promotion to `Preparing` + `RecoveryRequired`, and a live Gate C host with independently armed watchdog all pass on real Windows process paths.
 Local regression: reset-focused `ResetActionsTests`, `ResetProcessTests`, and `GateCWatchdogRecoveryTests` pass 3/3 on both x64 and Win32/x86. A fresh interactive full CTest rerun passes 56/56 on both architectures, including the previously desktop-sensitive `GateCCursorFocusShimProcessSelfTest`. The prior local x64-host-to-x64/x86 architecture, protocol-error, baseline, polling, cursor/focus, Raw Input, and XInput cross matrix also passes with zero cross-delivery/API-failure counters where applicable. Exact-head non-interactive fork CI remains required by the packet.
 Manual acceptance: on Windows 11 Home build 26200, a real current-user scheduled task launched x64 `hydra_reset.exe all --confirm --json --recovery-dir <isolated>` from implementation head `5f6817351a655c5091e4e2f3f6120d641028c5e6` (binary SHA-256 `7097a45b590ee54eeb61551d81e7c660e9cc62310f558b8e3db9ccda9424e202`). Task Scheduler recorded `Last Result: 0`; the isolated JSON state was clean before and after (`safe_mode=off`, `runtime_registration=false`), zero reset processes remained, and the temporary scheduled task was removed. This closes the declared shortcut/task launch gate without claiming physical Gate A/B/C evidence.
-CI limit: no GitHub check or PR exists for exact head `5f68173`, and the workflow is PR-triggered. Exact-head non-interactive fork x64/x86/full-suite and Gate C cross-architecture CI remains required before P8-RESET-01 may become `VALIDATED`. P3-HW-01 physical Gate A/B/C remains independently PENDING, so P3-D-02 stays BLOCKED and Phase 3 is not ready for its whole-phase audit.
+Validation CI: fork PR #25 run `33050902127` passes exact head `3438301149f95a49f140ffcabddaabfdb877921a` on full Windows x64, Win32/x86, Gate C x64-to-x64/x86 cross-architecture, and the pinned P3-E open-source application regression. Together with the local scheduled-task acceptance, P8-RESET-01 is `VALIDATED`. P3-HW-01 physical Gate A/B/C remains independently PENDING, so P3-D-02 stays BLOCKED and Phase 3 is not ready for its whole-phase audit.
 
 ## Next Codex task
 
 Use:
 
 ```text
-Finish only P8-RESET-01 validation acceptance.
+Finish only P3-HW-01 physical Gate A/B/C acceptance.
 
 P3-E-01 is VALIDATED at code head 12957f0 by PR #24 run 33038227992: Windows
 x64/x86, Gate C cross-architecture, and the pinned real GLFW 3.5.1 acceptance all
 pass. Preserve the validated recovery, profiled-shim, external-process ownership,
 and fail-closed contracts.
 
-P8-RESET-01 is CODE_COMPLETE on branch feat/p8-reset-01-emergency-reset.
-Fresh local x64/x86 full suites pass 56/56 and the prior Gate C cross matrix passes.
-The real scheduled-task launch gate passes at head 5f68173 with Last Result 0,
-clean JSON postconditions, and zero remaining reset processes. Require exact-head fork
-x64/x86/full-suite and Gate C cross CI; after that evidence is green, record it and
-mark P8-RESET-01 VALIDATED. Preserve exact owner/target identity and fail-closed
-RecoveryRequired behavior.
+P8-RESET-01 is VALIDATED by fork PR #25 run 33050902127 at exact head 3438301:
+Windows x64/x86, Gate C cross-architecture, and P3-E regression all pass, and the
+real scheduled-task reset launch passes with clean JSON postconditions.
 
-Do not implement P3-D-02, P3-E-02, physical cloaking, or later packets in the same
-task. P3-HW-01 physical Gate A/B/C remains CODE_COMPLETE/PENDING, so Phase 3 is not
-ready for its whole-phase close audit.
+P3-HW-01 remains CODE_COMPLETE. Run its guided resumable acceptance with two physical
+keyboards and two pointing devices, record the exact topology and source profile, complete
+Gate A hot-plug/soak, Gate B exclusive/shared/unassigned routing, and Gate C two-target
+receiver/metrics review, then record only truthful human verdicts and retained evidence.
+
+Do not start P3-D-02, P3-E-02, physical cloaking, or later packets until P3-HW-01
+physical acceptance passes. Phase 3 is not ready for its whole-phase close audit.
 
 ```
