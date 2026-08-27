@@ -610,11 +610,19 @@ int run(const Options& options) {
         snapshot1->probeVkey == 'A' && snapshot2->probeVkey == 'B' &&
         snapshot1->cursorX == 100 && snapshot2->cursorX == 500;
 
+    // GLFW's disabled/raw cursor transition may consume the first relative sample
+    // while establishing its internal virtual cursor baseline. Keep that expected
+    // implementation detail outside the measured window: send one distinct warm-up
+    // sample per Seat, then require all four declared samples below to arrive.
+    if (!writeMouse(seat1, 1, 1) || !writeMouse(seat2, -1, 1)) {
+        return 27;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
     for (int index = 0; index < 4; ++index) {
         if (!writeMouse(seat1, 11, 3) || !writeMouse(seat2, -7, 5)) {
             return 27;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(75));
+        std::this_thread::sleep_for(std::chrono::milliseconds(125));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
