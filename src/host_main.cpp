@@ -1,3 +1,4 @@
+#include "hydra/host_transport.hpp"
 #include "hydra/runtime_host.hpp"
 #include "hydra/workspace_manager.hpp"
 
@@ -15,6 +16,7 @@ void printUsage() {
         << "Usage:\n"
         << "  hydra_host --self-test\n"
         << "  hydra_host --snapshot-json\n"
+        << "  hydra_host --serve [--profile <workspace_config.json>]\n"
         << "  hydra_host --profile <workspace_config.json> --plan-only\n\n"
         << "The host remains authoritative while UI clients connect and disconnect.\n";
 }
@@ -81,10 +83,26 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
 
-    if (argc == 4 && std::string_view(argv[1]) == "--profile" &&
-        std::string_view(argv[3]) == "--plan-only") {
+    bool serve = false;
+    bool planOnly = false;
+    std::string profilePath;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument(argv[index]);
+        if (argument == "--serve") {
+            serve = true;
+        } else if (argument == "--plan-only") {
+            planOnly = true;
+        } else if (argument == "--profile" && index + 1 < argc) {
+            profilePath = argv[++index];
+        } else {
+            printUsage();
+            return EXIT_FAILURE;
+        }
+    }
+
+    if (!profilePath.empty()) {
         hydra::WorkspaceManager profiles;
-        if (!profiles.loadFromFile(argv[2])) {
+        if (!profiles.loadFromFile(profilePath)) {
             std::cerr << "Profile validation failed: " << profiles.lastError() << '\n';
             return EXIT_FAILURE;
         }
@@ -93,9 +111,26 @@ int main(int argc, char** argv) {
             std::cerr << "Runtime profile rejection: " << loaded.diagnostic << '\n';
             return EXIT_FAILURE;
         }
+    }
+
+    if (planOnly) {
+        if (profilePath.empty() || serve) {
+            printUsage();
+            return EXIT_FAILURE;
+        }
         const auto planned = host.plan(2);
         printSnapshotJson(planned.snapshot);
         return planned.succeeded() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+    if (serve) {
+        hydra::hostipc::HostControlServer server(host);
+        std::string error;
+        if (!server.serve(&error)) {
+            std::cerr << "Host IPC server failed: " << error << '\n';
+            return EXIT_FAILURE;
+        }
+        return EXIT_SUCCESS;
     }
 
     printUsage();

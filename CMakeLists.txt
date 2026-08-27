@@ -137,6 +137,36 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_runtime PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
+
+# P4-IPC-01 portable fixed-width host protocol codec. Transport/authentication
+# lives in a separate Windows-aware component so codec tests remain portable.
+add_library(hydra_host_protocol STATIC
+    src/host_protocol.cpp
+    include/hydra/host_protocol.hpp
+)
+target_link_libraries(hydra_host_protocol PUBLIC hydra_runtime)
+if(MSVC)
+    target_compile_options(hydra_host_protocol PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_host_protocol PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+add_library(hydra_host_transport STATIC
+    src/host_transport.cpp
+    include/hydra/host_transport.hpp
+)
+target_link_libraries(hydra_host_transport PUBLIC hydra_host_protocol)
+if(WIN32)
+    target_link_libraries(hydra_host_transport PRIVATE Advapi32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_host_transport PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_host_transport PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 if(MSVC)
     target_compile_options(hydra_hardware PRIVATE /W4 /permissive-)
 endif()
@@ -413,7 +443,7 @@ endif()
 
 # Core Executable target (Windows GUI subsystem)
 add_executable(HydraSeat WIN32 src/main.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
-target_link_libraries(HydraSeat PRIVATE hydra_hardware)
+target_link_libraries(HydraSeat PRIVATE hydra_hardware hydra_host_transport)
 
 if(WIN32)
     target_link_libraries(HydraSeat PRIVATE ${WIN32_LIBS})
@@ -426,11 +456,20 @@ add_executable(hydra_host
     src/workspace_manager.cpp
     include/hydra/workspace_manager.hpp
 )
-target_link_libraries(hydra_host PRIVATE hydra_runtime)
+target_link_libraries(hydra_host PRIVATE hydra_runtime hydra_host_transport)
 if(MSVC)
     target_compile_options(hydra_host PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_host PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+add_executable(hydra_hostctl src/hostctl_main.cpp)
+target_link_libraries(hydra_hostctl PRIVATE hydra_host_transport)
+if(MSVC)
+    target_compile_options(hydra_hostctl PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_hostctl PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
@@ -648,7 +687,7 @@ if(WIN32)
     find_program(HYDRA_POWERSHELL_EXECUTABLE NAMES powershell.exe powershell)
 endif()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
-target_link_libraries(hydra_tests PRIVATE hydra_hardware)
+target_link_libraries(hydra_tests PRIVATE hydra_hardware hydra_host_transport)
 if(WIN32)
     target_link_libraries(hydra_tests PRIVATE ${WIN32_LIBS})
 endif()
@@ -669,6 +708,27 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME RuntimeHostTests COMMAND runtime_host_tests)
 add_test(NAME RuntimeHostProcessSelfTest COMMAND hydra_host --self-test)
+
+add_executable(host_protocol_tests tests/test_host_protocol.cpp)
+target_link_libraries(host_protocol_tests PRIVATE hydra_host_protocol)
+if(MSVC)
+    target_compile_options(host_protocol_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(host_protocol_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME HostProtocolTests COMMAND host_protocol_tests)
+
+add_executable(host_ipc_process_tests tests/test_host_process.cpp)
+target_link_libraries(host_ipc_process_tests PRIVATE hydra_host_transport)
+add_dependencies(host_ipc_process_tests hydra_host hydra_hostctl)
+if(MSVC)
+    target_compile_options(host_ipc_process_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(host_ipc_process_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME HostIpcProcessTests COMMAND host_ipc_process_tests)
 
 # Pure Phase 1 identity checks: deterministic and independent of attached hardware.
 add_executable(hardware_identity_tests

@@ -580,6 +580,26 @@ void Win32App::refreshHardware() {
                               std::to_wstring(m_mice.size()) + L" Mice | " +
                               std::to_wstring(m_controllers.size()) + L" Gamepads";
 
+    // Runtime authority is external to the UI. A failed read means "unknown",
+    // never "stopped"; reopening/refreshing the UI starts from a full host snapshot.
+    hydra::hostipc::HostControlClient hostClient;
+    std::string hostError;
+    if (hostClient.connect(hydra::hostipc::ClientRole::ReadOnly, 150u, &hostError)) {
+        const auto snapshot = hostClient.getSnapshot(250u, &hostError);
+        if (snapshot) {
+            const auto hostPhase = hydra::runtime::hostLifecyclePhaseName(snapshot->hostPhase);
+            const auto sessionPhase = hydra::runtime::seatSessionPhaseName(snapshot->sessionPhase);
+            statusText += L" | Runtime Host: ";
+            statusText.append(hostPhase.begin(), hostPhase.end());
+            statusText += L" / ";
+            statusText.append(sessionPhase.begin(), sessionPhase.end());
+        } else {
+            statusText += L" | Runtime Host: state unknown";
+        }
+    } else {
+        statusText += L" | Runtime Host: unavailable (state unknown)";
+    }
+
     SetWindowTextW(m_deviceStatusLabel, statusText.c_str());
 
     for (auto& tilePtr : m_deviceTiles) {

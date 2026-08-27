@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -49,6 +50,8 @@ public:
     RuntimeHost& operator=(const RuntimeHost&) = delete;
 
     HostRuntimeSnapshot snapshot() const;
+    std::vector<RuntimeTransition> transitionEventsAfter(
+        std::uint64_t sequence, std::size_t maxEvents, bool& overflow) const;
     RuntimeCommandResult loadProfile(std::vector<SeatConfig> seats,
                                      std::uint64_t correlationId);
     RuntimeCommandResult plan(std::uint64_t correlationId);
@@ -95,6 +98,7 @@ private:
     std::size_t preparedBackendCount_{0};
     std::size_t startedBackendCount_{0};
     std::optional<RuntimeTransition> lastTransition_;
+    std::deque<RuntimeTransition> transitionEvents_;
     std::string diagnostic_;
 };
 

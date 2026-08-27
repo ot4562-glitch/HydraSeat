@@ -65,6 +65,32 @@ HostRuntimeSnapshot RuntimeHost::snapshot() const {
     return snapshotLocked();
 }
 
+std::vector<RuntimeTransition> RuntimeHost::transitionEventsAfter(
+    std::uint64_t sequence, std::size_t maxEvents, bool& overflow) const {
+    std::lock_guard lock(mutex_);
+    overflow = false;
+    maxEvents = std::min<std::size_t>(maxEvents, 128u);
+    std::vector<RuntimeTransition> result;
+    if (maxEvents == 0u || transitionEvents_.empty()) return result;
+
+    const auto firstSequence = transitionEvents_.front().sequence;
+    if (sequence > transitionSequence_ ||
+        (firstSequence > 1u && sequence < firstSequence - 1u)) {
+        overflow = true;
+        return result;
+    }
+    result.reserve(std::min(maxEvents, transitionEvents_.size()));
+    for (const auto& event : transitionEvents_) {
+        if (event.sequence <= sequence) continue;
+        if (result.size() == maxEvents) {
+            overflow = true;
+            break;
+        }
+        result.push_back(event);
+    }
+    return result;
+}
+
 RuntimeCommandResult RuntimeHost::loadProfile(std::vector<SeatConfig> seats,
                                               std::uint64_t correlationId) {
     std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
@@ -423,6 +449,8 @@ RuntimeCommandResult RuntimeHost::finishLocked(RuntimeCommand command,
     transition.to = sessionPhase_;
     transition.result = code;
     transition.diagnostic = diagnostic;
+    transitionEvents_.push_back(transition);
+    if (transitionEvents_.size() > 128u) transitionEvents_.pop_front();
     lastTransition_ = std::move(transition);
     RuntimeCommandResult result;
     result.code = code;

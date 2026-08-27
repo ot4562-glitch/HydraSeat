@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "hydra/hardware_detector.hpp"
+#include "hydra/host_transport.hpp"
 #include "hydra/workspace_manager.hpp"
 #include "hydra/input_router.hpp"
 
