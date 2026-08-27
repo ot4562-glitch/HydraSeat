@@ -10,6 +10,11 @@
 
 #include "hydra/hardware_detector.hpp"
 #include "hydra/host_transport.hpp"
+#include "hydra/control_surface_model.hpp"
+#include "hydra/session_control_transition.hpp"
+#include "hydra/display_topology.hpp"
+#include "hydra/seat_display_layout.hpp"
+#include "hydra/management_seat.hpp"
 #include "hydra/workspace_manager.hpp"
 #include "hydra/input_router.hpp"
 
@@ -64,9 +69,19 @@ private:
     void layoutDeviceTiles();
     void saveWorkspaceProfile();
     void loadWorkspaceProfile();
+    void applyWorkspaceProfileToTiles();
     void toggleIsolationMode();
     void launchMultiseat();
     void launchGateCControlledLab();
+    bool initializeControlSurface();
+    void refreshControlSurface();
+    void updateControlSurfaceUi();
+    void applyManagementSeatPlacement();
+    bool configurationEditingAllowed() const noexcept;
+    void startSession();
+    void stopSessionAndReturnToWindows();
+    void beginReconfigure();
+    bool applyCurrentProfileToHost(bool showErrors);
 
     HWND m_hwnd{nullptr};
     HWND m_poolGroup{nullptr};
@@ -80,6 +95,10 @@ private:
     HWND m_launchBtn{nullptr};
     HWND m_gateCBtn{nullptr};
     HWND m_deviceStatusLabel{nullptr};
+    HWND m_runtimeStatusLabel{nullptr};
+    HWND m_startSessionBtn{nullptr};
+    HWND m_stopSessionBtn{nullptr};
+    HWND m_reconfigureBtn{nullptr};
 
     std::vector<std::unique_ptr<VisualDeviceTile>> m_deviceTiles;
     std::unordered_map<uintptr_t, size_t> m_handleToTileIndex;
@@ -87,6 +106,11 @@ private:
     HardwareDetector m_hardwareDetector;
     WorkspaceManager m_workspaceManager;
     InputRouter m_inputRouter;
+    hostipc::HostControlClient m_hostClient;
+    control::ControlSurfaceModel m_controlSurfaceModel;
+    control::SessionControlTransition m_sessionControlTransition;
+    HANDLE m_singleInstanceMutex{nullptr};
+    bool m_duplicateLaunch{false};
 
     std::vector<DeviceInfo> m_displays;
     std::vector<DeviceInfo> m_keyboards;

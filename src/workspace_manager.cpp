@@ -381,7 +381,27 @@ SeatId WorkspaceManager::createSeat(const std::wstring& name) {
 
 bool WorkspaceManager::removeSeat(SeatId seatId) {
     if (m_seats.erase(seatId) == 0) return false;
+    if (m_managementSeatId == seatId) {
+        if (m_seats.empty()) {
+            m_managementSeatId = 1;
+        } else {
+            m_managementSeatId = std::min_element(
+                m_seats.begin(), m_seats.end(),
+                [](const auto& left, const auto& right) { return left.first < right.first; })
+                                     ->first;
+        }
+    }
     removeUnusedShareableResources();
+    return true;
+}
+
+bool WorkspaceManager::setManagementSeatId(SeatId seatId) {
+    m_lastError.clear();
+    if (seatId == 0 || !m_seats.contains(seatId)) {
+        m_lastError = "management seat must reference an existing seat";
+        return false;
+    }
+    m_managementSeatId = seatId;
     return true;
 }
 
@@ -607,7 +627,8 @@ bool WorkspaceManager::saveToFile(const std::string& filePath) const {
     try {
         std::ofstream out(filePath, std::ios::binary | std::ios::trunc);
         if (!out) { m_lastError = "could not open profile for writing"; return false; }
-        out << "{\n  \"schema_version\": 2,\n  \"shareable_resources\": [";
+        out << "{\n  \"schema_version\": 2,\n  \"management_seat_id\": " << m_managementSeatId
+            << ",\n  \"shareable_resources\": [";
         bool first = true;
         for (const auto& key : m_shareableResources) {
             const auto split = key.find(L':');
@@ -659,6 +680,15 @@ bool WorkspaceManager::loadFromFile(const std::string& filePath) {
         buffer << in.rdbuf();
         const auto root = objectOf(JsonParser(buffer.str()).parse());
         if (uintOf(required(root, "schema_version")) != 2) throw std::runtime_error("unsupported schema_version");
+        SeatId requestedManagementSeatId = 1;
+        bool managementSeatExplicit = false;
+        if (const auto* management = optional(root, "management_seat_id")) {
+            const auto rawManagement = uintOf(*management);
+            if (rawManagement == 0 || rawManagement > std::numeric_limits<SeatId>::max())
+                throw std::runtime_error("management_seat_id out of range");
+            requestedManagementSeatId = static_cast<SeatId>(rawManagement);
+            managementSeatExplicit = true;
+        }
 
         WorkspaceManager temp;
         if (const auto* shares = optional(root, "shareable_resources")) {
@@ -724,8 +754,23 @@ bool WorkspaceManager::loadFromFile(const std::string& filePath) {
             if (seat.audioInputEndpointId && !temp.assignAudioInput(id, *seat.audioInputEndpointId))
                 throw std::runtime_error("audio input is exclusively owned by another seat");
         }
+        if (!temp.m_seats.empty()) {
+            if (managementSeatExplicit) {
+                if (!temp.m_seats.contains(requestedManagementSeatId))
+                    throw std::runtime_error("management_seat_id does not reference a configured seat");
+            } else if (!temp.m_seats.contains(requestedManagementSeatId)) {
+                requestedManagementSeatId = std::min_element(
+                    temp.m_seats.begin(), temp.m_seats.end(),
+                    [](const auto& left, const auto& right) { return left.first < right.first; })
+                                                ->first;
+            }
+        } else if (managementSeatExplicit && requestedManagementSeatId != 1) {
+            throw std::runtime_error("management_seat_id requires a configured seat");
+        }
+        temp.m_managementSeatId = requestedManagementSeatId;
         temp.m_nextId = maxId + 1;
         m_nextId = temp.m_nextId;
+        m_managementSeatId = temp.m_managementSeatId;
         m_seats = std::move(temp.m_seats);
         m_shareableResources = std::move(temp.m_shareableResources);
         return true;

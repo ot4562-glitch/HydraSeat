@@ -66,6 +66,11 @@ public:
     bool assignTargetWindow(SeatId seatId, std::uint64_t hwnd);
     bool setActive(SeatId seatId, bool active);
 
+    // The visible whole-machine control plane belongs to one Management Seat.
+    // Seat 1 is the deterministic default for backward-compatible profiles.
+    bool setManagementSeatId(SeatId seatId);
+    SeatId managementSeatId() const noexcept { return m_managementSeatId; }
+
     bool setDeviceShareable(SeatDeviceType type, const std::wstring& deviceId,
                             bool shareable);
     bool isDeviceShareable(SeatDeviceType type, const std::wstring& deviceId) const;
@@ -106,6 +111,7 @@ private:
     void removeUnusedShareableResources();
 
     SeatId m_nextId{1};
+    SeatId m_managementSeatId{1};
     std::unordered_map<SeatId, SeatConfig> m_seats;
     std::unordered_set<std::wstring> m_shareableResources;
     mutable std::string m_lastError;

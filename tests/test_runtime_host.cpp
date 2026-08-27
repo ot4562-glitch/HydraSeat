@@ -131,6 +131,8 @@ void testDefaultAndProfileValidation() {
     check(initial.hostPhase == HostLifecyclePhase::Running, "host starts running");
     check(initial.sessionPhase == SeatSessionPhase::Idle, "session starts idle");
     check(!initial.profileLoaded, "profile is initially absent");
+    check(initial.managementSeatId == 1,
+          "runtime authority defaults to Management Seat 1 before profile load");
     check(host.start(1).code == RuntimeResultCode::InvalidState,
           "start without preparation is rejected");
 
@@ -144,6 +146,15 @@ void testDefaultAndProfileValidation() {
           "unowned primary display is rejected");
     check(!host.snapshot().profileLoaded,
           "invalid profile leaves prior runtime profile unchanged");
+
+    RuntimeHost managementHost;
+    const auto managementLoaded = managementHost.loadProfile(validSeats(), 2, 4);
+    check(managementLoaded.succeeded() && managementLoaded.snapshot.managementSeatId == 2,
+          "explicit Management Seat 2 becomes host authority");
+    const auto invalidManagement = managementHost.loadProfile(validSeats(), 99, 5);
+    check(invalidManagement.code == RuntimeResultCode::InvalidProfile &&
+              managementHost.snapshot().managementSeatId == 2,
+          "unknown Management Seat is rejected without replacing prior authority");
 }
 
 void testLifecycleAndUiIndependence() {
@@ -180,6 +191,40 @@ void testLifecycleAndUiIndependence() {
     check(host.stopAndReturnToWindows(10).code == RuntimeResultCode::AlreadySatisfied,
           "repeated stop is safe");
     check(host.exitHostWhenIdle(11).succeeded(), "idle host may request exit");
+}
+
+void testReconfigureIsDistinctVerifiedStop() {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->backendName = "reconfigure";
+    RuntimeHost host({backend});
+    loadAndPlan(host);
+    check(host.prepare(3).succeeded(), "reconfigure session prepares");
+    check(host.start(4).succeeded(), "reconfigure session starts");
+
+    const auto reconfigure = host.beginReconfigure(5);
+    check(reconfigure.succeeded() &&
+              reconfigure.snapshot.sessionPhase == SeatSessionPhase::Idle &&
+              reconfigure.snapshot.lastTransition &&
+              reconfigure.snapshot.lastTransition->command == RuntimeCommand::BeginReconfigure,
+          "BeginReconfigure performs verified rollback and records a distinct transition");
+    check(!backend->prepared && !backend->started,
+          "configuration editing is exposed only after backend safe state is restored");
+
+    const auto repeated = host.beginReconfigure(6);
+    check(repeated.code == RuntimeResultCode::AlreadySatisfied &&
+              repeated.snapshot.sessionPhase == SeatSessionPhase::Idle &&
+              repeated.snapshot.lastTransition &&
+              repeated.snapshot.lastTransition->command == RuntimeCommand::BeginReconfigure,
+          "repeated BeginReconfigure remains idempotent without collapsing into ordinary Stop");
+
+    check(host.loadProfile(validSeats(), 2, 7).succeeded() &&
+              host.snapshot().managementSeatId == 2,
+          "fresh edited profile may replace authority only after reconfigure reaches Idle");
+    check(host.plan(8).succeeded(), "edited profile receives a fresh immutable plan");
+    check(host.prepare(9).succeeded() && host.start(10).succeeded(),
+          "edited profile can restart through a fresh prepare/start sequence");
+    check(host.stopAndReturnToWindows(11).succeeded(),
+          "reconfigured session still uses ordinary verified Stop afterwards");
 }
 
 void testPartialFailureAndRecoveryRequired() {
@@ -305,7 +350,8 @@ void testConcurrentMutationRejectionAndReaders() {
         readers.emplace_back([&] {
             for (int count = 0; count < 100; ++count) {
                 const auto snapshot = host.snapshot();
-                if (snapshot.schemaVersion != 1 || snapshot.seats.size() != 2u) {
+                if (snapshot.schemaVersion != 2 || snapshot.seats.size() != 2u ||
+                    snapshot.managementSeatId != 1) {
                     readersValid.store(false, std::memory_order_relaxed);
                 }
             }
@@ -324,6 +370,7 @@ void testConcurrentMutationRejectionAndReaders() {
 int main() {
     testDefaultAndProfileValidation();
     testLifecycleAndUiIndependence();
+    testReconfigureIsDistinctVerifiedStop();
     testPartialFailureAndRecoveryRequired();
     testDiagnosticBounds();
     testConcurrentMutationRejectionAndReaders();

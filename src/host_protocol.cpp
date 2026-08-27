@@ -109,9 +109,135 @@ private:
     std::size_t offset_{0};
 };
 
+bool wideToUtf8(std::wstring_view text, std::string& out) {
+    out.clear();
+    auto append = [&](std::uint32_t cp) {
+        if (cp <= 0x7fu) out.push_back(static_cast<char>(cp));
+        else if (cp <= 0x7ffu) {
+            out.push_back(static_cast<char>(0xc0u | (cp >> 6u)));
+            out.push_back(static_cast<char>(0x80u | (cp & 0x3fu)));
+        } else if (cp <= 0xffffu) {
+            out.push_back(static_cast<char>(0xe0u | (cp >> 12u)));
+            out.push_back(static_cast<char>(0x80u | ((cp >> 6u) & 0x3fu)));
+            out.push_back(static_cast<char>(0x80u | (cp & 0x3fu)));
+        } else {
+            out.push_back(static_cast<char>(0xf0u | (cp >> 18u)));
+            out.push_back(static_cast<char>(0x80u | ((cp >> 12u) & 0x3fu)));
+            out.push_back(static_cast<char>(0x80u | ((cp >> 6u) & 0x3fu)));
+            out.push_back(static_cast<char>(0x80u | (cp & 0x3fu)));
+        }
+    };
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        std::uint32_t cp = static_cast<std::uint32_t>(text[index]);
+        if constexpr (sizeof(wchar_t) == 2u) {
+            if (cp >= 0xd800u && cp <= 0xdbffu) {
+                if (++index >= text.size()) return false;
+                const auto low = static_cast<std::uint32_t>(text[index]);
+                if (low < 0xdc00u || low > 0xdfffu) return false;
+                cp = 0x10000u + ((cp - 0xd800u) << 10u) + (low - 0xdc00u);
+            } else if (cp >= 0xdc00u && cp <= 0xdfffu) {
+                return false;
+            }
+        }
+        if (cp > 0x10ffffu || (cp >= 0xd800u && cp <= 0xdfffu)) return false;
+        append(cp);
+        if (out.size() > kHostProtocolMaxStringBytes) return false;
+    }
+    return true;
+}
+
+bool utf8ToWide(std::string_view text, std::wstring& out) {
+    out.clear();
+    for (std::size_t index = 0; index < text.size();) {
+        const auto first = static_cast<unsigned char>(text[index++]);
+        std::uint32_t cp = 0;
+        unsigned continuation = 0;
+        if (first < 0x80u) cp = first;
+        else if ((first & 0xe0u) == 0xc0u) { cp = first & 0x1fu; continuation = 1; }
+        else if ((first & 0xf0u) == 0xe0u) { cp = first & 0x0fu; continuation = 2; }
+        else if ((first & 0xf8u) == 0xf0u) { cp = first & 0x07u; continuation = 3; }
+        else return false;
+        if (index + continuation > text.size()) return false;
+        for (unsigned count = 0; count < continuation; ++count) {
+            const auto value = static_cast<unsigned char>(text[index++]);
+            if ((value & 0xc0u) != 0x80u) return false;
+            cp = (cp << 6u) | (value & 0x3fu);
+        }
+        if ((continuation == 1u && cp < 0x80u) ||
+            (continuation == 2u && cp < 0x800u) ||
+            (continuation == 3u && cp < 0x10000u) ||
+            cp > 0x10ffffu || (cp >= 0xd800u && cp <= 0xdfffu)) {
+            return false;
+        }
+        if constexpr (sizeof(wchar_t) == 2u) {
+            if (cp <= 0xffffu) out.push_back(static_cast<wchar_t>(cp));
+            else {
+                cp -= 0x10000u;
+                out.push_back(static_cast<wchar_t>(0xd800u + (cp >> 10u)));
+                out.push_back(static_cast<wchar_t>(0xdc00u + (cp & 0x3ffu)));
+            }
+        } else {
+            out.push_back(static_cast<wchar_t>(cp));
+        }
+    }
+    return true;
+}
+
+bool writeWide(Writer& writer, std::wstring_view text) {
+    std::string utf8;
+    if (!wideToUtf8(text, utf8) || utf8.size() > kHostProtocolMaxStringBytes) return false;
+    writer.string(utf8);
+    return true;
+}
+
+bool readWide(Reader& reader, std::wstring& text) {
+    std::string utf8;
+    return reader.string(utf8) && utf8ToWide(utf8, text);
+}
+
+bool writeWideVector(Writer& writer, const std::vector<std::wstring>& values) {
+    if (values.size() > 64u) return false;
+    writer.u32(static_cast<std::uint32_t>(values.size()));
+    for (const auto& value : values) {
+        if (!writeWide(writer, value)) return false;
+    }
+    return true;
+}
+
+bool readWideVector(Reader& reader, std::vector<std::wstring>& values) {
+    std::uint32_t count = 0;
+    if (!reader.u32(count) || count > 64u) return false;
+    values.clear();
+    values.reserve(count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        std::wstring value;
+        if (!readWide(reader, value)) return false;
+        values.push_back(std::move(value));
+    }
+    return true;
+}
+
+bool writeOptionalWide(Writer& writer, const std::optional<std::wstring>& value) {
+    writer.u8(value ? 1u : 0u);
+    return !value || writeWide(writer, *value);
+}
+
+bool readOptionalWide(Reader& reader, std::optional<std::wstring>& value) {
+    std::uint8_t present = 0;
+    if (!reader.u8(present) || present > 1u) return false;
+    if (present == 0u) {
+        value.reset();
+        return true;
+    }
+    std::wstring decoded;
+    if (!readWide(reader, decoded)) return false;
+    value = std::move(decoded);
+    return true;
+}
+
 bool validMessageType(std::uint16_t raw) {
     return raw >= static_cast<std::uint16_t>(MessageType::Hello) &&
-           raw <= static_cast<std::uint16_t>(MessageType::Error);
+           raw <= static_cast<std::uint16_t>(MessageType::ApplyProfileResult);
 }
 
 bool validHostPhase(std::uint8_t raw) {
@@ -123,7 +249,7 @@ bool validSessionPhase(std::uint8_t raw) {
 }
 
 bool validRuntimeCommand(std::uint8_t raw) {
-    return raw <= static_cast<std::uint8_t>(runtime::RuntimeCommand::MarkDegraded);
+    return raw <= static_cast<std::uint8_t>(runtime::RuntimeCommand::BeginReconfigure);
 }
 
 bool validRuntimeResult(std::uint8_t raw) {
@@ -196,6 +322,8 @@ std::string_view messageTypeName(MessageType type) noexcept {
         case MessageType::Ping: return "ping";
         case MessageType::Pong: return "pong";
         case MessageType::Error: return "error";
+        case MessageType::ApplyProfile: return "apply-profile";
+        case MessageType::ApplyProfileResult: return "apply-profile-result";
     }
     return "unknown";
 }
@@ -286,23 +414,30 @@ std::vector<std::byte> encodeHello(const Hello& value) {
     Writer writer;
     writer.u8(static_cast<std::uint8_t>(value.role));
     writer.u8(0); writer.u8(0); writer.u8(0);
+    writer.u32(value.seatId);
     return writer.take();
 }
 
 std::optional<Hello> decodeHello(std::span<const std::byte> payload) {
     Reader reader(payload);
     std::uint8_t role = 0, r1 = 0, r2 = 0, r3 = 0;
+    Hello value;
     if (!reader.u8(role) || !reader.u8(r1) || !reader.u8(r2) || !reader.u8(r3) ||
-        !reader.done() || !validRole(role) || r1 != 0 || r2 != 0 || r3 != 0) {
+        !reader.u32(value.seatId) || !reader.done() || !validRole(role) ||
+        r1 != 0 || r2 != 0 || r3 != 0 ||
+        (static_cast<ClientRole>(role) == ClientRole::Control && value.seatId == 0)) {
         return std::nullopt;
     }
-    return Hello{static_cast<ClientRole>(role)};
+    value.role = static_cast<ClientRole>(role);
+    return value;
 }
 
 std::vector<std::byte> encodeHelloAck(const HelloAck& value) {
     Writer writer;
     writer.u8(static_cast<std::uint8_t>(value.role));
     writer.u8(0); writer.u8(0); writer.u8(0);
+    writer.u32(value.seatId);
+    writer.u32(value.managementSeatId);
     writer.u32(value.serverProcessId);
     writer.u32(value.windowsSessionId);
     return writer.take();
@@ -313,16 +448,93 @@ std::optional<HelloAck> decodeHelloAck(std::span<const std::byte> payload) {
     std::uint8_t role = 0, r1 = 0, r2 = 0, r3 = 0;
     HelloAck value;
     if (!reader.u8(role) || !reader.u8(r1) || !reader.u8(r2) || !reader.u8(r3) ||
+        !reader.u32(value.seatId) || !reader.u32(value.managementSeatId) ||
         !reader.u32(value.serverProcessId) || !reader.u32(value.windowsSessionId) ||
-        !reader.done() || !validRole(role) || r1 != 0 || r2 != 0 || r3 != 0) {
+        !reader.done() || !validRole(role) || r1 != 0 || r2 != 0 || r3 != 0 ||
+        value.managementSeatId == 0 ||
+        (static_cast<ClientRole>(role) == ClientRole::Control && value.seatId == 0)) {
         return std::nullopt;
     }
     value.role = static_cast<ClientRole>(role);
     return value;
 }
 
+std::vector<std::byte> encodeProfilePayload(const ProfilePayload& profile) {
+    if (profile.managementSeatId == 0 || profile.seats.empty() ||
+        profile.seats.size() > kHostProtocolMaxSeats) {
+        return {};
+    }
+    Writer writer;
+    writer.u32(profile.managementSeatId);
+    writer.u32(static_cast<std::uint32_t>(profile.seats.size()));
+    for (const auto& seat : profile.seats) {
+        if (seat.seatId == 0) return {};
+        writer.u32(seat.seatId);
+        writer.u8(seat.active ? 1u : 0u);
+        writer.u8(0); writer.u8(0); writer.u8(0);
+        writer.u64(seat.targetHwnd);
+        if (!writeWide(writer, seat.name) ||
+            !writeWideVector(writer, seat.displayIds) ||
+            !writeOptionalWide(writer, seat.primaryDisplayId) ||
+            !writeWideVector(writer, seat.keyboardIds) ||
+            !writeWideVector(writer, seat.mouseIds) ||
+            !writeWideVector(writer, seat.controllerIds) ||
+            !writeOptionalWide(writer, seat.audioOutputEndpointId) ||
+            !writeOptionalWide(writer, seat.audioInputEndpointId)) {
+            return {};
+        }
+    }
+    auto payload = writer.take();
+    if (payload.size() > kHostProtocolMaxPayloadBytes) return {};
+    return payload;
+}
+
+std::optional<ProfilePayload> decodeProfilePayload(std::span<const std::byte> payload) {
+    if (payload.empty() || payload.size() > kHostProtocolMaxPayloadBytes) return std::nullopt;
+    Reader reader(payload);
+    ProfilePayload profile;
+    std::uint32_t count = 0;
+    if (!reader.u32(profile.managementSeatId) || profile.managementSeatId == 0 ||
+        !reader.u32(count) || count == 0 || count > kHostProtocolMaxSeats) {
+        return std::nullopt;
+    }
+    profile.seats.reserve(count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        SeatConfig seat;
+        std::uint8_t active = 0, r1 = 0, r2 = 0, r3 = 0;
+        if (!reader.u32(seat.seatId) || seat.seatId == 0 ||
+            !reader.u8(active) || !reader.u8(r1) || !reader.u8(r2) || !reader.u8(r3) ||
+            active > 1u || r1 != 0 || r2 != 0 || r3 != 0 ||
+            !reader.u64(seat.targetHwnd) || !readWide(reader, seat.name) ||
+            !readWideVector(reader, seat.displayIds) ||
+            !readOptionalWide(reader, seat.primaryDisplayId) ||
+            !readWideVector(reader, seat.keyboardIds) ||
+            !readWideVector(reader, seat.mouseIds) ||
+            !readWideVector(reader, seat.controllerIds) ||
+            !readOptionalWide(reader, seat.audioOutputEndpointId) ||
+            !readOptionalWide(reader, seat.audioInputEndpointId)) {
+            return std::nullopt;
+        }
+        seat.active = active != 0u;
+        profile.seats.push_back(std::move(seat));
+    }
+    if (!reader.done()) return std::nullopt;
+    return profile;
+}
+
 std::vector<std::byte> encodeSnapshot(const runtime::HostRuntimeSnapshot& snapshot) {
-    if (snapshot.seats.size() > kHostProtocolMaxSeats) return {};
+    if (snapshot.seats.size() > kHostProtocolMaxSeats ||
+        snapshot.configuredSeats.size() > kHostProtocolMaxSeats) {
+        return {};
+    }
+    std::vector<std::byte> configuredProfile;
+    if (snapshot.profileLoaded) {
+        configuredProfile = encodeProfilePayload(
+            ProfilePayload{snapshot.managementSeatId, snapshot.configuredSeats});
+        if (configuredProfile.empty()) return {};
+    } else if (!snapshot.configuredSeats.empty()) {
+        return {};
+    }
     Writer writer;
     writer.u32(snapshot.schemaVersion);
     writer.u8(static_cast<std::uint8_t>(snapshot.hostPhase));
@@ -332,6 +544,7 @@ std::vector<std::byte> encodeSnapshot(const runtime::HostRuntimeSnapshot& snapsh
     writer.u64(snapshot.generation);
     writer.u64(snapshot.transitionSequence);
     writer.u32(snapshot.connectedControlClients);
+    writer.u32(snapshot.managementSeatId);
     writer.u8(snapshot.profileLoaded ? 1u : 0u);
     writer.u8(snapshot.mutationInProgress ? 1u : 0u);
     writer.u8(snapshot.lastTransition ? 1u : 0u);
@@ -344,6 +557,8 @@ std::vector<std::byte> encodeSnapshot(const runtime::HostRuntimeSnapshot& snapsh
         writer.u8(0); writer.u8(0); writer.u8(0);
         writer.string(seat.diagnostic);
     }
+    writer.u32(static_cast<std::uint32_t>(configuredProfile.size()));
+    writer.raw(configuredProfile);
     if (snapshot.lastTransition) {
         const auto event = encodeTransitionBody(*snapshot.lastTransition);
         writer.u32(static_cast<std::uint32_t>(event.size()));
@@ -367,7 +582,8 @@ std::optional<runtime::HostRuntimeSnapshot> decodeSnapshot(
         !validHostPhase(host) || !validSessionPhase(session) ||
         !reader.raw(std::as_writable_bytes(std::span(snapshot.sessionId.bytes))) ||
         !reader.u64(snapshot.generation) || !reader.u64(snapshot.transitionSequence) ||
-        !reader.u32(snapshot.connectedControlClients) || !reader.u8(profile) ||
+        !reader.u32(snapshot.connectedControlClients) || !reader.u32(snapshot.managementSeatId) ||
+        snapshot.managementSeatId == 0 || snapshot.schemaVersion != 2u || !reader.u8(profile) ||
         !reader.u8(mutation) || !reader.u8(hasLast) || !reader.u8(reservedByte) ||
         profile > 1u || mutation > 1u || hasLast > 1u || reservedByte != 0 ||
         !reader.u32(seatCount) || seatCount > kHostProtocolMaxSeats ||
@@ -390,6 +606,21 @@ std::optional<runtime::HostRuntimeSnapshot> decodeSnapshot(
         }
         seat.phase = static_cast<runtime::SeatSessionPhase>(phase);
         snapshot.seats.push_back(std::move(seat));
+    }
+    std::uint32_t configuredLength = 0;
+    std::vector<std::byte> configuredBytes;
+    if (!reader.u32(configuredLength) || configuredLength > kHostProtocolMaxPayloadBytes ||
+        !reader.rawVector(configuredLength, configuredBytes)) {
+        return std::nullopt;
+    }
+    if (snapshot.profileLoaded) {
+        const auto configured = decodeProfilePayload(configuredBytes);
+        if (!configured || configured->managementSeatId != snapshot.managementSeatId) {
+            return std::nullopt;
+        }
+        snapshot.configuredSeats = configured->seats;
+    } else if (configuredLength != 0u) {
+        return std::nullopt;
     }
     if (hasLast != 0) {
         std::uint32_t length = 0;
@@ -513,6 +744,7 @@ bool isMutatingRequest(MessageType type) noexcept {
         case MessageType::BeginReconfigure:
         case MessageType::ExitHostWhenIdle:
         case MessageType::EmergencyReset:
+        case MessageType::ApplyProfile:
             return true;
         default:
             return false;
@@ -529,6 +761,7 @@ MessageType responseTypeFor(MessageType request) noexcept {
         case MessageType::BeginReconfigure: return MessageType::ReconfigureResult;
         case MessageType::ExitHostWhenIdle: return MessageType::ExitResult;
         case MessageType::EmergencyReset: return MessageType::ResetResult;
+        case MessageType::ApplyProfile: return MessageType::ApplyProfileResult;
         case MessageType::SubscribeEvents: return MessageType::SubscribeAck;
         case MessageType::Ping: return MessageType::Pong;
         default: return MessageType::Error;

@@ -206,8 +206,126 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P4-DIS-01 read-only DisplayConfig + DXGI topology inventory. Stable target
+# identity never relies on enumeration order and disconnected targets are kept.
+add_library(hydra_display_topology STATIC
+    src/display_topology.cpp
+    include/hydra/display_identity.hpp
+    include/hydra/display_topology.hpp
+)
+if(WIN32)
+    target_link_libraries(hydra_display_topology PRIVATE User32.lib Dxgi.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_display_topology PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_display_topology PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-DIS-02 stable Seat display groups and reversible coordinate transforms.
+add_library(hydra_seat_display_layout STATIC
+    src/seat_display_layout.cpp
+    include/hydra/seat_display_layout.hpp
+)
+target_link_libraries(hydra_seat_display_layout PUBLIC hydra_display_topology hydra_runtime)
+if(MSVC)
+    target_compile_options(hydra_seat_display_layout PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_seat_display_layout PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-WIN-02 typed placement planning and ownership-validated Win32 mutation.
+# The policy surface is portable; the engine applies only to currently owned
+# windows and captures rollback state before every mutation.
+add_library(hydra_window_placement STATIC
+    src/window_policy.cpp
+    src/window_placement.cpp
+    include/hydra/window_policy.hpp
+    include/hydra/window_placement.hpp
+)
+target_link_libraries(hydra_window_placement PUBLIC hydra_window_tracking hydra_seat_display_layout)
+if(WIN32)
+    target_link_libraries(hydra_window_placement PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_window_placement PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_window_placement PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-POL-01 serialized desired-vs-observed Seat runtime policy coordinator.
+add_library(hydra_seat_runtime_policy STATIC
+    src/seat_runtime_policy.cpp
+    include/hydra/seat_runtime_policy.hpp
+)
+target_link_libraries(hydra_seat_runtime_policy PUBLIC hydra_window_placement)
+if(MSVC)
+    target_compile_options(hydra_seat_runtime_policy PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_seat_runtime_policy PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-DIS-03 deterministic display hot-plug degradation and recovery planning.
+add_library(hydra_display_recovery STATIC
+    src/display_recovery.cpp
+    include/hydra/display_recovery.hpp
+)
+target_link_libraries(hydra_display_recovery PUBLIC hydra_seat_display_layout hydra_seat_runtime_policy)
+if(MSVC)
+    target_compile_options(hydra_display_recovery PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_display_recovery PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 if(MSVC)
     target_compile_options(hydra_hardware PRIVATE /W4 /permissive-)
+endif()
+
+# P4-CTRL-01 Management Seat placement and global-control permission model.
+add_library(hydra_management_seat STATIC
+    src/management_seat.cpp
+    include/hydra/management_seat.hpp
+)
+target_link_libraries(hydra_management_seat PUBLIC hydra_seat_display_layout)
+if(WIN32)
+    target_link_libraries(hydra_management_seat PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_management_seat PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_management_seat PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-CTRL-01 authoritative host/config-backed control-surface presentation model.
+add_library(hydra_control_surface STATIC
+    src/control_surface_model.cpp
+    include/hydra/control_surface_model.hpp
+)
+target_link_libraries(hydra_control_surface PUBLIC hydra_management_seat hydra_runtime)
+if(MSVC)
+    target_compile_options(hydra_control_surface PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_control_surface PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-CTRL-02 verified Stop/Reconfigure/Save+Start control-surface state model.
+add_library(hydra_session_control STATIC
+    src/session_control_transition.cpp
+    include/hydra/session_control_transition.hpp
+)
+target_link_libraries(hydra_session_control PUBLIC hydra_management_seat hydra_host_transport)
+if(MSVC)
+    target_compile_options(hydra_session_control PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_session_control PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
 # P3-CTRL-01 bounded, process-local normalized XInput state. This component
@@ -482,7 +600,8 @@ endif()
 
 # Core Executable target (Windows GUI subsystem)
 add_executable(HydraSeat WIN32 src/main.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
-target_link_libraries(HydraSeat PRIVATE hydra_hardware hydra_host_transport)
+target_link_libraries(HydraSeat PRIVATE
+    hydra_hardware hydra_host_transport hydra_control_surface hydra_session_control)
 
 if(WIN32)
     target_link_libraries(HydraSeat PRIVATE ${WIN32_LIBS})
@@ -726,7 +845,8 @@ if(WIN32)
     find_program(HYDRA_POWERSHELL_EXECUTABLE NAMES powershell.exe powershell)
 endif()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
-target_link_libraries(hydra_tests PRIVATE hydra_hardware hydra_host_transport)
+target_link_libraries(hydra_tests PRIVATE
+    hydra_hardware hydra_host_transport hydra_control_surface hydra_session_control)
 if(WIN32)
     target_link_libraries(hydra_tests PRIVATE ${WIN32_LIBS})
 endif()
@@ -809,6 +929,95 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 add_test(NAME WindowTrackerTests COMMAND window_tracker_tests)
+
+add_executable(hydra_display_diag src/display_diag_main.cpp)
+target_link_libraries(hydra_display_diag PRIVATE hydra_display_topology)
+if(MSVC)
+    target_compile_options(hydra_display_diag PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_display_diag PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+add_executable(display_topology_tests tests/test_display_topology.cpp)
+target_link_libraries(display_topology_tests PRIVATE hydra_display_topology)
+if(MSVC)
+    target_compile_options(display_topology_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(display_topology_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME DisplayTopologyTests COMMAND display_topology_tests)
+
+add_executable(seat_display_layout_tests tests/test_seat_display_layout.cpp)
+target_link_libraries(seat_display_layout_tests PRIVATE hydra_seat_display_layout)
+if(MSVC)
+    target_compile_options(seat_display_layout_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(seat_display_layout_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SeatDisplayLayoutTests COMMAND seat_display_layout_tests)
+
+add_executable(window_policy_tests tests/test_window_policy.cpp)
+target_link_libraries(window_policy_tests PRIVATE hydra_window_placement)
+if(MSVC)
+    target_compile_options(window_policy_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(window_policy_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME WindowPolicyTests COMMAND window_policy_tests)
+
+add_executable(seat_runtime_policy_tests tests/test_seat_runtime_policy.cpp)
+target_link_libraries(seat_runtime_policy_tests PRIVATE hydra_seat_runtime_policy)
+if(MSVC)
+    target_compile_options(seat_runtime_policy_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(seat_runtime_policy_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SeatRuntimePolicyTests COMMAND seat_runtime_policy_tests)
+
+add_executable(display_recovery_tests tests/test_display_recovery.cpp)
+target_link_libraries(display_recovery_tests PRIVATE hydra_display_recovery)
+if(MSVC)
+    target_compile_options(display_recovery_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(display_recovery_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME DisplayRecoveryTests COMMAND display_recovery_tests)
+
+add_executable(management_seat_tests tests/test_management_seat.cpp)
+target_link_libraries(management_seat_tests PRIVATE hydra_management_seat)
+if(MSVC)
+    target_compile_options(management_seat_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(management_seat_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ManagementSeatTests COMMAND management_seat_tests)
+
+add_executable(session_control_transition_tests tests/test_session_control_transition.cpp)
+target_link_libraries(session_control_transition_tests PRIVATE hydra_session_control)
+if(MSVC)
+    target_compile_options(session_control_transition_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(session_control_transition_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SessionControlTransitionTests COMMAND session_control_transition_tests)
+
+add_executable(control_surface_model_tests tests/test_control_surface_model.cpp)
+target_link_libraries(control_surface_model_tests PRIVATE hydra_control_surface)
+if(MSVC)
+    target_compile_options(control_surface_model_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(control_surface_model_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ControlSurfaceModelTests COMMAND control_surface_model_tests)
 
 # Pure Phase 1 identity checks: deterministic and independent of attached hardware.
 add_executable(hardware_identity_tests

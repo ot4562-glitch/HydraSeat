@@ -38,7 +38,8 @@ enum class RuntimeCommand : std::uint8_t {
     StopAndReturnToWindows = 4,
     Reset = 5,
     ExitHostWhenIdle = 6,
-    MarkDegraded = 7
+    MarkDegraded = 7,
+    BeginReconfigure = 8
 };
 
 enum class RuntimeResultCode : std::uint8_t {
@@ -80,16 +81,18 @@ struct RuntimeTransition {
 };
 
 struct HostRuntimeSnapshot {
-    std::uint32_t schemaVersion{1};
+    std::uint32_t schemaVersion{2};
     HostLifecyclePhase hostPhase{HostLifecyclePhase::Starting};
     SeatSessionPhase sessionPhase{SeatSessionPhase::Idle};
     RuntimeSessionId sessionId{};
     std::uint64_t generation{0};
     std::uint64_t transitionSequence{0};
     std::uint32_t connectedControlClients{0};
+    SeatId managementSeatId{1};
     bool profileLoaded{false};
     bool mutationInProgress{false};
     std::vector<SeatRuntimeState> seats;
+    std::vector<SeatConfig> configuredSeats;
     std::optional<RuntimeTransition> lastTransition;
     std::string diagnostic;
 };

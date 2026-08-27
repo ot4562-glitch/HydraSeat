@@ -106,7 +106,8 @@ int main(int argc, char** argv) {
             std::cerr << "Profile validation failed: " << profiles.lastError() << '\n';
             return EXIT_FAILURE;
         }
-        const auto loaded = host.loadProfile(profiles.getAllSeats(), 1);
+        const auto loaded = host.loadProfile(
+            profiles.getAllSeats(), profiles.managementSeatId(), 1);
         if (!loaded.succeeded()) {
             std::cerr << "Runtime profile rejection: " << loaded.diagnostic << '\n';
             return EXIT_FAILURE;

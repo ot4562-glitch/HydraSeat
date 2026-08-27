@@ -92,6 +92,11 @@ std::vector<RuntimeTransition> RuntimeHost::transitionEventsAfter(
 }
 
 RuntimeCommandResult RuntimeHost::loadProfile(std::vector<SeatConfig> seats,
+                                               std::uint64_t correlationId) {
+    return loadProfile(std::move(seats), 1, correlationId);
+}
+
+RuntimeCommandResult RuntimeHost::loadProfile(std::vector<SeatConfig> seats, SeatId managementSeatId,
                                               std::uint64_t correlationId) {
     std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
     if (!mutationLock.owns_lock()) return busyResult(RuntimeCommand::LoadProfile, correlationId);
@@ -110,6 +115,16 @@ RuntimeCommandResult RuntimeHost::loadProfile(std::vector<SeatConfig> seats,
                             RuntimeResultCode::InvalidProfile, std::move(error),
                             correlationId);
     }
+    if (managementSeatId == 0 ||
+        std::none_of(seats.begin(), seats.end(), [managementSeatId](const SeatConfig& seat) {
+            return seat.seatId == managementSeatId;
+        })) {
+        return finishLocked(RuntimeCommand::LoadProfile, from,
+                            RuntimeResultCode::InvalidProfile,
+                            "Management Seat must reference a configured Seat",
+                            correlationId);
+    }
+    managementSeatId_ = managementSeatId;
     profile_ = std::move(seats);
     seats_.clear();
     for (const auto& seat : profile_) {
@@ -283,9 +298,19 @@ RuntimeCommandResult RuntimeHost::start(std::uint64_t correlationId) {
 }
 
 RuntimeCommandResult RuntimeHost::stopAndReturnToWindows(std::uint64_t correlationId) {
+    return stopForCommand(RuntimeCommand::StopAndReturnToWindows, correlationId, false);
+}
+
+RuntimeCommandResult RuntimeHost::beginReconfigure(std::uint64_t correlationId) {
+    return stopForCommand(RuntimeCommand::BeginReconfigure, correlationId, true);
+}
+
+RuntimeCommandResult RuntimeHost::stopForCommand(RuntimeCommand command,
+                                                 std::uint64_t correlationId,
+                                                 bool reconfigure) {
     std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
     if (!mutationLock.owns_lock()) {
-        return busyResult(RuntimeCommand::StopAndReturnToWindows, correlationId);
+        return busyResult(command, correlationId);
     }
 
     SeatSessionPhase from = SeatSessionPhase::Idle;
@@ -295,18 +320,23 @@ RuntimeCommandResult RuntimeHost::stopAndReturnToWindows(std::uint64_t correlati
         from = sessionPhase_;
         mutationInProgress_ = true;
         if (sessionPhase_ == SeatSessionPhase::Idle) {
-            return finishLocked(RuntimeCommand::StopAndReturnToWindows, from,
+            return finishLocked(command, from,
                                 RuntimeResultCode::AlreadySatisfied,
-                                "ordinary Windows state is already verified", correlationId);
+                                reconfigure
+                                    ? "session is already idle; configuration editor may open"
+                                    : "ordinary Windows state is already verified",
+                                correlationId);
         }
         if (sessionPhase_ == SeatSessionPhase::RecoveryRequired) {
-            return finishLocked(RuntimeCommand::StopAndReturnToWindows, from,
+            return finishLocked(command, from,
                                 RuntimeResultCode::RecoveryRequired,
                                 "reset is required because prior rollback was unverified",
                                 correlationId);
         }
         rollbackCount = preparedBackendCount_;
-        setSessionPhaseLocked(SeatSessionPhase::Stopping, "new session work stopped");
+        setSessionPhaseLocked(SeatSessionPhase::Stopping,
+                              reconfigure ? "session stopped for reconfiguration"
+                                          : "new session work stopped");
         setSessionPhaseLocked(SeatSessionPhase::RollingBack, "reverse rollback started");
     }
 
@@ -315,17 +345,22 @@ RuntimeCommandResult RuntimeHost::stopAndReturnToWindows(std::uint64_t correlati
     std::lock_guard lock(mutex_);
     if (!rolledBack) {
         setSessionPhaseLocked(SeatSessionPhase::RecoveryRequired, diagnostic);
-        return finishLocked(RuntimeCommand::StopAndReturnToWindows, from,
+        return finishLocked(command, from,
                             RuntimeResultCode::RollbackFailure,
                             std::move(diagnostic), correlationId);
     }
     preparedBackendCount_ = 0;
     startedBackendCount_ = 0;
-    setSessionPhaseLocked(SeatSessionPhase::Idle,
-                          "ordinary Windows postconditions verified");
-    return finishLocked(RuntimeCommand::StopAndReturnToWindows, from,
+    setSessionPhaseLocked(
+        SeatSessionPhase::Idle,
+        reconfigure ? "rollback verified; configuration editor may open"
+                    : "ordinary Windows postconditions verified");
+    return finishLocked(command, from,
                         RuntimeResultCode::Ok,
-                        "session stopped; host remains running and idle", correlationId);
+                        reconfigure
+                            ? "session stopped safely; configuration editor may open"
+                            : "session stopped; host remains running and idle",
+                        correlationId);
 }
 
 RuntimeCommandResult RuntimeHost::reset(std::uint64_t correlationId) {
@@ -504,9 +539,11 @@ HostRuntimeSnapshot RuntimeHost::snapshotLocked() const {
     snapshot.generation = generation_;
     snapshot.transitionSequence = transitionSequence_;
     snapshot.connectedControlClients = controlClients_;
+    snapshot.managementSeatId = managementSeatId_;
     snapshot.profileLoaded = !profile_.empty();
     snapshot.mutationInProgress = mutationInProgress_;
     snapshot.seats = seats_;
+    snapshot.configuredSeats = profile_;
     snapshot.lastTransition = lastTransition_;
     snapshot.diagnostic = diagnostic_;
     return snapshot;

@@ -13,7 +13,7 @@
 namespace hydra::hostipc {
 
 constexpr std::uint32_t kHostProtocolMagic = 0x31505348u; // "HSP1" little-endian
-constexpr std::uint16_t kHostProtocolVersion = 1u;
+constexpr std::uint16_t kHostProtocolVersion = 2u;
 constexpr std::size_t kHostProtocolHeaderBytes = 24u;
 constexpr std::size_t kHostProtocolMaxPayloadBytes = 64u * 1024u;
 constexpr std::size_t kHostProtocolMaxStringBytes = 2048u;
@@ -46,6 +46,8 @@ enum class MessageType : std::uint16_t {
     Ping = 20,
     Pong = 21,
     Error = 22,
+    ApplyProfile = 23,
+    ApplyProfileResult = 24,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -75,12 +77,20 @@ struct Frame {
 
 struct Hello {
     ClientRole role{ClientRole::ReadOnly};
+    SeatId seatId{0};
 };
 
 struct HelloAck {
     ClientRole role{ClientRole::ReadOnly};
+    SeatId seatId{0};
+    SeatId managementSeatId{1};
     std::uint32_t serverProcessId{0};
     std::uint32_t windowsSessionId{0};
+};
+
+struct ProfilePayload {
+    SeatId managementSeatId{1};
+    std::vector<SeatConfig> seats;
 };
 
 struct SubscribeRequest {
@@ -110,6 +120,9 @@ std::vector<std::byte> encodeHello(const Hello& value);
 std::optional<Hello> decodeHello(std::span<const std::byte> payload);
 std::vector<std::byte> encodeHelloAck(const HelloAck& value);
 std::optional<HelloAck> decodeHelloAck(std::span<const std::byte> payload);
+
+std::vector<std::byte> encodeProfilePayload(const ProfilePayload& profile);
+std::optional<ProfilePayload> decodeProfilePayload(std::span<const std::byte> payload);
 
 std::vector<std::byte> encodeSnapshot(const runtime::HostRuntimeSnapshot& snapshot);
 std::optional<runtime::HostRuntimeSnapshot> decodeSnapshot(

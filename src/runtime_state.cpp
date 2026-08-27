@@ -46,6 +46,7 @@ std::string_view runtimeCommandName(RuntimeCommand command) noexcept {
         case RuntimeCommand::Reset: return "reset";
         case RuntimeCommand::ExitHostWhenIdle: return "exit-host-when-idle";
         case RuntimeCommand::MarkDegraded: return "mark-degraded";
+        case RuntimeCommand::BeginReconfigure: return "begin-reconfigure";
     }
     return "unknown";
 }

@@ -489,6 +489,7 @@ public:
             }
         }
 #else
+        (void)overflowed;
         (void)local;
 #endif
     }

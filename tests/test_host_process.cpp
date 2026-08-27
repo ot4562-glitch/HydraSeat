@@ -62,6 +62,7 @@ std::filesystem::path writeProfile() {
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
     stream << R"JSON({
   "schema_version": 2,
+  "management_seat_id": 2,
   "shareable_resources": [],
   "seats": [
     {"id":1,"name":"IPC Seat 1","active":true,"target_hwnd":0,"displays":[],"primary_display":null,"keyboards":[],"mice":[],"controllers":[],"audio_output":null,"audio_input":null},
@@ -70,6 +71,16 @@ std::filesystem::path writeProfile() {
 })JSON";
     stream.close();
     return path;
+}
+
+std::vector<hydra::SeatConfig> ipcSeats() {
+    hydra::SeatConfig first;
+    first.seatId = 1;
+    first.name = L"IPC Seat 1";
+    hydra::SeatConfig second;
+    second.seatId = 2;
+    second.name = L"IPC Seat 2";
+    return {first, second};
 }
 
 bool launchHost(const std::filesystem::path& profile, OwnedProcess& owned) {
@@ -85,10 +96,13 @@ bool launchHost(const std::filesystem::path& profile, OwnedProcess& owned) {
                           &startup, &owned.process) != FALSE;
 }
 
-bool waitForClient(HostControlClient& client, ClientRole role) {
+bool waitForClient(HostControlClient& client, ClientRole role, hydra::SeatId seatId = 0) {
     for (int attempt = 0; attempt < 50; ++attempt) {
         std::string error;
-        if (client.connect(role, 200u, &error)) return true;
+        const bool connected = role == ClientRole::Control
+            ? client.connectForSeat(role, seatId, 200u, &error)
+            : client.connect(role, 200u, &error);
+        if (connected) return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     return false;
@@ -104,8 +118,14 @@ void testRealHostProcess() {
     HostControlClient control;
     check(waitForClient(readOnly, ClientRole::ReadOnly),
           "read-only UI-style client connects to same-user/session host");
-    check(waitForClient(control, ClientRole::Control),
-          "control CLI-style client connects simultaneously");
+    check(waitForClient(control, ClientRole::Control, 2),
+          "Management Seat control client connects simultaneously");
+
+    HostControlClient otherSeatControl;
+    std::string otherSeatError;
+    check(!otherSeatControl.connectForSeat(ClientRole::Control, 1, 1000u, &otherSeatError) &&
+              otherSeatError.find("Management Seat") != std::string::npos,
+          "non-Management Seat control handshake is rejected before global commands");
 
     std::string error;
     HostControlClient unsubscribed;
@@ -130,7 +150,8 @@ void testRealHostProcess() {
 
     const auto initial = readOnly.getSnapshot(2000u, &error);
     check(initial && initial->profileLoaded && initial->sessionPhase == SeatSessionPhase::Idle &&
-              initial->seats.size() == 2u && initial->connectedControlClients >= 2u,
+              initial->seats.size() == 2u && initial->managementSeatId == 2 &&
+              initial->connectedControlClients >= 2u,
           "simultaneous reader sees authoritative loaded Idle snapshot");
     check(control.ping(0x123456789abcdef0ull, 2000u, &error),
           "ping lease round-trip succeeds");
@@ -178,18 +199,75 @@ void testRealHostProcess() {
     check(active && active->sessionPhase == SeatSessionPhase::Active,
           "independent UI reader observes Active without owning runtime components");
 
-    const auto stopped = control.command(MessageType::StopAndReturnToWindows, 2000u, &error);
-    check(stopped && stopped->succeeded() &&
-              stopped->snapshot.sessionPhase == SeatSessionPhase::Idle,
-          "StopAndReturnToWindows verifies Idle while host remains alive");
+    const auto reconfigure = control.command(MessageType::BeginReconfigure, 2000u, &error);
+    check(reconfigure && reconfigure->succeeded() &&
+              reconfigure->snapshot.sessionPhase == SeatSessionPhase::Idle &&
+              reconfigure->snapshot.lastTransition &&
+              reconfigure->snapshot.lastTransition->command == RuntimeCommand::BeginReconfigure,
+          "BeginReconfigure performs a distinct verified rollback before editing");
+
+    ProfilePayload editedProfile;
+    editedProfile.managementSeatId = 2;
+    editedProfile.seats = ipcSeats();
+    editedProfile.seats[0].name = L"IPC Seat 1 Edited";
+    const auto applied = control.applyProfile(editedProfile, 2000u, &error);
+    check(applied && applied->succeeded() &&
+              applied->snapshot.sessionPhase == SeatSessionPhase::Idle &&
+              applied->snapshot.managementSeatId == 2,
+          "edited profile applies only after reconfigure reaches Idle");
+
+    const auto replanned = control.command(MessageType::PlanSession, 2000u, &error);
+    check(replanned && replanned->succeeded() &&
+              replanned->snapshot.sessionPhase == SeatSessionPhase::Planning &&
+              (!planned || replanned->snapshot.generation > planned->snapshot.generation),
+          "edited profile compiles a fresh immutable plan generation");
+    const auto restartedSession = control.command(MessageType::StartSession, 2000u, &error);
+    check(restartedSession && restartedSession->succeeded() &&
+              restartedSession->snapshot.sessionPhase == SeatSessionPhase::Active,
+          "edited profile restarts through fresh prepare/start");
+
+    const auto applyWhileActive = control.applyProfile(editedProfile, 2000u, &error);
+    check(applyWhileActive && applyWhileActive->code == RuntimeResultCode::InvalidState &&
+              applyWhileActive->snapshot.sessionPhase == SeatSessionPhase::Active,
+          "ApplyProfile is rejected while the session is Active");
+
+    const auto reconfigureForTransfer = control.command(
+        MessageType::BeginReconfigure, 2000u, &error);
+    check(reconfigureForTransfer && reconfigureForTransfer->succeeded() &&
+              reconfigureForTransfer->snapshot.sessionPhase == SeatSessionPhase::Idle,
+          "second reconfigure safely returns edited session to Idle");
+
+    ProfilePayload transferred = editedProfile;
+    transferred.managementSeatId = 1;
+    const auto transferredAuthority = control.applyProfile(transferred, 2000u, &error);
+    check(transferredAuthority && transferredAuthority->succeeded() &&
+              transferredAuthority->snapshot.managementSeatId == 1,
+          "current Management Seat may explicitly transfer global authority in an Idle profile apply");
+
+    permissionError.reset();
+    const auto oldAuthorityDenied = control.command(
+        MessageType::PlanSession, 2000u, &error, &permissionError);
+    check(!oldAuthorityDenied && permissionError &&
+              permissionError->code == ErrorCode::PermissionDenied,
+          "old Management Seat loses mutation authority immediately after transfer");
+
+    HostControlClient newManagementControl;
+    check(waitForClient(newManagementControl, ClientRole::Control, 1),
+          "new Management Seat can establish control authority after transfer");
+    const auto transferredSnapshot = readOnly.getSnapshot(2000u, &error);
+    check(transferredSnapshot && transferredSnapshot->managementSeatId == 1 &&
+              transferredSnapshot->sessionPhase == SeatSessionPhase::Idle,
+          "read-only clients observe the transferred authoritative Management Seat");
 
     subscriber.close();
     readOnly.close();
-    const auto exited = control.command(MessageType::ExitHostWhenIdle, 2000u, &error);
+    control.close();
+    const auto exited = newManagementControl.command(
+        MessageType::ExitHostWhenIdle, 2000u, &error);
     check(exited && exited->succeeded() &&
               exited->snapshot.hostPhase == HostLifecyclePhase::ExitRequested,
-          "ExitHostWhenIdle is accepted only after Idle");
-    control.close();
+          "only the current Management Seat may exit an Idle host");
+    newManagementControl.close();
     check(WaitForSingleObject(hostProcess.process.hProcess, 5000u) == WAIT_OBJECT_0,
           "real host exits after accepted idle exit request");
 
@@ -203,13 +281,14 @@ void testRealHostProcess() {
     const auto restartedSnapshot = afterRestart.getSnapshot(2000u, &error);
     check(restartedSnapshot && restartedSnapshot->profileLoaded &&
               restartedSnapshot->sessionPhase == SeatSessionPhase::Idle &&
+              restartedSnapshot->managementSeatId == 2 &&
               restartedSnapshot->generation == 0u &&
               restartedSnapshot->transitionSequence == 1u,
           "reconnect resnapshots new host authority instead of reusing stale state");
     afterRestart.close();
 
     HostControlClient exitRestarted;
-    check(waitForClient(exitRestarted, ClientRole::Control),
+    check(waitForClient(exitRestarted, ClientRole::Control, 2),
           "control reconnects to restarted host");
     const auto exit2 = exitRestarted.command(MessageType::ExitHostWhenIdle, 2000u, &error);
     check(exit2 && exit2->succeeded(), "restarted idle host exits cleanly");

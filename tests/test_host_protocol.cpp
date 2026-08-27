@@ -30,12 +30,20 @@ HostRuntimeSnapshot sampleSnapshot() {
     snapshot.generation = 7;
     snapshot.transitionSequence = 9;
     snapshot.connectedControlClients = 2;
+    snapshot.managementSeatId = 2;
     snapshot.profileLoaded = true;
     snapshot.mutationInProgress = false;
     snapshot.seats = {
         {1, SeatSessionPhase::Active, "seat-one"},
         {2, SeatSessionPhase::Active, "seat-two"},
     };
+    hydra::SeatConfig first;
+    first.seatId = 1;
+    first.name = L"Seat One";
+    hydra::SeatConfig second;
+    second.seatId = 2;
+    second.name = L"Seat Two";
+    snapshot.configuredSeats = {first, second};
     RuntimeTransition transition;
     transition.sequence = 9;
     transition.correlationId = 44;
@@ -61,7 +69,7 @@ void testFrameAndVersionValidation() {
           "fixed frame round-trips");
 
     auto future = encoded;
-    future[4] = static_cast<std::byte>(2);
+    future[4] = static_cast<std::byte>(3);
     const auto rejectedFuture = decodeFrame(future, &decodedResult);
     check(!rejectedFuture && decodedResult.error == ErrorCode::VersionMismatch,
           "future protocol version is rejected explicitly");
@@ -78,16 +86,20 @@ void testFrameAndVersionValidation() {
 }
 
 void testPayloadRoundTripsAndBounds() {
-    const Hello hello{ClientRole::Control};
+    const Hello hello{ClientRole::Control, 2};
     const auto decodedHello = decodeHello(encodeHello(hello));
-    check(decodedHello && decodedHello->role == ClientRole::Control,
-          "hello role round-trips");
+    check(decodedHello && decodedHello->role == ClientRole::Control &&
+              decodedHello->seatId == 2,
+          "hello role and requesting Seat round-trip");
+    check(!decodeHello(encodeHello(Hello{ClientRole::Control, 0})),
+          "control hello without a Seat identity is rejected");
 
-    const HelloAck ack{ClientRole::ReadOnly, 1234, 7};
+    const HelloAck ack{ClientRole::ReadOnly, 0, 2, 1234, 7};
     const auto decodedAck = decodeHelloAck(encodeHelloAck(ack));
     check(decodedAck && decodedAck->role == ClientRole::ReadOnly &&
+              decodedAck->seatId == 0 && decodedAck->managementSeatId == 2 &&
               decodedAck->serverProcessId == 1234 && decodedAck->windowsSessionId == 7,
-          "hello acknowledgement round-trips");
+          "hello acknowledgement carries Management Seat authority");
 
     const auto snapshot = sampleSnapshot();
     const auto decodedSnapshot = decodeSnapshot(encodeSnapshot(snapshot));
@@ -96,7 +108,9 @@ void testPayloadRoundTripsAndBounds() {
               decodedSnapshot->sessionId == snapshot.sessionId &&
               decodedSnapshot->generation == snapshot.generation &&
               decodedSnapshot->transitionSequence == snapshot.transitionSequence &&
+              decodedSnapshot->managementSeatId == snapshot.managementSeatId &&
               decodedSnapshot->seats == snapshot.seats &&
+              decodedSnapshot->configuredSeats == snapshot.configuredSeats &&
               decodedSnapshot->lastTransition == snapshot.lastTransition,
           "runtime snapshot round-trips without pointer-size assumptions");
 
@@ -135,6 +149,64 @@ std::vector<hydra::SeatConfig> testSeats() {
     return {seat};
 }
 
+void testProfilePayloadRoundTripAndBounds() {
+    hydra::SeatConfig first;
+    first.seatId = 1;
+    first.name = L"관리 Seat";
+    first.displayIds = {L"monitor-stable-a", L"monitor-stable-b"};
+    first.primaryDisplayId = L"monitor-stable-a";
+    first.keyboardIds = {L"keyboard-stable-a"};
+    first.mouseIds = {L"mouse-stable-a"};
+    first.controllerIds = {L"xinput:0"};
+    first.audioOutputEndpointId = L"audio-out-a";
+    first.audioInputEndpointId = L"audio-in-a";
+    first.targetHwnd = 0x12345678ull;
+
+    hydra::SeatConfig second;
+    second.seatId = 2;
+    second.name = L"Seat 2";
+    second.displayIds = {L"monitor-stable-c"};
+    second.primaryDisplayId = L"monitor-stable-c";
+    second.active = true;
+
+    ProfilePayload profile;
+    profile.managementSeatId = 2;
+    profile.seats = {first, second};
+    const auto encoded = encodeProfilePayload(profile);
+    const auto decoded = decodeProfilePayload(encoded);
+    check(!encoded.empty() && decoded && decoded->managementSeatId == 2 &&
+              decoded->seats == profile.seats,
+          "bounded profile payload round-trips Unicode and stable resource identities");
+
+    ProfilePayload empty;
+    empty.managementSeatId = 1;
+    check(encodeProfilePayload(empty).empty(),
+          "profile payload requires at least one configured Seat");
+
+    auto oversized = profile;
+    oversized.seats.front().keyboardIds = {
+        std::wstring(kHostProtocolMaxStringBytes + 1u, L'x')};
+    check(encodeProfilePayload(oversized).empty(),
+          "profile payload rejects stable IDs larger than the protocol string bound");
+
+    auto truncated = encoded;
+    if (!truncated.empty()) truncated.pop_back();
+    check(!decodeProfilePayload(truncated),
+          "truncated profile payload is rejected instead of partially applying configuration");
+
+    auto malformedUtf8 = encoded;
+    // The first Seat name starts after the fixed profile/Seat header. Replace the
+    // first two name bytes with an overlong UTF-8 sequence; the strict decoder
+    // must reject it even though the byte pattern has continuation shape.
+    constexpr std::size_t firstNameOffset = 8u + 4u + 4u + 8u + 4u;
+    if (malformedUtf8.size() > firstNameOffset + 1u) {
+        malformedUtf8[firstNameOffset] = static_cast<std::byte>(0xc0u);
+        malformedUtf8[firstNameOffset + 1u] = static_cast<std::byte>(0x80u);
+    }
+    check(!decodeProfilePayload(malformedUtf8),
+          "overlong UTF-8 in profile payload is rejected");
+}
+
 void testTransitionRingOverflow() {
     RuntimeHost host;
     check(host.loadProfile(testSeats(), 1).succeeded(), "event test profile loads");
@@ -164,6 +236,7 @@ void testTransitionRingOverflow() {
 int main() {
     testFrameAndVersionValidation();
     testPayloadRoundTripsAndBounds();
+    testProfilePayloadRoundTripAndBounds();
     testTransitionRingOverflow();
     if (failures != 0) {
         std::cerr << failures << " host protocol test(s) failed.\n";

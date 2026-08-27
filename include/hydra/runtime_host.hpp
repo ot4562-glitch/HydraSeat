@@ -54,10 +54,14 @@ public:
         std::uint64_t sequence, std::size_t maxEvents, bool& overflow) const;
     RuntimeCommandResult loadProfile(std::vector<SeatConfig> seats,
                                      std::uint64_t correlationId);
+    RuntimeCommandResult loadProfile(std::vector<SeatConfig> seats,
+                                     SeatId managementSeatId,
+                                     std::uint64_t correlationId);
     RuntimeCommandResult plan(std::uint64_t correlationId);
     RuntimeCommandResult prepare(std::uint64_t correlationId);
     RuntimeCommandResult start(std::uint64_t correlationId);
     RuntimeCommandResult stopAndReturnToWindows(std::uint64_t correlationId);
+    RuntimeCommandResult beginReconfigure(std::uint64_t correlationId);
     RuntimeCommandResult reset(std::uint64_t correlationId);
     RuntimeCommandResult exitHostWhenIdle(std::uint64_t correlationId);
     RuntimeCommandResult markDegraded(std::string diagnostic,
@@ -67,6 +71,9 @@ public:
     void controlClientDisconnected();
 
 private:
+    RuntimeCommandResult stopForCommand(RuntimeCommand command,
+                                        std::uint64_t correlationId,
+                                        bool reconfigure);
     RuntimeCommandResult busyResult(RuntimeCommand command,
                                     std::uint64_t correlationId) const;
     RuntimeCommandResult finishLocked(RuntimeCommand command,
@@ -91,6 +98,7 @@ private:
     std::uint64_t generation_{0};
     std::uint64_t transitionSequence_{0};
     std::uint32_t controlClients_{0};
+    SeatId managementSeatId_{1};
     bool mutationInProgress_{false};
     std::vector<SeatConfig> profile_;
     std::vector<SeatRuntimeState> seats_;

@@ -40,6 +40,9 @@ public:
     bool connect(ClientRole role,
                  std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
                  std::string* error = nullptr);
+    bool connectForSeat(ClientRole role, SeatId seatId,
+                        std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
+                        std::string* error = nullptr);
     void close() noexcept;
     bool connected() const noexcept;
     ClientRole role() const noexcept;
@@ -49,6 +52,11 @@ public:
         std::string* error = nullptr);
     std::optional<runtime::RuntimeCommandResult> command(
         MessageType requestType,
+        std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
+        std::string* error = nullptr,
+        std::optional<ErrorPayload>* protocolError = nullptr);
+    std::optional<runtime::RuntimeCommandResult> applyProfile(
+        const ProfilePayload& profile,
         std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
         std::string* error = nullptr,
         std::optional<ErrorPayload>* protocolError = nullptr);

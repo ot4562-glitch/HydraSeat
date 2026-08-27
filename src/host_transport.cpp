@@ -373,9 +373,9 @@ std::wstring currentHostPipeName() {
 #ifdef _WIN32
     DWORD sessionId = 0;
     if (ProcessIdToSessionId(GetCurrentProcessId(), &sessionId) == FALSE) sessionId = 0;
-    return L"\\\\.\\pipe\\HydraSeat.Host.v1." + std::to_wstring(sessionId);
+    return L"\\\\.\\pipe\\HydraSeat.Host.v2." + std::to_wstring(sessionId);
 #else
-    return L"HydraSeat.Host.v1.unsupported";
+    return L"HydraSeat.Host.v2.unsupported";
 #endif
 }
 
@@ -402,18 +402,33 @@ HostControlClient& HostControlClient::operator=(HostControlClient&&) noexcept = 
 
 bool HostControlClient::connect(ClientRole requestedRole, std::uint32_t timeoutMs,
                                 std::string* error) {
+    const SeatId defaultSeatId = requestedRole == ClientRole::Control ? 1u : 0u;
+    return connectForSeat(requestedRole, defaultSeatId, timeoutMs, error);
+}
+
+bool HostControlClient::connectForSeat(ClientRole requestedRole, SeatId requestedSeatId,
+                                       std::uint32_t timeoutMs,
+                                std::string* error) {
     close();
 #ifdef _WIN32
     impl_->pipe = connectClientPipe(timeoutMs, error);
     if (!impl_->pipe.valid()) return false;
     impl_->role = requestedRole;
     const auto correlation = impl_->allocateCorrelation();
-    Frame helloFrame{MessageType::Hello, correlation, encodeHello(Hello{requestedRole})};
+    Frame helloFrame{MessageType::Hello, correlation, encodeHello(Hello{requestedRole, requestedSeatId})};
     if (!sendFrame(impl_->pipe.value, helloFrame, timeoutMs, error)) {
         close();
         return false;
     }
     const auto response = receiveFrame(impl_->pipe.value, timeoutMs, error);
+    if (response && response->correlationId == correlation && response->type == MessageType::Error) {
+        const auto protocolError = decodeError(response->payload);
+        if (error) {
+            *error = protocolError ? protocolError->diagnostic : "host rejected control handshake";
+        }
+        close();
+        return false;
+    }
     if (!response || response->correlationId != correlation ||
         response->type != MessageType::HelloAck) {
         if (error && (!response || error->empty())) *error = "host hello acknowledgement mismatch";
@@ -423,14 +438,16 @@ bool HostControlClient::connect(ClientRole requestedRole, std::uint32_t timeoutM
     const auto ack = decodeHelloAck(response->payload);
     DWORD expectedSession = 0;
     (void)ProcessIdToSessionId(GetCurrentProcessId(), &expectedSession);
-    if (!ack || ack->role != requestedRole || ack->windowsSessionId != expectedSession) {
+    if (!ack || ack->role != requestedRole || ack->seatId != requestedSeatId ||
+        ack->windowsSessionId != expectedSession ||
+        (requestedRole == ClientRole::Control && ack->managementSeatId != requestedSeatId)) {
         if (error) *error = "host hello acknowledgement identity mismatch";
         close();
         return false;
     }
     return true;
 #else
-    (void)requestedRole; (void)timeoutMs;
+    (void)requestedRole; (void)requestedSeatId; (void)timeoutMs;
     if (error) *error = "host IPC transport is Windows-only";
     return false;
 #endif
@@ -515,6 +532,32 @@ std::optional<runtime::RuntimeCommandResult> HostControlClient::command(
     }
     auto result = decodeCommandResult(response->payload);
     if (!result && error) *error = "host command result payload is malformed";
+    return result;
+}
+
+std::optional<runtime::RuntimeCommandResult> HostControlClient::applyProfile(
+    const ProfilePayload& profile, std::uint32_t timeoutMs, std::string* error,
+    std::optional<ErrorPayload>* protocolError) {
+    const auto payload = encodeProfilePayload(profile);
+    if (payload.empty()) {
+        if (error) *error = "profile payload is invalid or exceeds protocol bounds";
+        return std::nullopt;
+    }
+    const auto correlation = impl_->allocateCorrelation();
+    const auto response = transact(MessageType::ApplyProfile, payload, correlation, timeoutMs, error);
+    if (!response) return std::nullopt;
+    if (response->type == MessageType::Error) {
+        auto decoded = decodeError(response->payload);
+        if (protocolError) *protocolError = decoded;
+        if (error && decoded) *error = decoded->diagnostic;
+        return std::nullopt;
+    }
+    if (response->type != MessageType::ApplyProfileResult) {
+        if (error) *error = "unexpected host ApplyProfile response type";
+        return std::nullopt;
+    }
+    auto result = decodeCommandResult(response->payload);
+    if (!result && error) *error = "host ApplyProfile result payload is malformed";
     return result;
 }
 
@@ -695,11 +738,20 @@ public:
                             "malformed host hello payload");
             return;
         }
+        const auto authoritySnapshot = host.snapshot();
+        if (hello->role == ClientRole::Control &&
+            hello->seatId != authoritySnapshot.managementSeatId) {
+            (void)sendError(pipe.value, helloFrame->correlationId,
+                            ErrorCode::PermissionDenied,
+                            "global control is restricted to the configured Management Seat");
+            return;
+        }
         DWORD sessionId = 0;
         (void)ProcessIdToSessionId(GetCurrentProcessId(), &sessionId);
         if (!sendFrame(pipe.value,
                        Frame{MessageType::HelloAck, helloFrame->correlationId,
-                             encodeHelloAck(HelloAck{hello->role, GetCurrentProcessId(), sessionId})},
+                             encodeHelloAck(HelloAck{hello->role, hello->seatId, authoritySnapshot.managementSeatId,
+                                          GetCurrentProcessId(), sessionId})},
                        kHandshakeTimeoutMs, nullptr)) {
             return;
         }
@@ -731,6 +783,13 @@ public:
                 (void)sendError(pipe.value, request->correlationId,
                                 ErrorCode::PermissionDenied,
                                 "read-only host client cannot mutate runtime state");
+                continue;
+            }
+            if (hello->role == ClientRole::Control && isMutatingRequest(request->type) &&
+                hello->seatId != host.snapshot().managementSeatId) {
+                (void)sendError(pipe.value, request->correlationId,
+                                ErrorCode::PermissionDenied,
+                                "global control authority moved to another Management Seat");
                 continue;
             }
 
@@ -769,6 +828,23 @@ public:
                 subscriptionLoop(pipe.value, *subscribe, request->correlationId);
                 return;
             }
+            if (request->type == MessageType::ApplyProfile) {
+                const auto profile = decodeProfilePayload(request->payload);
+                if (!profile) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::Malformed, "malformed bounded profile payload");
+                    continue;
+                }
+                const auto applied = host.loadProfile(
+                    profile->seats, profile->managementSeatId, request->correlationId);
+                if (!sendFrame(pipe.value,
+                               Frame{MessageType::ApplyProfileResult, request->correlationId,
+                                     encodeCommandResult(applied)},
+                               kDefaultHostIpcTimeoutMs, nullptr)) {
+                    return;
+                }
+                continue;
+            }
             if (!isMutatingRequest(request->type) || !request->payload.empty()) {
                 (void)sendError(pipe.value, request->correlationId,
                                 ErrorCode::Unsupported,
@@ -791,8 +867,10 @@ public:
                     break;
                 }
                 case MessageType::StopAndReturnToWindows:
-                case MessageType::BeginReconfigure:
                     commandResult = host.stopAndReturnToWindows(request->correlationId);
+                    break;
+                case MessageType::BeginReconfigure:
+                    commandResult = host.beginReconfigure(request->correlationId);
                     break;
                 case MessageType::ExitHostWhenIdle:
                     commandResult = host.exitHostWhenIdle(request->correlationId);
