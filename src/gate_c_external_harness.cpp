@@ -2,6 +2,7 @@
 #include "hydra/gate_c_external_profile.hpp"
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/gate_c_transport.hpp"
+#include "hydra/virtual_input_state.hpp"
 
 #ifdef _WIN32
 
@@ -134,13 +135,25 @@ struct OwnedTarget {
     OwnedTarget() = default;
     OwnedTarget(const OwnedTarget&) = delete;
     OwnedTarget& operator=(const OwnedTarget&) = delete;
-    OwnedTarget(OwnedTarget&&) = default;
-    OwnedTarget& operator=(OwnedTarget&&) = default;
+    OwnedTarget(OwnedTarget&&) = delete;
+    OwnedTarget& operator=(OwnedTarget&&) = delete;
 
     ~OwnedTarget() {
         channel.close();
         if (mapping != nullptr) CloseHandle(mapping);
-        if (containmentJob != nullptr) CloseHandle(containmentJob);
+        if (containmentJob != nullptr) {
+            CloseHandle(containmentJob);
+            containmentJob = nullptr;
+        }
+        // This object exclusively owns the process handle returned by the
+        // CREATE_SUSPENDED launch. Closing a successfully assigned kill-on-close
+        // job normally tears a failed target down; this exact-handle fallback also
+        // covers failures that occur before job assignment completes.
+        if (process.hProcess != nullptr &&
+            WaitForSingleObject(process.hProcess, 0) == WAIT_TIMEOUT) {
+            (void)TerminateProcess(process.hProcess, 0x50334546u); // "P3EF"
+            (void)WaitForSingleObject(process.hProcess, 2000);
+        }
         if (process.hThread != nullptr) CloseHandle(process.hThread);
         if (process.hProcess != nullptr) CloseHandle(process.hProcess);
     }
@@ -152,6 +165,16 @@ bool createOutputHandle(const std::filesystem::path& path, HANDLE& handle) {
     sa.bInheritHandle = TRUE;
     handle = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
                          &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    return handle != INVALID_HANDLE_VALUE;
+}
+
+bool createInputHandle(HANDLE& handle) {
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    handle = CreateFileW(L"NUL", GENERIC_READ,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     return handle != INVALID_HANDLE_VALUE;
 }
 
@@ -290,29 +313,65 @@ bool launchTarget(const Options& options, std::uint32_t seatId,
         ("seat-" + std::to_string(seatId) + ".stderr.txt");
     HANDLE stdoutHandle = INVALID_HANDLE_VALUE;
     HANDLE stderrHandle = INVALID_HANDLE_VALUE;
+    HANDLE stdinHandle = INVALID_HANDLE_VALUE;
     if (!createOutputHandle(target.stdoutPath, stdoutHandle) ||
-        !createOutputHandle(target.stderrPath, stderrHandle)) {
+        !createOutputHandle(target.stderrPath, stderrHandle) ||
+        !createInputHandle(stdinHandle)) {
         if (stdoutHandle != INVALID_HANDLE_VALUE) CloseHandle(stdoutHandle);
         if (stderrHandle != INVALID_HANDLE_VALUE) CloseHandle(stderrHandle);
+        if (stdinHandle != INVALID_HANDLE_VALUE) CloseHandle(stdinHandle);
         return false;
     }
 
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdOutput = stdoutHandle;
-    startup.hStdError = stderrHandle;
-    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    SIZE_T attributeBytes = 0;
+    (void)InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeBytes);
+    if (attributeBytes == 0) {
+        CloseHandle(stdoutHandle);
+        CloseHandle(stderrHandle);
+        CloseHandle(stdinHandle);
+        return false;
+    }
+    std::vector<unsigned char> attributeStorage(attributeBytes);
+    auto* attributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
+        attributeStorage.data());
+    if (InitializeProcThreadAttributeList(attributeList, 1, 0,
+                                          &attributeBytes) == FALSE) {
+        CloseHandle(stdoutHandle);
+        CloseHandle(stderrHandle);
+        CloseHandle(stdinHandle);
+        return false;
+    }
+    HANDLE inheritedHandles[] = {stdinHandle, stdoutHandle, stderrHandle};
+    if (UpdateProcThreadAttribute(
+            attributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            inheritedHandles, sizeof(inheritedHandles), nullptr, nullptr) ==
+        FALSE) {
+        DeleteProcThreadAttributeList(attributeList);
+        CloseHandle(stdoutHandle);
+        CloseHandle(stderrHandle);
+        CloseHandle(stdinHandle);
+        return false;
+    }
+
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdOutput = stdoutHandle;
+    startup.StartupInfo.hStdError = stderrHandle;
+    startup.StartupInfo.hStdInput = stdinHandle;
+    startup.lpAttributeList = attributeList;
     std::wstring commandLine = quoted(options.target);
     std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
     mutableCommand.push_back(L'\0');
     const auto workingDirectory = options.target.parent_path().wstring();
     const BOOL created = CreateProcessW(
         options.target.c_str(), mutableCommand.data(), nullptr, nullptr, TRUE,
-        CREATE_SUSPENDED, nullptr, workingDirectory.c_str(), &startup,
-        &target.process);
+        CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT, nullptr,
+        workingDirectory.c_str(), &startup.StartupInfo, &target.process);
+    DeleteProcThreadAttributeList(attributeList);
     CloseHandle(stdoutHandle);
     CloseHandle(stderrHandle);
+    CloseHandle(stdinHandle);
     if (created == FALSE) return false;
     target.creationTime100ns = processCreationTime100ns(target.process.hProcess);
     if (target.creationTime100ns == 0 || !containOwnedTarget(target)) return false;
@@ -362,20 +421,14 @@ bool writeControl(OwnedTarget& target, std::int32_t x, std::int32_t y) {
         kIoTimeoutMs, &error);
 }
 
-bool writeKey(OwnedTarget& target, std::uint32_t vkey) {
+bool writeKeyTransition(OwnedTarget& target, std::uint32_t vkey,
+                        hydra::gatec::KeyTransition transition) {
     hydra::gatec::InputEventMessage input{};
     input.kind = hydra::gatec::InputKind::Keyboard;
-    input.keyTransition = hydra::gatec::KeyTransition::Down;
+    input.keyTransition = transition;
     input.timestampMicros = target.sequence * 1000u;
     input.vkey = vkey;
     std::string error;
-    if (!target.channel.writeFrame(
-            hydra::gatec::encodeInputEvent(++target.sequence, input),
-            kIoTimeoutMs, &error)) {
-        return false;
-    }
-    input.keyTransition = hydra::gatec::KeyTransition::Up;
-    input.timestampMicros = target.sequence * 1000u;
     return target.channel.writeFrame(
         hydra::gatec::encodeInputEvent(++target.sequence, input),
         kIoTimeoutMs, &error);
@@ -601,14 +654,23 @@ int run(const Options& options) {
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
     if (!writeControl(seat1, 100, 100) || !writeControl(seat2, 500, 500) ||
-        !writeKey(seat1, 'A') || !writeKey(seat2, 'B')) {
+        !writeKeyTransition(seat1, 'A', hydra::gatec::KeyTransition::Down) ||
+        !writeKeyTransition(seat2, 'B', hydra::gatec::KeyTransition::Down)) {
         return 26;
     }
-    const auto snapshot1 = querySnapshot(seat1, 'A');
-    const auto snapshot2 = querySnapshot(seat2, 'B');
-    const bool stateSeparated = snapshot1 && snapshot2 &&
-        snapshot1->probeVkey == 'A' && snapshot2->probeVkey == 'B' &&
-        snapshot1->cursorX == 100 && snapshot2->cursorX == 500;
+    const auto seat1A = querySnapshot(seat1, 'A');
+    const auto seat1B = querySnapshot(seat1, 'B');
+    const auto seat2A = querySnapshot(seat2, 'A');
+    const auto seat2B = querySnapshot(seat2, 'B');
+    const bool stateSeparated = seat1A && seat1B && seat2A && seat2B &&
+        hydra::gatec::snapshotKeyDown(*seat1A, 'A') &&
+        !hydra::gatec::snapshotKeyDown(*seat1B, 'B') &&
+        !hydra::gatec::snapshotKeyDown(*seat2A, 'A') &&
+        hydra::gatec::snapshotKeyDown(*seat2B, 'B');
+    if (!writeKeyTransition(seat1, 'A', hydra::gatec::KeyTransition::Up) ||
+        !writeKeyTransition(seat2, 'B', hydra::gatec::KeyTransition::Up)) {
+        return 26;
+    }
 
     // GLFW's disabled/raw cursor transition may consume the first relative sample
     // while establishing its internal virtual cursor baseline. Keep that expected

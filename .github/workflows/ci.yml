@@ -102,7 +102,7 @@ jobs:
         -DumpBinPath dumpbin.exe
 
     - name: Install per-app Mesa software OpenGL for headless runner
-      uses: f3d-app/install-mesa-windows-action@v1
+      uses: f3d-app/install-mesa-windows-action@1824e370ed7fb1795f5bc88fd1f6c81eb15d92bc # v1
       with:
         path: ${{ runner.temp }}\p3-e-glfw-build\tests\Release
         version: 23.3.5
