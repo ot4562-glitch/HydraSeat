@@ -6,6 +6,8 @@ Complete the input path from physical Seat-owned devices to documented target-pr
 
 Phase 3 does not mean universal game support. It ends when HydraSeat can truthfully support a small compatibility matrix and explain exactly which APIs/backends are required.
 
+Product note: the current v1 contract is exactly two active gaming Seats. Phase 3 intentionally closes on non-protected physical/game evidence; the later D-045 protected-title path is only an explicitly warned experiment and never weakens this phase's no-bypass/fail-closed requirements.
+
 ## Existing validated baseline
 
 Already implemented and retained as regression coverage:

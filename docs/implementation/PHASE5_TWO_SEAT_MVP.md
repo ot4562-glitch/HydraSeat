@@ -1,43 +1,25 @@
-# Phase 5 — Two-Seat Gaming MVP
+# Phase 5 — Real Two-Seat Gaming MVP
 
 ## Phase objective
 
-Deliver the first end-to-end local multiseat session that a user can intentionally start and stop: two different supported targets on disjoint Seat display groups with independent keyboard/mouse, controller where required, audio routing where supported, runtime diagnostics, and clean recovery.
+Turn the Phase 3/4 foundations into the smallest complete real gaming product proof: exactly two local Seats, real games, independent Seat lifecycle, objective input evidence, required controller/audio routing, and verified return to ordinary Windows.
 
-This phase is an MVP with an explicit compatibility matrix, not universal support.
+Phase 5 is deliberately small. It does not require a large game catalog, community service, polished installer, or full same-game setup manager. It proves that the end-to-end technical product works on real hardware before expanding UX/catalog scope.
 
 ## Phase exit gate
 
-Phase 5 is complete when:
+Phase 5 closes only when:
 
-1. two configured Seats can start from one validated launch plan;
-2. target A and target B are different applications/games;
-3. windows remain in their Seat display groups;
-4. keyboard/mouse zero-bleed criteria from Phase 3 pass;
-5. selected controller API routing passes when used;
-6. audio is routed to declared endpoints or the plan refuses unsupported routing;
-7. host/UI/watchdog state agrees throughout start/active/stop;
-8. one target restart and one input/display/audio reconnect recover;
-9. latency/drop/bleed/resource metrics are recorded;
-10. compatibility claims are versioned matrix entries;
-11. stop/reset restores normal Windows behavior.
-
-## Dependency graph
-
-```text
-P4-CLOSE-01 + P3-CLOSE-01
-          |
-          +-> P5-AUD-01 -> P5-AUD-02
-          +-> P5-CTRL-01
-          +-> P5-LAUNCH-01
-
-P5-AUD-02 + P5-CTRL-01 + P5-LAUNCH-01
-          -> P5-MVP-01 -> P5-MVP-02
-
-P5-MET-01 -------------------+
-P5-HOT-01 -------------------+-> P5-COMPAT-01 -> P5-CLOSE-01
-P5-UI-01 --------------------+
-```
+1. v1 rejects more than two active Seats;
+2. selected-game preflight checks only required devices/capabilities;
+3. two different real non-protected games run concurrently on separate physical Seat display groups;
+4. receiver-aware input evidence shows no measured cross-Seat bleed for the declared test configuration;
+5. controller/audio routes work where the selected scenarios require them;
+6. Seat 1 can stop/change while Seat 2 continues and vice versa;
+7. target restart/device reconnect is deterministic;
+8. both Seats ending or explicit Return to Windows restores ordinary Windows with verified postconditions;
+9. resource/latency/queue/drop data is recorded truthfully;
+10. a Phase-close verification passes.
 
 ---
 
@@ -47,78 +29,30 @@ P5-UI-01 --------------------+
 
 **Goal**
 
-Enumerate audio render/capture endpoints with stable identities and validate Seat ownership without changing routing.
+Provide stable read-only audio endpoint identity and validate optional Seat audio assignments without requiring audio for games that do not need a declared separate route.
 
 **Depends on**
 
-- P4-RUN-01
-- P2-SEAT-01
+- P4-CLOSE-01
 
-**Create/modify**
+**Implement**
 
-- `include/hydra/audio_topology.hpp`
-- `src/audio_topology.cpp`
-- `include/hydra/audio_identity.hpp`
-- `hydra_audio_diag.exe` or `hydra_diag audio`;
-- tests with fake endpoint enumerator.
-
-**Data model**
-
-```cpp
-struct AudioEndpointIdentity;
-struct AudioEndpoint;
-struct AudioTopologySnapshot;
-struct SeatAudioAssignment;
-```
-
-Fields:
-
-- stable endpoint ID;
-- render/capture role;
-- active/disabled/unplugged state;
-- friendly/device/interface metadata;
-- default role flags;
-- supported format summary where safely queryable;
-- topology generation.
-
-**Implementation skeleton**
-
-1. initialize COM on a dedicated audio thread;
-2. enumerate endpoints and subscribe to topology/default/state/property notifications;
-3. queue bounded events into the host;
-4. resolve profile endpoint IDs;
-5. validate exclusive/share policy;
-6. expose missing/degraded audio assignment;
-7. perform no route mutation.
+- Core Audio render/capture enumeration;
+- stable endpoint ID plus bounded friendly metadata;
+- default/disabled/disconnected state;
+- Seat assignment validation for at most two active Seats;
+- change notifications and deterministic snapshots.
 
 **Invariants**
 
-- endpoint ID, not friendly name/order, is persistent identity;
-- COM callbacks do minimal work;
-- endpoint disappearance is explicit;
-- render and capture ownership are separate;
-- default device is not silently substituted for a required endpoint.
-
-**Automated tests**
-
-- duplicate friendly names;
-- render/capture distinction;
-- state change/default change/reconnect;
-- missing profile endpoint;
-- deterministic snapshot order;
-- COM thread startup/shutdown.
-
-**Manual acceptance**
-
-USB headset + speakers + two microphones where available.
+- friendly name/order is not stable identity;
+- a saved Seat may omit audio;
+- launch preflight decides whether the selected game/scenario requires a distinct endpoint;
+- no endpoint routing mutation in this packet.
 
 **Done when**
 
-Seat audio assignments resolve to stable current endpoints and expose precise availability.
-
-**Suggested commit**
-
-`feat: implement P5-AUD-01 audio topology inventory`
+Audio inventory/assignment validation passes deterministic tests and a real two-endpoint machine records stable identities without mutation.
 
 ---
 
@@ -128,78 +62,31 @@ Seat audio assignments resolve to stable current endpoints and expose precise av
 
 **Goal**
 
-Route supported Seat-owned processes to their assigned render/capture endpoints, or fail before launch when the current backend/Windows build cannot guarantee it.
+Route each selected game's supported audio sessions to its Seat endpoint only when the exact Windows/game/provider path can be verified.
 
 **Depends on**
 
 - P5-AUD-01
 - P4-PROC-01
-- P8-WATCH-01 for persistent/elevated backends
 
-**Create/modify**
+**Implement**
 
-- `include/hydra/audio_routing_backend.hpp`
-- `src/audio_routing_registry.cpp`
-- documented backend implementations/probes;
-- fake backend/tests;
-- planner capabilities and profile fields.
-
-**Backend contract**
-
-```cpp
-struct AudioRouteRequest;
-struct AudioRouteSnapshot;
-struct AudioBackendDescriptor;
-class IAudioRoutingBackend;
-```
-
-Operations:
-
-- probe support for Windows build/process type;
-- capture current route/default context;
-- apply render/capture route;
-- verify active audio session endpoint where possible;
-- restore prior state;
-- report restart requirement or unsupported behavior.
-
-**Implementation skeleton**
-
-1. research and select only a lawful/testable backend path;
-2. separate documented, undocumented-but-user-approved, bridge, and user-assisted capabilities;
-3. make the default backend read-only/unsupported rather than guessing;
-4. tie routes to process identity, not just executable name;
-5. wait for audio session creation with bounded timeout;
-6. restore persistence changes on stop/rollback;
-7. expose actual/desired route in runtime state.
+- typed audio-routing capability backend;
+- process/session ownership validation;
+- apply/verify/rollback state;
+- app-created-later session observation;
+- unsupported path stays explicit.
 
 **Invariants**
 
-- unsupported routing blocks profiles that require it;
-- no global default endpoint change is used as silent per-process routing;
-- a Seat route never captures another Seat's session;
-- audio bridge latency is measured and capability-specific;
-- rollback is idempotent.
-
-**Automated tests**
-
-- fake process/session route lifecycle;
-- process restart/new audio session;
-- endpoint disconnect;
-- partial render/capture support;
-- apply failure rollback;
-- unsupported Windows/build result.
-
-**Manual acceptance**
-
-Two target processes simultaneously producing audio to two endpoints; capture routing if claimed.
+- process ownership precedes audio-session mutation;
+- unrelated sessions are untouched;
+- unsupported per-app routing cannot be promoted to success;
+- previous endpoint policy is captured/restored where the Windows API permits it.
 
 **Done when**
 
-At least one tested routing path works for the MVP matrix and unsupported cases fail before session activation.
-
-**Suggested commit**
-
-`feat: implement P5-AUD-02 process audio routing`
+Two controlled/real application sessions can be routed to separate physical outputs and restored without modifying unrelated audio sessions.
 
 ---
 
@@ -209,61 +96,33 @@ At least one tested routing path works for the MVP matrix and unsupported cases 
 
 **Goal**
 
-Move controlled Phase 3 controller state into the production host/profile/backend path.
+Move controller compatibility from controlled Phase 3 models into the production two-Seat runtime for explicitly supported controller API paths.
 
 **Depends on**
 
+- P4-SEAT-01
 - P3-CTRL-01
-- P4-RUN-01
-- P4-PROC-01
+- P3-CTRL-02
 
-**Create/modify**
+**Implement**
 
-- `include/hydra/controller_topology.hpp`
-- `src/controller_topology.cpp`
-- `include/hydra/controller_routing_backend.hpp`
-- physical XInput polling worker;
-- adapter/profile integration;
-- tests.
-
-**Implementation skeleton**
-
-1. enumerate/poll controller sources outside input callbacks;
-2. normalize state with device generation/connection identity;
-3. map Seat physical sources to process-local logical slots;
-4. route vibration back to the owning source;
-5. select XInput/DirectInput/Raw HID backend by profile;
-6. clear state on disconnect and require reconnect confirmation;
-7. expose unsupported API paths.
+- physical source inventory/poll worker outside latency-sensitive Raw Input callbacks;
+- stable source identity separate from transient XInput slot hint;
+- per-Seat logical controller mapping;
+- exact capability selection for XInput/DirectInput paths;
+- vibration routing only to the exact owned source;
+- disconnect/reconnect generation handling.
 
 **Invariants**
 
-- physical source is owned by at most one exclusive Seat;
-- logical slot mapping is per process/profile;
-- vibration never crosses Seats;
-- hot-plug does not reuse stale state;
-- Raw HID/SDL is not claimed from XInput success.
-
-**Automated tests**
-
-- two physical/synthetic sources to two process-local slot 0 views;
-- disconnect/reconnect/generation;
-- vibration routing;
-- process restart;
-- backend unavailable;
-- metrics correlation.
-
-**Manual acceptance**
-
-Two different controllers where possible; identical-model controllers included in the matrix.
+- XInput, DirectInput, Raw HID, SDL, and vendor APIs remain distinct capabilities;
+- no controller is silently shared across exclusive Seats;
+- reconnect cannot resurrect stale generation state;
+- physical vibration evidence is separate from synthetic state tests.
 
 **Done when**
 
-The MVP selected targets receive only their declared controllers through the tested API.
-
-**Suggested commit**
-
-`feat: implement P5-CTRL-01 production controller routing`
+The chosen MVP controller scenarios demonstrate correct Seat ownership/state/vibration where applicable with zero cross-Seat receiver evidence.
 
 ---
 
@@ -273,71 +132,49 @@ The MVP selected targets receive only their declared controllers through the tes
 
 **Goal**
 
-Create one immutable plan that prepares and activates two Seat targets with input, displays, windows, controllers, audio, diagnostics, and rollback actions.
+Compile and execute one immutable launch/activation plan for exactly two v1 Seats using the selected game requirements and already-validated runtime capabilities.
 
 **Depends on**
 
-- P4-RUN-01, P4-PROC-01, P4-POL-01
-- P3 planner/compatibility contracts
-- P5-AUD-02 where audio required
-- P5-CTRL-01 where controller required
+- P4-SEAT-01
+- P5-AUD-02
+- P5-CTRL-01
+- P3-CLOSE-01
 
-**Create/modify**
+**Plan inputs**
 
-- `include/hydra/seat_launch_plan.hpp`
-- `src/seat_launch_plan.cpp`
-- `include/hydra/activation_transaction.hpp`
-- `src/activation_transaction.cpp`
-- fake action/backend tests.
+- Seat hardware configuration;
+- selected Game/target metadata;
+- exact required input/controller/audio/display capabilities;
+- per-Seat launch identity;
+- recovery requirements;
+- user-approved high-risk options if any.
 
-**Plan structure**
+**Transaction outline**
 
-```cpp
-struct TargetLaunchPlan;
-struct SeatLaunchPlan;
-struct SessionLaunchPlan;
-struct PreparedAction;
-struct RollbackAction;
+```text
+Validate
+ -> prepare exact owned process/display/input/controller/audio resources
+ -> arm recovery where required
+ -> launch Seat process trees
+ -> establish window/input/controller/audio ownership
+ -> verify receiver/runtime postconditions
+ -> Playing
+
+failure at any step -> reverse rollback -> verified prior/safe state
 ```
-
-**Ordered transaction**
-
-1. validate profile/topology/backends/privilege/recovery;
-2. capture prior process/window/display/audio/device state;
-3. start watchdog lease and diagnostics;
-4. create process groups and controlled adapters;
-5. launch targets and confirm windows;
-6. place windows/display policy;
-7. apply audio/controller routes;
-8. enable input replacement path;
-9. enable physical cloaking/suppression last when required;
-10. run self-test and commit `Active`;
-11. rollback reverse order on any failure.
 
 **Invariants**
 
-- plan is immutable after preparation;
-- action has prepare/apply/verify/rollback result;
-- rollback runs even after partial startup;
-- one Seat failure cannot leave the other secretly active unless profile explicitly permits degraded mode;
-- session state reflects the actual committed action set.
-
-**Automated tests**
-
-- fail each action index and verify reverse rollback;
-- rollback action failure -> `RecoveryRequired`;
-- duplicate start/stop;
-- target exits during activation;
-- display/audio/device disappears;
-- deterministic plan hash.
+- maximum two active Seats;
+- a missing keyboard/mouse is not an error unless the selected game requires it;
+- no mutation occurs from an unsupported plan;
+- all mutable actions are correlated, verified, and reversible;
+- one Seat's start/stop does not automatically rebuild the other healthy Seat.
 
 **Done when**
 
-A fake and controlled two-Seat session starts/stops through one transaction with complete evidence.
-
-**Suggested commit**
-
-`feat: implement P5-LAUNCH-01 session activation transaction`
+The production host can execute a deterministic two-Seat plan with fake/controlled targets and rollback every injected failure index without cross-Seat mutation.
 
 ---
 
@@ -347,48 +184,31 @@ A fake and controlled two-Seat session starts/stops through one transaction with
 
 **Goal**
 
-Combine Phase 3 input metrics with process/window/display/controller/audio/runtime evidence into one MVP report.
+Extend Phase 3 metrics into a complete two-Seat runtime report that distinguishes expected routing from receiver-verified evidence.
 
 **Depends on**
 
+- P5-LAUNCH-01
 - P3-MET-01
-- P4 runtime snapshots
-- P5 audio/controller contracts
 
-**Create/modify**
+**Record**
 
-- `include/hydra/session_metrics.hpp`
-- `src/session_metrics.cpp`
-- diagnostic bundle/report schema;
-- report CLI/tests.
+- physical observation and route stages;
+- target receiver/apply evidence where available;
+- cross-Seat/process counts;
+- queue high-water/drop/loss;
+- input latency percentiles;
+- launch/start/stop/rollback durations;
+- bounded CPU/memory samples;
+- controller/audio route outcomes for the scenario.
 
-**Report sections**
+**Privacy**
 
-- session/profile/build/topology;
-- activation action timings/results;
-- per-Seat input latency/drop/bleed;
-- process/window/display state;
-- controller mapping/vibration events;
-- audio endpoint/session routing and measured delay where available;
-- CPU/memory/queue high-water;
-- reconnect/restart/rollback events;
-- guarantee/support level.
-
-**Invariants**
-
-- report names missing measurements;
-- no unsupported metric defaults to zero;
-- timestamps and correlation IDs align;
-- bounded storage/rotation;
-- privacy mode documented.
+Default report remains redacted: no typed text, credentials, Player names, personal paths, or unnecessary stable serials.
 
 **Done when**
 
-Every MVP run produces a comparable machine-readable and human summary.
-
-**Suggested commit**
-
-`feat: implement P5-MET-01 session evidence report`
+A machine-readable report can prove or disprove the declared MVP isolation/resource criteria without inferring zero bleed from missing receiver evidence.
 
 ---
 
@@ -398,41 +218,28 @@ Every MVP run produces a comparable machine-readable and human summary.
 
 **Goal**
 
-Exercise the production runtime and activation transaction with two controlled or open-source targets before commercial games.
+Run the complete production host path first against deterministic controlled/open-source targets before commercial game validation.
 
 **Depends on**
 
 - P5-LAUNCH-01
 - P5-MET-01
-- required audio/controller packets
-- P4-REC-01
-
-**Test topology**
-
-- two physical display groups;
-- two keyboard/mouse sets;
-- two audio endpoints when audio routing claimed;
-- two controllers when controller routing claimed;
-- two distinct target applications.
 
 **Acceptance**
 
-- planner result supported/experimental as intended;
-- activation/rollback transaction passes;
-- no cross-Seat input/controller events;
-- windows stay in display groups;
-- audio routes as declared;
-- latency and resource budgets recorded;
-- target restart and one device reconnect succeed;
-- no orphan process/window/route after stop.
+- two physical Seat display groups;
+- two physical input sets where the profile requires them;
+- independent Seat start/stop/restart;
+- target windows remain in owned groups;
+- receiver-verified zero-cross evidence;
+- selected audio/controller paths where declared;
+- one Seat exits while the other continues;
+- both end -> verified ordinary Windows restore;
+- no owned orphan process/window/helper.
 
 **Done when**
 
-The complete MVP architecture works with inspectable targets and a reproducible evidence bundle.
-
-**Suggested commit**
-
-`test: validate P5-MVP-01 controlled two-Seat session`
+The complete production lifecycle passes with a reproducible evidence bundle on real hardware using controlled/open-source targets.
 
 ---
 
@@ -442,41 +249,30 @@ The complete MVP architecture works with inspectable targets and a reproducible 
 
 **Goal**
 
-Run two different game profiles concurrently through the production runtime.
+Prove the actual v1 baseline: two people run two different real non-protected games concurrently on one sufficiently capable PC.
 
 **Depends on**
 
 - P5-MVP-01
-- P3-E-02/P3-E-03
-- P5-AUD-02/P5-CTRL-01 as required
+- P3-E-02
+- P3-E-03
 
-**Rules**
+**Acceptance**
 
-- exact versions and launcher/provider recorded;
-- no protected-process bypass;
-- each workaround is a profile field/backend capability;
-- first result is `Experimental`;
-- unsupported exclusive fullscreen/audio/controller path blocks or changes the declared profile mode;
-- user sees risk/requirements before start.
+For two explicitly named games/builds/providers:
 
-**Manual acceptance**
-
-Minimum initial run:
-
-- 30 minutes active interaction;
-- 30 start/stop cycles;
-- one target restart;
-- one input/display/controller/audio reconnect relevant to the profile;
-- emergency reset drill;
-- zero measured cross-Seat input/controller bleed.
+- both launch through the production host;
+- each is placed on the correct Seat display group;
+- required input/controller/audio path is declared and verified;
+- measured cross-Seat input evidence is zero for the test run;
+- one game can exit/change without stopping the other;
+- repeated launch/stop cycles do not leak owned helpers;
+- CPU/GPU/memory/load are recorded as evidence, not promised universally;
+- protection/account/license limitations are documented.
 
 **Done when**
 
-Two explicit games meet the MVP criteria and appear in the compatibility matrix.
-
-**Suggested commit**
-
-`test: validate P5-MVP-02 two-game session`
+A real two-game/two-player scenario completes the full independent Seat lifecycle with objective evidence and verified final rollback.
 
 ---
 
@@ -486,41 +282,33 @@ Two explicit games meet the MVP criteria and appear in the compatibility matrix.
 
 **Goal**
 
-Prove the active MVP can survive expected transient failures without silent cross-Seat fallback.
+Prove that normal household disruptions do not require reboot/manual developer cleanup.
 
 **Depends on**
 
-- P5-LAUNCH-01
-- P4-DIS-03
-- P5-AUD-01
-- P5-CTRL-01
-- P8-WATCH-01
+- P5-MVP-02
+- P4-REC-01
 
 **Matrix**
 
-- keyboard/mouse reconnect;
-- controller reconnect;
-- audio endpoint reconnect;
-- secondary/primary display reconnect;
-- target process restart;
-- UI restart;
-- host restart/reconcile according to supported policy.
+- one game exits and restarts;
+- one Seat keyboard/mouse disconnect/reconnect;
+- controller disconnect/reconnect;
+- audio endpoint disappearance/reappearance where used;
+- display reconnect regression;
+- launcher child recreation;
+- UI close/reopen;
+- host/recovery fault path.
 
 **Invariants**
 
-- missing device does not migrate to another Seat;
-- stale state clears;
-- recovery uses stable identity/generation;
-- unsupported recovery produces degraded/stop decision;
-- reconnect actions are bounded and visible.
+- healthy other Seat continues whenever shared global safety is intact;
+- stable identity, not enumeration order, controls reassociation;
+- unsafe ambiguity becomes degraded/recovery, not silent reroute.
 
 **Done when**
 
-The selected MVP matrix survives the declared transient failures or stops safely.
-
-**Suggested commit**
-
-`test: implement P5-HOT-01 MVP reconnect recovery`
+The declared reconnect/restart matrix completes with no cross-Seat reassignment and no manual process killing/reboot.
 
 ---
 
@@ -530,98 +318,61 @@ The selected MVP matrix survives the declared transient failures or stops safely
 
 **Goal**
 
-Extend the Management Seat control console into the truthful MVP workflow for planning, starting, monitoring, Stop / Return to Windows, Reconfigure, diagnostics, and recovery without moving runtime authority into the UI.
+Expose only the minimal user controls required to run and diagnose the MVP without turning the main UI into a low-level Windows configuration console.
 
 **Depends on**
 
-- P4-IPC-01
-- P4-CTRL-01/P4-CTRL-02
-- P5-LAUNCH-01
-- P5-MET-01
+- P5-MVP-02
+- P4-CTRL-01
+- P4-SEAT-01
 
-**UI states**
+**Normal surface**
 
-- profile/topology selection;
-- preflight backend/risk/unsupported report;
-- action progress;
-- per-Seat process/window/display/input/controller/audio state;
-- latency/drop/bleed warning summary;
-- degraded/recovery-required state;
-- `Stop / Return to Windows`, `Reconfigure`, and emergency reset;
-- startup/background mode summary and whether the controller may close while the host remains active;
-- link/export diagnostic bundle.
+- Seat 1 / Seat 2 state;
+- current Player placeholder/identity where available;
+- current selected game;
+- Play/Stop for the relevant Seat;
+- whole-machine `Return to Windows`;
+- obvious missing-requirement message with link to Seat settings;
+- degraded/recovery state.
 
-**Invariants**
-
-- UI reflects host snapshot, not optimistic local state;
-- the control surface opens on the configured Management Seat primary display and other Seat shells do not receive whole-machine Stop/Reconfigure authority by default;
-- start disabled on missing required capabilities;
-- risky operations require explicit confirmation;
-- stop/reset remains accessible during degraded state;
-- closing UI does not stop the host/session unless requested.
-
-**Automated tests**
-
-- view-model/state tests with fake host client;
-- Management Seat placement/permission state and non-management command denial;
-- Stop/Return/Reconfigure progress, completion, rollback failure, and UI reconnect/resnapshot;
-- disconnect/reconnect/resnapshot;
-- progress/error/recovery states;
-- accessibility/DPI basics.
+Backend/protocol/device-path detail remains under Diagnostics.
 
 **Done when**
 
-A user can run the MVP without command-line orchestration and without false success text.
-
-**Suggested commit**
-
-`feat: implement P5-UI-01 MVP control surface`
+A non-developer tester can run the Phase 5 scenarios and understand which Seat/game failed without using a developer CLI for normal operation.
 
 ---
 
-## P5-COMPAT-01 — MVP compatibility and hardware matrix
+## P5-COMPAT-01 — MVP compatibility and hardware evidence matrix
 
 **State:** BLOCKED
 
 **Goal**
 
-Publish explicit scope instead of universal claims.
+Publish exact evidence for the small MVP set without inventing an official support badge.
 
-**Create/modify**
+**Depends on**
 
-- `docs/compatibility/README.md`
-- machine-readable matrix schema/data;
-- validation CLI/test;
-- hardware matrix and evidence links.
+- P5-MVP-02
+- P5-HOT-01
 
-**Entry fields**
+**Record**
 
-- target/game/version/provider;
-- Windows build;
-- CPU/GPU/driver;
-- displays/DPI/mode;
-- input/controller/audio devices;
-- profile/backends/versions;
-- support level;
-- required manual steps;
-- known limits;
-- evidence date/run/bundle;
-- regression status.
+- game/build/provider;
+- Windows/HydraSeat version;
+- test hardware class/topology;
+- required compatibility paths;
+- launch/input/controller/audio/exit results;
+- measured latency/bleed/resource values;
+- limitations/protection state;
+- evidence date and report reference.
 
-**Invariants**
-
-- README claims derive from matrix data;
-- expired/untested entries are not `Supported`;
-- protected/anti-cheat target is clearly blocked/observation-only;
-- evidence is reproducible and privacy-reviewed.
+`Compatible in this evidence set` is not a universal guarantee and is not `HydraSeat Certified`.
 
 **Done when**
 
-The MVP has two target entries and one reference hardware topology entry.
-
-**Suggested commit**
-
-`docs: publish P5-COMPAT-01 MVP compatibility matrix`
+The MVP evidence matrix can be reproduced and clearly distinguishes tested, failed, untested, and protected/experimental scenarios.
 
 ---
 
@@ -629,22 +380,28 @@ The MVP has two target entries and one reference hardware topology entry.
 
 **State:** BLOCKED
 
-**Closure checklist**
+**Goal**
 
-- two different games/applications meet the declared MVP criteria;
-- input/controller/audio/display support is explicit and measured;
-- start/stop/reset UI uses host state;
-- reconnect/restart/recovery evidence passes;
-- performance/drop/bleed report retained;
-- compatibility matrix is machine-validated;
-- unsupported configurations block before activation;
-- normal Windows state restored after stop/reset;
-- Phase 6 receives stable activation/profile contracts.
+Run a dedicated Phase-close verification across the complete real two-Seat gaming MVP.
+
+**Depends on**
+
+- P5-COMPAT-01
+- P5-UI-01
+
+**Verify**
+
+- exactly two active Seats;
+- requirement-aware preflight;
+- real two-game concurrent run;
+- independent Seat stop/change/restart;
+- objective input evidence;
+- selected audio/controller evidence;
+- recovery/reconnect;
+- ordinary Windows final state;
+- resource/latency evidence;
+- README/roadmap/status truth.
 
 **Done when**
 
-Phase 5 is complete and Phase 6 becomes current.
-
-**Suggested commit**
-
-`docs: close Phase 5 two-Seat gaming MVP`
+Phase 5 has a recorded passing close review and Phase 6 can build the repeatable game/Player/setup product UX on a proven technical MVP.

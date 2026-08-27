@@ -14,6 +14,8 @@ This design deliberately distinguishes:
 
 Only the last state satisfies the Phase 3 exit gate.
 
+Current v1 product note: the production target is exactly two active gaming Seats. This Phase 3 design remains the technical input-isolation foundation for that two-person use case; it does not authorize a broader N-Seat/general-desktop product or any protection bypass. Later protected-title experiments remain explicit warned experiments only.
+
 ## Goals
 
 1. Route each physical keyboard, mouse and controller to its owning Seat.

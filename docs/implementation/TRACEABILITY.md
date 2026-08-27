@@ -1,122 +1,54 @@
-# Product Requirement Traceability
+# HydraSeat v1 Product Requirement Traceability
 
-This document maps the user's intended product behavior to the design decisions, implementation packets, and evidence gates that must prove it. It prevents a technically convenient subproject from replacing the actual multiseat goal.
+This document maps the canonical v1 product contract in `docs/PRODUCT_V1.md` to implementation packets and evidence. It is intentionally product-focused: historical research/testing details remain in their owning documents.
 
-## Requirement matrix
-
-| Requirement | Design decisions | Primary packets | Required evidence |
-| --- | --- | --- | --- |
-| One physical Windows PC feels like multiple local PCs | D-001, D-003, D-004, D-030 | P4-RUN-01, P5-LAUNCH-01, P7-SHELL-01 | Two active Seats, host-owned runtime, distinct shell/process/display/input state |
-| A household or group of friends can share one capable gaming PC as multiple local gaming stations | D-001, D-003, D-036 | P5-MVP-02, P7-SHELL-01, P8-INST-01, P10-UX-01 | A non-developer completes a two-Seat session on one machine, uses both Seats concurrently, and returns to ordinary Windows without reboot |
-| Seat, not monitor, is the unit | D-001, D-002 | P2-SEAT-01, P4-DIS-02, P7-SHELL-01 | Seat 1 owns LG+Samsung while Seat 2 owns BenQ |
-| One Seat may own multiple monitors | D-002, D-013, D-015 | P4-DIS-01/02/03, P4-WIN-02 | Mixed-DPI multi-monitor physical acceptance and hot-plug recovery |
-| Different games/apps run concurrently | D-014, D-028 | P3-E-03, P5-MVP-02, P6 provider/profile packets | Exact two-target compatibility entries and session evidence |
-| The same multiplayer title may run in separate Seats only when the exact title/provider/account/license/single-instance rules allow it | D-006, D-007, D-028, D-036 | P6 profile/provider packets, P5-COMPAT-01, P10-COMPAT-01 | Exact-version matrix entry proves two lawful independent instances without bypassing protection or launcher policy |
-| Keyboard/mouse do not bleed into the other Seat | D-005, D-006, D-008, D-011 | P3-API/RAW packets, P3-D-02, P3-E-03 | Zero measured cross-Seat key/button/movement events |
-| Both games may believe they are active | D-005, D-006 | P3-API-03, controlled probes, P3-E profiles | Per-process focus/capture API results and game profile evidence |
-| Independent visible cursors per Seat | D-015 | P3-API-03, P7-CURSOR-01 | Two cursor overlays within disjoint Seat display groups and latency report |
-| Controllers are assigned per Seat/game | D-017 | P3-CTRL-01/02, P5-CTRL-01 | API-specific state/vibration and zero cross-routing |
-| Audio output/input is assigned per Seat | D-018 | P5-AUD-01/02 | Two process audio streams at declared endpoints; unsupported cases block |
-| Seat owns processes/windows, not just coordinates | D-014, D-019 | P4-PROC-01, P4-WIN-01/02, P4-POL-01 | Process-tree/window attribution and unrelated-window noninterference |
-| Apps stay on assigned display group | D-002, D-014, D-015, D-016 | P4-DIS-02/03, P4-WIN-02 | Fullscreen/borderless/DPI/hot-plug placement and restore evidence |
-| Environment has launcher/taskbar/wallpaper feel | D-001, D-004, D-023 | P7-SHELL/LAUNCH/TASK/DESK packets | Two independent Seat shells across multi-monitor layouts |
-| Core works without VM/RDP/streaming | D-003, D-030 | P3–P5 core path | Supported direct local-display compatibility entries |
-| UI can close while runtime continues | D-004, D-019, D-032 | P4-RUN-01, P4-IPC-01, P4-CTRL-01, P7-REC-01 | UI kill/restart while host/session state remains correct |
-| Whole-machine controls stay on the Management Seat | D-031 | P4-CTRL-01, P7-SHELL-01 | Console opens on Seat 1 primary by default, falls back visibly, and other Seats cannot stop/reconfigure by default |
-| User can return the split PC to ordinary Windows with one clear operation | D-033 | P4-CTRL-02, P8-RESET-01 | Stop/Return transaction verifies rollback; all monitors/input return to normal without reboot |
-| User can reconfigure monitors/input with a few guided steps | D-034 | P4-CTRL-02, Phase 6 profile UI | Active session safely stops, editor opens on Management Seat, validation/save/start uses a new plan |
-| A non-developer can install, configure, start, stop, diagnose, recover, and uninstall the product | D-020, D-032, D-033, D-034, D-036 | P4-CTRL-01/02, P8-INST-01, P8-RESET-01, P10-UX-01 | Clean-machine tester completes the supported lifecycle without developer assistance or mandatory reboot recovery |
-| User can choose manual, hidden background, or automatic validated startup | D-032 | P8-BOOT-01 | Reboot/logon matrix proves Manual, BackgroundIdle, and AutoActivateValidatedSession behavior |
-| UI/UX and end-user README are available in English, Korean, and Simplified Chinese | D-035 | P7-I18N-01, P7-A11Y-01, P10-UX-01 | `en-US`/`ko-KR`/`zh-CN` catalog parity, three-language critical-flow acceptance, and README language/version/status parity |
-| Startup is silent and ordinary use has no repeated UAC | D-004, D-020 | P8-PRIV-01, P8-BOOT-01 | Standard-user logon/reboot acceptance |
-| Dangerous operations recover automatically | D-009, D-020 | P8-WATCH-01, P8-RESET-01, P8-JOURNAL-01 | Host/helper kill, timeout, reset, safe mode, no orphan state |
-| Device hiding occurs only after replacement path works | D-008, D-009 | P3-REC-01, P3-D-01/02 | Guarded physical cloak test with spare input/expiry/watchdog |
-| No anti-cheat/DRM/protected-process bypass | D-007 | Planner/profile/security packets | Protected profiles block or remain observation-only |
-| Existing related products guide architecture lawfully | D-024, D-025, D-030 | Research/clean-room docs, P10-LIC-01 | Provenance, license, third-party notices, no unclear copied code |
-| Profiles and providers make sessions repeatable | D-005, D-012 | P6-SCHEMA/MIG/CATALOG/PROV/PLAN packets | Deterministic immutable plan hash and provider regression fixtures |
-| Compatibility claims are exact, not universal | D-028 | P5-COMPAT-01, P10-SCOPE/COMPAT packets | Versioned machine-readable matrix and current evidence |
-| Optional adapters/extensions cannot bypass policy | D-024 | P8-TRUST-01, Phase 9 SDK/package/capability/RPC packets | Package trust, permission denial, out-of-process failure isolation |
-| Installer/update/uninstall are reversible | D-020, D-024 | P8-INST-01, P8-UPD-01 | Clean-machine install/update rollback/uninstall acceptance |
-| Performance is good enough for gaming | D-021, D-029 | P3-MET-01, P5-MET-01, P10-PERF-01 | p50/p95/p99 latency and resource budgets on reference topology |
-| Product survives long use and repeated failures | D-020, D-029 | P8-SOAK-01, P10-REL-01 | Soak/fault/reboot/resource-leak campaign |
-| Release is legally and technically distributable | D-025 | P10-LIC-01, P10-PKG-01, P10-RC/GA packets | License, notices, SBOM, signatures, provenance, verified artifacts |
-| HydraSeat can become a broadly reusable open-source/community project after the legal gate is resolved | D-025, D-037 | P9 ecosystem packets, P10-LIC-01, P10-PKG-01, P10-UX-01 | Tracked license/contribution terms, provenance-safe packages, contribution docs, and community-facing compatibility/profile workflows |
-
-## Product-defining acceptance scenario
-
-The minimum scenario that proves the original user intent is a household/friend shared-PC session:
-
-```text
-One Windows PC
-
-Seat 1
-- LG display (primary)
-- Samsung display (secondary)
-- keyboard A
-- mouse A
-- optional controller A
-- headset A
-- target/game A
-- Seat 1 shell/cursor/process group
-- Management Seat = Seat 1
-- HydraSeat control console opens on LG primary when requested
-
-Seat 2
-- BenQ display (primary)
-- keyboard B
-- mouse B
-- optional controller B
-- speakers B
-- target/game B, different from target A
-- Seat 2 shell/cursor/process group
-```
-
-Required observable behavior:
-
-1. Both targets run at the same time.
-2. Target A remains on LG/Samsung; target B remains on BenQ.
-3. Keyboard/mouse/controller A produce no input state in target B.
-4. Keyboard/mouse/controller B produce no input state in target A.
-5. Each target sees the focus/cursor behavior declared by its profile.
-6. Audio routes to the declared endpoint or the session refuses to start.
-7. Disconnect/reconnect and one target restart behave according to profile.
-8. The HydraSeat control console opens on the Management Seat primary display, may close/reopen without losing runtime authority, and other Seats do not receive whole-machine Stop/Reconfigure controls by default.
-9. `Stop / Return to Windows` restores ordinary one-PC Windows input/display/audio behavior without reboot.
-10. `Reconfigure` safely returns to ordinary Windows, edits assignments on the Management Seat, validates/saves a new plan, and may start it again.
-11. Manual, BackgroundIdle, and AutoActivateValidatedSession startup modes behave exactly as selected and unsafe auto-activation falls back to idle.
-12. A report records versions, topology, backends, latency, drops, bleed, and rollback.
-13. A non-developer can identify the two Seat layouts, start the session, see why an unsupported profile is blocked, and return the PC to ordinary Windows without developer-only recovery steps.
-
-An additional same-title scenario may be added for a specific multiplayer game only after its exact launcher/provider, account/license terms, single-instance behavior, protection model, and compatibility profile are verified. It is not required for the baseline two-different-game MVP and never authorizes a DRM, anti-cheat, launcher, account, or protected-process bypass.
-
-This scenario is reached by P3-E-03, P4 physical display/window acceptance, P5-MVP-02, P5-HOT-01, P7 shell packets, and Phase 8 recovery/productization. No earlier synthetic test satisfies the complete requirement.
-
-## Negative traceability
-
-The following results are useful but do not prove the product:
-
-| Result | What it proves | What it does not prove |
+| Product requirement | Owning decisions / packets | Required evidence before v1 claim |
 | --- | --- | --- |
-| Two windows launch | Process/window creation | Device isolation, display ownership, focus, recovery |
-| Raw Input sees two keyboards | Physical source observation | Other games cannot see the input |
-| `PostMessage` reaches a target | Diagnostic message routing | Raw Input/polled state virtualization |
-| Two adapter contexts differ | Process-local state model | Unmodified game calls the adapter |
-| Device is hidden | Visibility change | Replacement input delivery or complete suppression |
-| XInput controller detected | Device availability | Per-process slot routing/vibration isolation |
-| Window moved to a monitor | One placement action | Process ownership, persistence, hot-plug recovery |
-| Audio endpoint assigned in profile | Desired configuration | Actual per-process audio routing |
-| Synthetic CI passes | Deterministic controlled logic | Physical hardware/game compatibility |
-| One game works once | Initial experimental evidence | Version-independent support or two-game zero bleed |
+| Use spare performance of one capable Windows gaming PC for two local players instead of requiring a second complete desktop | PRODUCT_V1, D-039, P10-PERF-01 | Two concurrent real-game workload/resource measurements on reference hardware; no universal performance promise |
+| Exactly two active Seats in v1 | D-039, P4-SEAT-01, P5-LAUNCH-01, P10-SCOPE-01 | Third active Seat rejected; all v1 UI/installer/test matrix capped at two |
+| Seat represents physical station hardware, not a person/game/account | D-001, D-040, P6-SCHEMA-01 | Separate schema/model tests; Player/Game runtime bindings do not persist into Seat identity |
+| Player is independent from Seat | D-040, P6-SCHEMA-01, P6-UI-01, P6-CLOSE-01 | Same Player moves Seat 1 <-> Seat 2 while preferences/account references follow the Player |
+| Game is discovered/selected independently from Seat/Player | D-040, D-049, P6-CATALOG-01, provider packets | Local read-only discovery plus manual EXE fallback; stable provider/install identity |
+| First-run Seat setup can be skipped and individual device fields may be `Set later` | D-040, D-048, P7-CLOSE-01, P8-INST-01 | Installer/first-run acceptance with skipped/partial setup; later game preflight identifies only required missing devices |
+| One Seat may have one or more displays | D-002, P4-DIS-01, P4-DIS-02 | Stable physical identity, multi-display transform tests, real physical Seat grouping |
+| Input is isolated by physical Seat with objective evidence | P3-HW-01, P3-D-02, P3-E-02, P3-E-03, P5-MET-01 | Real two-input physical acceptance and receiver-aware zero-cross evidence for declared game scenarios |
+| Background runtime is authoritative; UI may close/reopen | D-019/D-031, P4-RUN-01, P4-IPC-01, P4-CTRL-01 | Real process/IPC reconnect tests; closing UI leaves runtime unchanged |
+| One Seat can stop/change games while the other continues | D-042, P4-SEAT-01, P5-MVP-02, P7-LAUNCH-01 | `Seat 1 = Playing, Seat 2 = Idle` healthy state; stop/restart one controlled and real Seat while other process/game remains alive |
+| Idle Seat remains under a minimal HydraSeat launcher while another Seat is active | D-041/D-042, P7-SHELL-01, P7-LAUNCH-01 | Two physical Seat UI flows; idle Seat selects Player/game without exposing unrestricted general desktop behavior |
+| v1 is game-only, not a general independent Windows desktop | D-041, P7-TASK-01/P7-DESK-01/P7-CLIP-01/P7-EXT-01 deferred | Release scope/docs/UI contain no dependency on general taskbar/wallpaper/clipboard/arbitrary-app features |
+| Game-first normal UX | D-041, P6-UI-01, P7-CLOSE-01, P10-UX-01 | Non-developer flow: Game -> Seat 1/Seat 2/Both -> Player(s) -> warnings -> Play |
+| Click/tap first; drag-and-drop optional | PRODUCT_V1, D-041, P7-CLOSE-01 | UI acceptance without requiring drag-and-drop; optional drag path shares the same model |
+| Automatic local game discovery with manual EXE fallback | D-049, P6-CATALOG-01, P6-PROV-02/P6-PROV-03*, P6-CLOSE-01 | Provider fixture/live discovery and custom executable path |
+| Use local/provider icons where possible instead of redistributing a large artwork library | D-049, P6-CATALOG-01, P10-LIC-01 | Icon source/provenance review; missing art does not block catalog |
+| Player/provider account associations without turning HydraSeat into a credential vault | D-040, P6-PROV-01/P6-PROV-02, P6-UI-01 | Provider-owned authentication; no password/token fields in schema/logs/bundles |
+| Same game on both Seats uses a reusable TwoPlayerSetup | D-043, P6-PROFILE-01, P6-PLAN-01 | Setup validates against exact local game/provider/version before launch |
+| HydraSeat attempts safe automatic TwoPlayerSetup generation | D-043, P6-PROFILE-01 | Read-only candidate generation, visible mutation preview, deterministic validation |
+| Guided manual TwoPlayerSetup remains available | D-043, P6-PROFILE-01, P6-UI-01 | Unknown lawful fixture/title can be configured through typed UI without arbitrary script execution |
+| At least one lawful same-title/two-instance real demonstration | P6-CLOSE-01, P10-COMPAT-01 | Exact game/provider/version/rules recorded; two independent instances and Seat lifecycle pass; no bypass |
+| No anti-cheat/DRM/account/launcher/single-instance bypass | D-007, D-043, D-045, P9-SEC-01, P10-SEC-01 | Static/security review and negative tests; protected experiments never add bypass mechanisms |
+| Protected games may be explicitly warned experiments | D-045, P6-PREFLIGHT-01, P7-NOTIFY-01, P10-COMPAT-01 | Strong warning + explicit acknowledgement; results remain Protected/Experimental |
+| Successful protected-game run never proves anti-cheat safety | D-045, P9-SDK-01/P9-CAP-01, P10-COMPAT-01 | Schema/UI cannot convert technical success into anti-cheat safety/certification |
+| Compatibility is evidence, not an official certification badge | D-044, P5-COMPAT-01, P9-CAP-01, P10-COMPAT-01 | Success/failure/sample/sub-result display; no required `Certified` field/badge |
+| Community compatibility percentages are segmented by material environment | D-044, P9-CAP-01, P9-REG-01 | Deterministic cohort tests by game/HydraSeat/provider/Windows/path versions |
+| `Untested` is distinct from failure | D-044, P9-CAP-01, P9-CLOSE-01 | UI/schema fixtures for no evidence vs failed evidence |
+| Compatibility tests run locally first | D-046, P5-MET-01, P9-DIAG-01 | Local result available with network disabled before any sharing action |
+| Community sharing is explicit opt-in with exact redacted JSON preview | D-046, P9-RPC-01, P9-DIAG-01, P10-PRIV-01 | Decline/submit/offline/retry tests; preview matches transmitted payload |
+| Shared evidence excludes credentials/raw text/Player names/personal paths by default | D-046, P8-DIAG-01, P9-SDK-01, P10-PRIV-01 | Privacy/redaction fixture corpus and manual preview |
+| Core operation works offline | D-047, P8-DATA-01, P8-SOAK-01, P9-REG-01 | Network-disabled Seat/Player/catalog-cache/setup/launch/runtime/recovery acceptance |
+| Compatibility/setup catalog refresh is separate from program update | D-047, P8-DATA-01, P8-UPD-01 | Data refresh changes catalog only; program binary version unchanged |
+| Program/runtime/driver updates require user approval | D-047/D-048, P8-UPD-01, P10-UX-01 | Update available -> no install until explicit approval; rollback tests |
+| Normal operation is least privilege | D-048, P8-PRIV-01, P8-INST-01 | Main UI/ordinary host remain unelevated; broker rejects arbitrary admin execution |
+| Real Windows installer/repair/uninstaller is mandatory | D-048, P8-INST-01, P10-RC-01 | Clean-machine install/repair/uninstall and ordinary Windows postconditions |
+| Watchdog/crash/emergency recovery is independent and bounded | P8-WATCH-01, P8-JOURNAL-01, P8-RESET-01, P4-REC-01 | Existing validated watchdog/journal/reset evidence plus full production runtime fault matrix |
+| Return to Windows is verified rollback, not UI close | D-019/D-031/D-042, P4-CTRL-02, P5-MVP-02, P8-SOAK-01 | Exact owned resources restored/removed, no orphans, ordinary Windows postconditions |
+| Physical displays are required path; virtual display driver is not a v1 dependency | D-009/D-021, P4-DIS-01..03; P4-VID-01/02/P4-IDD-01 deferred | Complete physical display acceptance succeeds with no virtual-display component installed |
+| Two different real games run concurrently | P3-E-02/P3-E-03, P5-MVP-02, P10-COMPAT-01 | Exact game/provider/version evidence, receiver-aware input, window/display/controller/audio as declared |
+| One-developer scope is a design constraint | D-050, all deferred packets | v1 critical path excludes N-Seat, full shell, custom IDD, broad binary SDK unless explicitly reactivated |
+| English/Korean/Simplified Chinese UI readiness | D-035, P7-I18N-01, P7-A11Y-01, P10-UX-01 | Catalog parity, localized critical journeys, DPI/accessibility acceptance |
+| Project may be described as open source only after license/contribution gate | D-036, P10-LIC-01, P10-GA-01 | LICENSE/contribution/notices/provenance review complete before GA wording changes |
 
-## Roadmap change rule
+## Interpretation rule
 
-When a product requirement changes:
+A row is not satisfied because a design document exists. The owning packet's declared evidence must actually be recorded in `STATUS.md`/compatibility data/CI/manual acceptance as appropriate.
 
-1. update this matrix;
-2. update or add a decision in [DECISIONS.md](DECISIONS.md);
-3. update affected phase packet dependencies/invariants/acceptance;
-4. update [STATUS.md](STATUS.md) if the critical path changes;
-5. add/withdraw compatibility evidence where applicable;
-6. run the roadmap validator.
-
-A code change must not silently redefine a requirement.
+Historical controlled Phase 3 evidence proves its exact test boundary only. It does not automatically satisfy later physical/game/product requirements in this table.

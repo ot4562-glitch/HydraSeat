@@ -1,390 +1,208 @@
-# Phase 7 — Seat Shell and Local-PC Experience
+# Phase 7 — Minimal Seat Launcher and Game-First UX
 
 ## Phase objective
 
-Make each Seat feel like a coherent local computer rather than a collection of routed game windows. The Seat shell provides a launcher, owned-window list, wallpaper/desktop zones, software cursor surface, Seat status, notifications, and safe controls while leaving the real Windows shell recoverable.
+Deliver the actual v1 user experience after the runtime/game/setup foundations work.
 
-The first supported shell is an overlay/application per Seat, not a replacement Windows shell and not a second Windows desktop/session.
+Earlier roadmap versions envisioned a broad per-Seat desktop shell with taskbar, wallpaper, clipboard, arbitrary app surfaces, and extension points. D-041 deliberately narrows that scope. HydraSeat v1 is game-only, so the required per-Seat UI is a **minimal Seat Launcher** that appears when a Seat is idle, starting, warning, or recovering and stays out of the way while the game is playing.
 
 ## Phase exit gate
 
-Phase 7 is complete when:
+Phase 7 closes only when:
 
-1. one shell instance is owned by one Seat and stays inside that Seat display group;
-2. the Management Seat shell exposes an always-available HydraSeat control entry that opens the management console on its primary display, while non-management Seat shells remain read-mostly for whole-machine controls;
-3. each shell lists/activates only owned applications/windows;
-4. profile launcher actions call the production host, not direct process creation;
-5. wallpaper/zones/task surface span the Seat's multi-monitor group correctly;
-6. Seat software cursors stay within Seat bounds and do not require multiple global Windows cursors;
-7. notifications and optional clipboard policy do not leak by default;
-8. shell crash/restart does not stop or corrupt the active Seat runtime;
-9. DPI/accessibility pass and the complete critical control workflow is usable in `en-US`, `ko-KR`, and `zh-CN`;
-10. UI/tray/shell all show the same host state;
-11. Explorer and ordinary single-user Windows behavior are restored on stop/reset.
+1. the main UI is game-first and a normal Play flow does not expose low-level backend jargon;
+2. click/tap is the primary interaction, with drag-and-drop only an optional shortcut;
+3. first-run two-Seat setup can be skipped and individual device categories can be `Set later`;
+4. an idle Seat can choose Player/game and start independently while the other Seat keeps playing;
+5. the minimal Seat Launcher disappears or remains non-intrusive while the game is active;
+6. protected-game experiments show explicit risk acknowledgement;
+7. errors/recovery actions are understandable without developer CLI use;
+8. English/Korean/Simplified Chinese localization framework and layouts pass declared checks;
+9. DPI/accessibility/input modality checks pass;
+10. deferred full-desktop features are not accidentally promoted back into v1;
+11. Phase-close verification passes.
 
-## Dependency graph
+---
+
+## P7-SHELL-01 — Minimal per-Seat launcher process and model
+
+**State:** BLOCKED
+
+**Goal**
+
+Create `hydra_seat_ui.exe` as a small per-Seat client for idle/start/warning/error/end-playing states, not a Windows shell replacement.
+
+**Depends on**
+
+- P6-CLOSE-01
+- P4-SEAT-01
+
+**Surface**
+
+- authoritative Seat ID/runtime state;
+- current/selected Player;
+- recent/available games;
+- start progress;
+- missing requirement/warning;
+- `End Playing`;
+- bounded recovery action/link;
+- reconnect/resnapshot to host.
+
+**Invariants**
+
+- Seat UI has no whole-machine runtime authority by default;
+- one Seat UI cannot stop another Seat's game;
+- it never becomes a general arbitrary application launcher;
+- closing/crashing it does not corrupt the active game/runtime;
+- it cannot escape its assigned display group through stale placement state.
+
+**Done when**
+
+Two controlled Seat UI processes can independently display authoritative idle/playing/recovery state and restart without affecting games or each other.
+
+---
+
+## P7-LAUNCH-01 — Idle Seat game/Player selector
+
+**State:** BLOCKED
+
+**Goal**
+
+Let an idle Seat choose another Player/game and start again without bringing down the other active Seat.
+
+**Depends on**
+
+- P7-SHELL-01
+- P6-UI-01
+
+**UX**
 
 ```text
-P6-CLOSE-01 + P4-RUN/IPC/WIN/DIS
-          |
-          +-> P7-SHELL-01 -> P7-LAUNCH-01 -> P7-TASK-01
-          +-> P7-DESK-01
-          +-> P7-CURSOR-01
-          +-> P7-HOTKEY-01
+Seat 2
+Luigi
 
-P7-SHELL-01 -> P7-NOTIFY-01 -> optional P7-CLIP-01
-all UI paths -> P7-I18N-01 -> P7-A11Y-01 -> P7-REC-01 -> P7-CLOSE-01
+Minecraft
+Terraria
+Stardew Valley
+More Games...
+
+Change Player
+End Playing
 ```
 
+Selection may use click/tap/controller navigation. It invokes the same Game/Player/preflight/plan contracts as the Management UI.
+
+**Invariants**
+
+- no separate hidden launch logic in Seat UI;
+- same-game selection invokes the same TwoPlayerSetup resolver;
+- missing devices link to Seat settings/preflight, not silent default hardware;
+- the other Seat's active session remains unchanged.
+
+**Done when**
+
+An idle Seat can switch Player/game and return to Playing in an end-to-end controlled test while the other Seat process remains alive and stable.
+
 ---
 
-## P7-SHELL-01 — Per-Seat shell process and model
+## P7-TASK-01 — General Seat taskbar/window surface
+
+**State:** DEFERRED
+
+**Goal**
+
+Historical full-desktop task/window surface.
+
+**Depends on**
+
+- P7-SHELL-01
+
+**v1 decision**
+
+A general per-Seat taskbar/window switcher is not required for a game-only two-Seat product and is deferred beyond v1.
+
+**Done when**
+
+Deferred. Reactivate only if post-v1 general-application use becomes an explicit product goal.
+
+---
+
+## P7-DESK-01 — Seat wallpaper and desktop zones
+
+**State:** DEFERRED
+
+**Goal**
+
+Historical per-Seat desktop/wallpaper surface.
+
+**Depends on**
+
+- P7-SHELL-01
+
+**v1 decision**
+
+Wallpaper/desktop zones add implementation/UX complexity without materially improving the v1 gaming journey.
+
+**Done when**
+
+Deferred beyond v1.
+
+---
+
+## P7-CURSOR-01 — Seat Launcher cursor/input presentation where required
 
 **State:** BLOCKED
 
 **Goal**
 
-Create one lightweight shell process per active Seat with a read-mostly host client and no runtime authority.
+Ensure the minimal Seat Launcher can be operated independently on its Seat when Windows global cursor semantics would otherwise make the idle-Seat UX unusable.
 
 **Depends on**
 
-- P4-IPC-01
+- P7-SHELL-01
 - P4-DIS-02
-- P6 profile/session contracts
+- P3-API-03
 
-**Create/modify**
+**Scope**
 
-- `include/hydra/shell_protocol.hpp` only if host protocol extensions are required;
-- `include/hydra/seat_shell_model.hpp`
-- `src/seat_shell_model.cpp`
-- `src/shell_main.cpp`
-- `hydra_shell.exe`;
-- fake host-client tests.
-
-**Shell identity**
-
-- Seat ID and runtime session ID;
-- display group snapshot/generation;
-- owned process/window snapshot;
-- profile/app launcher entries;
-- input/cursor/status/recovery summary;
-- whether this Seat is the Management Seat and therefore may expose the whole-machine HydraSeat control entry;
-- no hardware/backend mutation privileges.
-
-**Implementation skeleton**
-
-1. host launches shell with Seat/session identity and a scoped read/control token;
-2. shell verifies the host handshake and fetches a full snapshot;
-3. shell subscribes to bounded runtime events and resnapshots on gaps;
-4. shell creates top-level surfaces only inside its Seat display group;
-5. shell sends typed launch/activate/stop requests to host;
-6. if the shell's Seat matches `managementSeatId`, expose a persistent HydraSeat control entry that reopens/activates the main management console on the Management Seat primary display; non-management shells omit or disable whole-machine Stop/Reconfigure controls;
-7. shell shutdown is independent of active target processes;
-8. host can restart/relaunch the shell.
+Implement only the cursor/input presentation actually required by the Seat Launcher. A general independent desktop cursor system is not a goal.
 
 **Invariants**
 
-- shell cannot mutate another Seat;
-- only the configured Management Seat shell exposes whole-machine control by default, and even that control is a typed request to the host rather than direct mutation;
-- shell never launches target processes directly;
-- host state is authoritative;
-- no global shell replacement/registry change;
-- shell crash leaves runtime active and recoverable;
-- unassigned display does not receive a shell.
-
-**Automated tests**
-
-- two shell processes with disjoint Seat snapshots;
-- only the Management Seat shell exposes the whole-machine HydraSeat control entry and it opens/activates the console on the Management Seat primary display;
-- spoofed Seat/session/token;
-- event gap/resnapshot;
-- host disconnect/reconnect;
-- shell crash/relaunch;
-- missing display/degraded state.
+- rendering/input ownership stays inside the Seat display group;
+- active game input isolation is not weakened;
+- system cursor state is restored/left unchanged according to the selected validated path;
+- controller-only navigation may avoid extra cursor complexity entirely.
 
 **Done when**
 
-Two shell processes render independent Seat status and controls without owning runtime state.
-
-**Suggested commit**
-
-`feat: implement P7-SHELL-01 per-Seat shell process`
+The Seat Launcher is independently usable with the declared mouse/controller input methods on both Seats without cross-Seat control bleed.
 
 ---
 
-## P7-LAUNCH-01 — Seat launcher and pinned applications
+## P7-HOTKEY-01 — Seat-scoped launcher and recovery hotkeys
 
 **State:** BLOCKED
 
 **Goal**
 
-Show profile-approved applications and session actions within each Seat shell.
+Provide only the small set of Seat-local shortcuts necessary for the v1 game flow and emergency recovery.
 
 **Depends on**
 
 - P7-SHELL-01
-- P6 application catalog/profile manager
+- P8-RESET-01
 
-**Create/modify**
+**Possible actions**
 
-- `include/hydra/seat_launcher_model.hpp`
-- `src/seat_launcher_model.cpp`
-- shell launcher UI;
-- tests.
-
-**Features**
-
-- pinned target/session profiles;
-- recent applications owned by the Seat;
-- support/risk badge from compatibility matrix;
-- missing provider/backend/device warning;
-- launch progress and cancel;
-- no arbitrary executable browsing in normal mode;
-- expert/custom profile link through the main UI.
-
-**Invariants**
-
-- launch request references immutable profile/plan IDs;
-- unsupported target cannot be launched by UI-only override;
-- another Seat's recent/pinned entries remain hidden unless shared policy says otherwise;
-- provider credentials never enter shell state;
-- icons/metadata are treated as untrusted bounded input.
-
-**Automated tests**
-
-- filtering by Seat/profile;
-- stale/missing pinned entry;
-- launch progress/error/cancel;
-- compatibility status update;
-- malicious title/icon metadata.
+- open/show Seat Launcher while idle where applicable;
+- `End Playing` confirmation;
+- surface recovery/help;
+- never grant normal non-management Seat a whole-machine stop/reconfigure shortcut accidentally.
 
 **Done when**
 
-Each Seat can launch its validated profiles from its own display group.
-
-**Suggested commit**
-
-`feat: implement P7-LAUNCH-01 Seat launcher`
-
----
-
-## P7-TASK-01 — Seat-owned window/task surface
-
-**State:** BLOCKED
-
-**Goal**
-
-Provide a taskbar-like list and activation/minimize/close controls for Seat-owned windows only.
-
-**Depends on**
-
-- P7-SHELL-01
-- P4-WIN-01/P4-WIN-02
-
-**Create/modify**
-
-- `include/hydra/seat_task_model.hpp`
-- `src/seat_task_model.cpp`
-- shell task surface;
-- host window command validation;
-- tests.
-
-**Behavior**
-
-- group by application/process profile;
-- display owned primary windows and profile-approved dialogs;
-- activate/minimize/restore/close through host after ownership revalidation;
-- show unresponsive/exited/degraded state;
-- optional per-display task surface within one Seat;
-- never enumerate unrelated windows directly in UI.
-
-**Invariants**
-
-- command includes Seat/session/window/process identity generation;
-- stale/reused HWND rejected;
-- shell cannot close/move another Seat or system window;
-- activation request respects Phase 3 virtual focus policy;
-- no infinite focus war.
-
-**Automated tests**
-
-- two Seat window sets;
-- stale/destroyed/recreated window;
-- launcher/game/dialog classification;
-- host rejection;
-- shell restart/resnapshot.
-
-**Done when**
-
-Each shell controls only its owned windows and accurately reflects lifecycle.
-
-**Suggested commit**
-
-`feat: implement P7-TASK-01 Seat task surface`
-
----
-
-## P7-DESK-01 — Seat wallpaper, desktop zones, and display-aware surfaces
-
-**State:** BLOCKED
-
-**Goal**
-
-Give each multi-monitor Seat a coherent background and layout surface without changing the global Windows desktop wallpaper or shell.
-
-**Depends on**
-
-- P7-SHELL-01
-- P4-DIS-02/P4-DIS-03
-
-**Create/modify**
-
-- `include/hydra/seat_desktop_layout.hpp`
-- `src/seat_desktop_layout.cpp`
-- shell background/zone surfaces;
-- profile fields and tests.
-
-**Features**
-
-- per-Seat wallpaper/color/slideshow policy;
-- one logical canvas across Seat displays;
-- per-display and cross-display launcher/widget zones;
-- primary-display task/launcher placement;
-- safe area/reserved zone model;
-- topology/DPI hot-plug relayout;
-- no global desktop icon migration in the initial scope.
-
-**Invariants**
-
-- shell surfaces remain behind Seat-owned target windows unless explicitly overlayed;
-- no surface crosses into another Seat display group;
-- global Windows wallpaper/settings remain unchanged;
-- missing display degrades/relayouts deterministically;
-- image inputs are bounded/decoded safely.
-
-**Automated/manual tests**
-
-- dual-monitor Seat + single-monitor Seat;
-- mixed DPI/orientation;
-- secondary disconnect/reconnect;
-- wallpaper decode failure;
-- global wallpaper unchanged.
-
-**Done when**
-
-Each Seat visibly has its own multi-monitor environment without replacing Explorer.
-
-**Suggested commit**
-
-`feat: implement P7-DESK-01 Seat desktop surfaces`
-
----
-
-## P7-CURSOR-01 — Software cursor rendering per Seat
-
-**State:** BLOCKED
-
-**Goal**
-
-Render one independent software cursor per Seat on shell/overlay surfaces using the process-local virtual cursor state.
-
-**Depends on**
-
-- P3-API-03/P3 virtual cursor contract
-- P4-DIS-02
-- P7-SHELL-01
-
-**Create/modify**
-
-- `include/hydra/seat_cursor_model.hpp`
-- `src/seat_cursor_model.cpp`
-- cursor overlay renderer;
-- profile/theme/visibility fields;
-- tests/benchmarks.
-
-**Implementation skeleton**
-
-1. consume virtual cursor state from host/adapter metrics;
-2. convert Seat-local coordinates to physical output surfaces;
-3. render low-latency transparent cursor overlay;
-4. confine to Seat display union and handle display gaps;
-5. switch cursor shape/visibility from controlled adapter/profile where supported;
-6. hide/leave global cursor only under a tested profile policy;
-7. teardown overlays on stop/crash.
-
-**Invariants**
-
-- one Seat cursor never appears on another Seat display;
-- overlay cannot steal focus/input;
-- global cursor state is unchanged unless an explicit proven backend controls it;
-- rendering queue bounded and latest-state preferred;
-- latency measured.
-
-**Automated/manual tests**
-
-- two moving cursors simultaneously;
-- mixed DPI and monitor gap;
-- target window fullscreen/borderless;
-- overlay crash/restart;
-- latency/CPU budget;
-- no click interception.
-
-**Done when**
-
-Two Seat cursors are independently visible within their display groups at acceptable latency.
-
-**Suggested commit**
-
-`feat: implement P7-CURSOR-01 Seat software cursors`
-
----
-
-## P7-HOTKEY-01 — Seat-scoped shell and recovery hotkeys
-
-**State:** BLOCKED
-
-**Goal**
-
-Provide deterministic Seat actions without relying on the single global Windows foreground window.
-
-**Depends on**
-
-- Phase 3 Seat input routing
-- P7-SHELL-01
-- P8 reset/watchdog contracts for emergency actions
-
-**Actions**
-
-- open/close Seat launcher;
-- cycle Seat-owned windows;
-- show Seat status overlay;
-- request target stop/restart;
-- pause/resume Seat input where safe;
-- emergency reset chord using an independent policy/device.
-
-**Invariants**
-
-- hotkey evaluated from physical Seat-owned device state;
-- collisions with game input are profile-configurable;
-- emergency chord cannot be disabled by target process;
-- action request revalidates Seat/runtime ownership;
-- no global low-level hook unless a later explicit backend is approved.
-
-**Tests**
-
-- two Seats trigger different shell actions simultaneously;
-- held/repeat/modifier semantics;
-- target consumes same keys;
-- shared/ambiguous device fails closed;
-- emergency reset works when shell/UI target is hung.
-
-**Done when**
-
-Seat controls are usable without changing another Seat's focus or input.
-
-**Suggested commit**
-
-`feat: implement P7-HOTKEY-01 Seat hotkeys`
+Hotkey ownership is explicit, cannot cross Seats, and emergency reset remains independently available.
 
 ---
 
@@ -394,87 +212,52 @@ Seat controls are usable without changing another Seat's focus or input.
 
 **Goal**
 
-Display HydraSeat/session/application notifications only on the owning Seat surfaces where ownership is known.
+Display minimal actionable per-Seat status without a general notification center.
 
 **Depends on**
 
 - P7-SHELL-01
-- P4 process/window ownership
 
-**Scope**
+**Examples**
 
-Initial notifications are HydraSeat-generated:
-
-- launch/start/stop/progress;
-- device/display/audio disconnect;
-- degraded/recovery required;
-- compatibility warning;
-- target exit/crash;
-- update availability later.
-
-Third-party Windows toast interception is not in initial scope.
+- game failed to start;
+- required controller/audio/input missing;
+- device disconnected;
+- setup requires review;
+- protected/experimental warning;
+- Seat recovery required.
 
 **Invariants**
 
-- notification includes Seat/session/correlation ID;
-- no notification leaks another Seat's private title/path by default;
-- bounded queue/expiry;
-- critical recovery notification cannot be silently suppressed;
-- shell restart can resnapshot active critical notifications.
-
-**Automated tests**
-
-- Seat filtering;
-- duplicate/coalesce/expiry;
-- shell disconnect/reconnect;
-- critical versus informational policy;
-- redaction.
+- notifications derive from host/preflight state;
+- no credentials/private paths/raw typed text;
+- unrelated Windows notification interception is out of scope.
 
 **Done when**
 
-Runtime events appear only in the correct Seat shell and main control UI.
-
-**Suggested commit**
-
-`feat: implement P7-NOTIFY-01 Seat notifications`
+Declared runtime/preflight failures produce readable Seat-local UI and no stale success state.
 
 ---
 
 ## P7-CLIP-01 — Optional Seat clipboard policy
 
-**State:** BLOCKED / OPTIONAL
+**State:** DEFERRED
 
 **Goal**
 
-Provide explicit clipboard behavior instead of pretending the single Windows clipboard is automatically isolated.
+Historical per-Seat clipboard concept.
 
 **Depends on**
 
 - P7-SHELL-01
-- a controlled input/API shim capable of clipboard interposition, or a shell-only scoped workflow
 
-**Policy options**
+**v1 decision**
 
-- shared Windows clipboard (default, clearly disclosed);
-- shell-managed per-Seat text clipboard for HydraSeat-aware apps;
-- no clipboard hotkeys routed to target;
-- future controlled process shim for specific clipboard APIs.
-
-**Rules**
-
-- no claim of universal clipboard isolation without API coverage;
-- formats and size bounded;
-- sensitive data not logged;
-- cross-Seat transfer requires explicit action;
-- failure falls back only according to profile, not silently.
+Clipboard virtualization is outside the game-only product contract.
 
 **Done when**
 
-One limited policy is implemented/tested or the packet is formally deferred with truthful UI disclosure.
-
-**Suggested commit**
-
-`feat: implement P7-CLIP-01 Seat clipboard policy`
+Deferred beyond v1 unless a concrete supported game/setup later requires a narrowly scoped clipboard behavior.
 
 ---
 
@@ -484,92 +267,30 @@ One limited policy is implemented/tested or the packet is formally deferred with
 
 **Goal**
 
-Make every shipping Management Seat, Seat shell, profile/editor, setup, status, warning, and recovery surface localizable before the final UI hardens. English is the canonical fallback and the initial release catalogs are `en-US`, `ko-KR`, and `zh-CN` (Simplified Chinese).
+Make user-visible UI strings localizable while keeping developer/machine identifiers stable English.
 
 **Depends on**
 
-- primary Phase 7 UI/control-surface models
-- D-035
+- P7-SHELL-01
+- P6-UI-01
 
-**Create/modify**
+**Locales**
 
-- `include/hydra/localization.hpp`
-- `src/localization.cpp`
-- `resources/i18n/en-US.json`
-- `resources/i18n/ko-KR.json`
-- `resources/i18n/zh-CN.json`
-- `schemas/localization-catalog.schema.json`
-- UI/shell translation bindings;
-- locale settings in the per-user configuration;
-- localization validator/tests.
+- `en-US` canonical fallback;
+- `ko-KR`;
+- `zh-CN`.
 
-**Core contracts**
+**Invariants**
 
-```cpp
-using MessageId = std::string_view;
-
-struct LocaleId;
-struct LocalizedArgument;
-struct LocalizedMessage;
-struct LocalizationCatalogInfo;
-class LocalizationCatalog;
-class LocalizationService;
-```
-
-Catalog messages use stable English-like IDs such as `session.stop_return_to_windows`, never English display text as the lookup key. Resources are UTF-8. Formatting arguments are named rather than positional where practical so translators may reorder them safely.
-
-**Implementation skeleton**
-
-1. Define supported locale identifiers `en-US`, `ko-KR`, and `zh-CN`; keep `en-US` compiled/packaged as the unconditional fallback.
-2. Define a bounded versioned JSON catalog schema with locale, schema version, message map, optional translator note metadata, and named placeholders.
-3. Implement catalog parsing/validation independent of Qt so Win32 and future Qt surfaces can share the same message IDs.
-4. Reject duplicate keys, malformed UTF-8, unsupported schema versions, invalid placeholder syntax, and catalogs whose placeholder sets do not match English.
-5. Load the requested per-user locale; on first run, map supported Windows UI language families to a supported locale and otherwise choose `en-US`.
-6. Make locale override explicit in the Management Seat settings and persist it transactionally.
-7. Replace shipping user-visible literal strings with message IDs as each UI surface enters Phase 7; developer logs/protocol/error codes remain stable English identifiers.
-8. Support live catalog reload/locale switch for disposable UI and shell clients without restarting the active Seat session.
-9. Provide a missing-key path that renders the English fallback and records a bounded diagnostic with the missing message ID; never render a blank recovery/security control.
-10. Use Windows/system font fallback and Unicode text shaping; do not bundle private fonts merely to satisfy Korean/Chinese glyph coverage.
-11. Add tooling that compares all supported catalogs against English for key parity, placeholder parity, duplicate keys, invalid Unicode, and accidental untranslated critical strings.
-12. Add screenshot/manual review fixtures for representative compact, normal, long, warning, recovery, and multi-monitor strings at mixed DPI.
-
-**Language policy**
-
-- UI/UX default language: English (`en-US`).
-- Supported release languages: English, Korean (`ko-KR`), Simplified Chinese (`zh-CN`).
-- Source-code comments and developer-facing implementation notes: English only.
-- Protocol names, JSON/schema keys, CLI switches, diagnostic codes, capability IDs, backend IDs, packet IDs, and compatibility IDs: stable English identifiers and never localized.
-- User-visible diagnostic descriptions may be localized but always expose/copy the stable diagnostic code.
-- Traditional Chinese may be added later as a separate locale without changing runtime protocols.
-
-**Automated tests**
-
-- all three catalogs parse and validate;
-- exact key parity with `en-US` for required release strings;
-- exact named-placeholder parity;
-- fallback from missing `ko-KR`/`zh-CN` optional string to English;
-- missing critical English key fails build/validation;
-- invalid/future schema version and malformed UTF-8 rejection;
-- unsupported locale -> English fallback;
-- Windows-language detection mapping;
-- locale persistence and corrupt-settings fallback;
-- runtime locale change updates two independent shell/UI clients without changing host/session state;
-- no localization resource can change command/protocol/schema semantics.
-
-**Manual acceptance**
-
-- complete Management Seat Start -> Active -> Stop / Return -> Reconfigure workflows in English, Korean, and Simplified Chinese;
-- verify Korean/Chinese glyph rendering without custom font installation on a clean supported Windows machine;
-- verify long strings, mixed 100/150/200% DPI, and two-monitor Management Seat layouts;
-- verify recovery/reset controls remain recognizable and fully visible in every language.
+- protocol/schema/CLI switch/diagnostic code/capability/backend/profile/packet identifiers are not localized;
+- source comments remain English;
+- missing translation falls back safely to English;
+- UI strings use stable IDs;
+- long translated text cannot hide safety/recovery buttons.
 
 **Done when**
 
-`en-US`, `ko-KR`, and `zh-CN` catalogs have key/placeholder parity, all primary UI surfaces resolve strings through the localization service, locale switching does not disturb an active session, and the three-language manual UI checklist is recorded.
-
-**Suggested commit**
-
-`feat: implement P7-I18N-01 multilingual UI catalogs`
+Main game-first UI, Seat Launcher, first-run setup, warnings, recovery, and installer-facing shared strings render correctly in all three locales in the declared test matrix.
 
 ---
 
@@ -579,127 +300,78 @@ Catalog messages use stable English-like IDs such as `session.stop_return_to_win
 
 **Goal**
 
-Ensure the shell/control surfaces are usable across mixed-DPI displays and common accessibility needs.
+Ensure the compact game-first UI is usable across real Seat display configurations and input methods.
 
 **Depends on**
 
-- primary Phase 7 UI packets
 - P7-I18N-01
+- P7-LAUNCH-01
 
-**Coverage**
+**Verify**
 
-- per-monitor DPI awareness and relayout;
-- keyboard-only navigation within a Seat;
-- screen-reader labels for main UI/shell where toolkit permits;
-- high contrast and scalable text;
-- color not sole status indicator;
-- render `en-US`, `ko-KR`, and `zh-CN` catalogs from P7-I18N-01 without clipping critical actions;
-- left-to-right/long string layout and CJK/Korean system-font fallback;
-- controller navigation optional after controller UI policy.
-
-**Invariants**
-
-- no fixed-pixel assumption across outputs;
-- shell remains within Seat bounds after scale change;
-- emergency/reset control remains identifiable;
-- diagnostic IDs remain stable while display text is localizable.
-
-**Automated/manual tests**
-
-- 100/125/150/200% DPI;
-- mixed DPI Seat displays;
-- long strings and critical workflows in `en-US`, `ko-KR`, and `zh-CN`;
-- keyboard navigation;
-- high contrast;
-- scale change/hot-plug.
+- mixed DPI/scaling;
+- keyboard-only and controller navigation where supported;
+- readable focus/state indicators;
+- localized text expansion;
+- screen-reader/accessibility metadata where practical for chosen UI framework;
+- no critical action off-screen after display changes;
+- safe confirmation semantics for protected experiments and recovery.
 
 **Done when**
 
-Reference shell workflows pass the accessibility/DPI checklist.
-
-**Suggested commit**
-
-`feat: implement P7-A11Y-01 shell accessibility readiness`
+The declared accessibility/DPI/input/localization matrix passes on both Management UI and Seat Launcher.
 
 ---
 
-## P7-EXT-01 — Shell extension points, not public SDK yet
+## P7-EXT-01 — Seat shell extension points, not public SDK yet
 
-**State:** BLOCKED
+**State:** DEFERRED
 
 **Goal**
 
-Separate shell widgets/actions from the core so Phase 9 can publish a stable SDK later.
+Historical shell extension boundary.
 
 **Depends on**
 
 - P7-SHELL-01
-- P7-LAUNCH/TASK/NOTIFY models
 
-**Create/modify**
+**v1 decision**
 
-- internal `IShellPanel`, `IShellAction`, `IShellDataSource` interfaces;
-- built-in extension registry;
-- fake/built-in extension tests;
-- no arbitrary third-party DLL loading yet.
-
-**Invariants**
-
-- extensions receive Seat-scoped read-only data and typed commands;
-- built-ins cannot bypass host policy;
-- lifecycle/timeout/error isolated;
-- interface explicitly internal/version-unstable until Phase 9.
+A public/general Seat shell extension system is not needed for the minimal v1 launcher. Community value is prioritized in compatibility/setup data first.
 
 **Done when**
 
-Built-in launcher/task/status panels use the same internal extension boundary.
-
-**Suggested commit**
-
-`refactor: implement P7-EXT-01 shell extension boundary`
+Deferred. Any future extension boundary requires a concrete post-v1 use case and security/trust review.
 
 ---
 
-## P7-REC-01 — Shell crash/restart and Explorer coexistence
+## P7-REC-01 — Seat Launcher crash/restart and Explorer coexistence
 
 **State:** BLOCKED
 
 **Goal**
 
-Prove shells are disposable UI processes and ordinary Windows remains usable.
+Prove the minimal Seat UI is disposable and coexists with ordinary Windows/Explorer without pretending to replace the shell.
 
 **Depends on**
 
-- Phase 7 core packets
-- P8-WATCH-01
+- P7-SHELL-01
+- P7-LAUNCH-01
+- P4-REC-01
 
-**Failure matrix**
+**Matrix**
 
-- one Seat shell killed;
-- both shells killed;
-- main UI killed;
-- host restart;
-- display disconnect;
-- shell rendering hang;
-- logoff/shutdown;
-- repeated shell relaunch.
-
-**Acceptance**
-
-- targets/runtime remain correct or stop by policy;
-- shell relaunch resnapshots state;
-- no invisible overlay steals clicks/focus;
-- Explorer/global taskbar/wallpaper/settings remain usable;
-- stop/reset removes all shell windows/overlays;
-- no orphan process.
+- kill/restart idle Seat UI;
+- kill Seat UI during launch progress;
+- UI reconnect/resnapshot while game remains Playing;
+- one Seat UI crash while other Seat remains unchanged;
+- host reconnect/failure;
+- display reconnect;
+- final Return to Windows leaves ordinary Explorer/desktop usable.
 
 **Done when**
 
-The failure matrix passes on a physical multi-display system.
-
-**Suggested commit**
-
-`test: implement P7-REC-01 shell recovery matrix`
+Seat UI crashes are recoverable without restarting games or Explorer and final global rollback leaves normal Windows behavior intact.
 
 ---
 
@@ -707,22 +379,29 @@ The failure matrix passes on a physical multi-display system.
 
 **State:** BLOCKED
 
-**Closure checklist**
+**Goal**
 
-- one shell per Seat, scoped host permissions;
-- launcher/task/background/cursor/status work across multi-monitor Seats;
-- no global Explorer replacement;
-- notifications and clipboard policy truthful;
-- `en-US`, `ko-KR`, and `zh-CN` localization catalogs have required key/placeholder parity and critical UI workflows pass in all three languages;
-- DPI/accessibility checklist passes in all three supported languages;
-- shell crashes/restarts safely;
-- user experiences distinct Seat environments while runtime remains host-owned;
-- Phase 8 receives stable host/shell/watchdog/install boundaries.
+Verify the game-first v1 UI scope and ensure deferred full-desktop ambitions have not leaked into the required release path.
+
+**Depends on**
+
+- P7-REC-01
+- P7-I18N-01
+- P7-A11Y-01
+- P7-NOTIFY-01
+
+**Verify**
+
+- main Game -> Seat -> Player -> Play flow;
+- optional first-run setup with `Set later`;
+- independent idle Seat Launcher and game change;
+- no general arbitrary app/taskbar/wallpaper/clipboard dependency;
+- protected warning flow;
+- errors/recovery;
+- localization/DPI/accessibility;
+- UI crash/restart;
+- real two-Seat demonstration.
 
 **Done when**
 
-Phase 7 is complete and Phase 8 becomes current.
-
-**Suggested commit**
-
-`docs: close Phase 7 Seat shell experience`
+A non-developer can operate the complete v1 gaming flow through simple UI, while all broader desktop-shell features remain explicitly deferred.

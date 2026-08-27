@@ -115,6 +115,7 @@ For this small project, roles may be performed at different times by the same pe
 - Do not silently download or execute third-party binaries.
 - Optional adapters must require an explicit configured path and version/hash verification.
 - Do not redistribute an external binary unless its license permits redistribution and notices are included.
+- Do not bundle or redistribute game cover art/icons merely because a launcher displays them. Prefer local executable/shortcut/provider metadata at runtime unless redistribution rights and notices are clear.
 - Injection DLLs, drivers and wrappers must be isolated from HydraSeat core and independently disableable.
 - Driver installation or system-wide DLL replacement is never an automatic default.
 - Reference repositories under `C:\HydraSeat\references` are not build inputs and must never be committed accidentally.
@@ -142,7 +143,7 @@ The repository currently states that its project license is not yet formally dec
 3. determine whether contributions can be accepted under that license;
 4. add third-party notice infrastructure.
 
-Until then, Phase 3 implementation should use independent code written against official Windows APIs and abstract optional integrations behind clean interfaces.
+Until then, all HydraSeat implementation should use independent code written against official Windows APIs and abstract optional integrations behind clean interfaces. Community compatibility results and TwoPlayerSetup packages are data contributions, not a loophole around source/license rules: their provenance and contribution license must be explicit before public redistribution.
 
 ## 8. Review checklist
 

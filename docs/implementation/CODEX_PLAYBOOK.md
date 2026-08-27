@@ -9,12 +9,13 @@ This playbook turns a roadmap packet into a bounded coding task. The expected Co
 Before editing code, read:
 
 1. `.agents/AGENTS.md`;
-2. [DECISIONS.md](DECISIONS.md);
-3. [README.md](README.md);
-4. [STATUS.md](STATUS.md);
-5. the packet's phase document;
-6. every source/header/test file explicitly named by the packet;
-7. architecture or specialized design documents linked by the packet.
+2. [`../PRODUCT_V1.md`](../PRODUCT_V1.md);
+3. [DECISIONS.md](DECISIONS.md);
+4. [README.md](README.md);
+5. [STATUS.md](STATUS.md);
+6. the packet's phase document;
+7. every source/header/test file explicitly named by the packet;
+8. architecture or specialized design documents linked by the packet.
 
 Do not scan unrelated third-party reference repositories during an implementation packet unless the packet explicitly classifies the task as research. Clean-room boundaries still apply.
 
@@ -53,6 +54,7 @@ Implement packet <PACKET-ID> exactly as specified in
 
 Read and obey:
 - .agents/AGENTS.md
+- docs/PRODUCT_V1.md
 - docs/implementation/DECISIONS.md
 - docs/implementation/CODEX_PLAYBOOK.md
 - docs/implementation/STATUS.md

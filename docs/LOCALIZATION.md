@@ -18,7 +18,7 @@ Additional locales, including Traditional Chinese, may be added later without ch
 - Unsupported Windows locales fall back to `en-US`.
 - The user can override the locale from the Management Seat control console.
 - The selected locale is stored per Windows user.
-- Changing language must not restart or alter an active Seat session. Disposable UI/shell clients may reload and relayout.
+- Changing language must not restart or alter an active Seat session. Disposable Management UI and minimal Seat Launcher clients may reload and relayout.
 
 ## Source and protocol language
 
@@ -41,8 +41,16 @@ Shipping user-visible strings use stable message IDs instead of English display 
 Example:
 
 ```text
-session.start
-session.stop_return_to_windows
+game.play
+seat.one
+seat.two
+seat.both
+player.select
+seat.set_later
+seat.end_playing
+session.return_to_windows
+compatibility.community_results
+compatibility.protected_experimental_warning
 session.reconfigure
 startup.manual
 startup.background_idle
@@ -79,7 +87,7 @@ Catalog requirements:
 
 - Do not concatenate sentence fragments whose grammar depends on English order.
 - Prefer named placeholders such as `{seat}`, `{device}`, `{count}`, and `{profile}`.
-- Layouts must tolerate longer localized strings without hiding Start, Stop / Return to Windows, Reconfigure, Recovery, or Reset actions.
+- Layouts must tolerate longer localized strings without hiding Play, End Playing, Return to Windows, Reconfigure, protected-experiment acknowledgement, Recovery, or Reset actions.
 - Use Windows/system font fallback for Korean and Chinese glyphs; do not bundle private font files merely for glyph coverage.
 - Validate at 100%, 125%, 150%, and 200% DPI, including mixed-DPI multi-monitor Management Seats.
 - Color is never the only status signal.
@@ -95,7 +103,7 @@ Every localized README links back to all supported README languages. Code blocks
 
 When the canonical README changes materially, localized READMEs are updated in the same documentation packet or explicitly marked as temporarily behind. Release validation requires all three versions to agree on:
 
-- product goal and safety/non-goals;
+- product reason, exactly-two-Seat v1 scope, game-only boundary, and safety/non-goals;
 - current implementation status;
 - supported locales;
 - build/start/test commands;
@@ -121,7 +129,7 @@ Minimum automated checks:
 
 Minimum manual checks:
 
-- Management Seat Start -> Active -> Stop / Return to Windows -> Reconfigure in all three languages;
+- game-first Game -> Seat 1/Seat 2/Both -> Player(s) -> Play, independent idle Seat Launcher flow, Return to Windows, and Reconfigure in all three languages;
 - recovery/reset workflow in all three languages;
 - clean Windows machine Korean/Chinese glyph rendering without custom font install;
 - long labels and warnings at mixed DPI and multi-monitor layouts;

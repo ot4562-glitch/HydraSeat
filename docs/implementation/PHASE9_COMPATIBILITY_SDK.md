@@ -1,812 +1,453 @@
-# Phase 9 — Compatibility SDK and Extension Ecosystem
+# Phase 9 — Community Compatibility and Two-Player Setup Ecosystem
 
 ## Phase objective
 
-Allow trusted third parties and future contributors to add compatibility profiles, provider adapters, input/controller/audio/display backends, diagnostics, and Seat shell extensions without changing HydraSeat core or bypassing its planner, trust, privilege, recovery, and evidence rules.
+Scale compatibility knowledge beyond one maintainer without requiring an official `HydraSeat Certified` badge or a mandatory cloud backend.
 
-The default extension model is declarative profiles and out-of-process adapters. In-process DLL loading is exceptional, capability-limited, versioned, trusted, and disabled by default.
+The first ecosystem is **data-first**, not a large binary plugin SDK:
+
+- run compatibility tests locally;
+- keep results local by default;
+- let the user preview a redacted result;
+- optionally submit/share it;
+- aggregate success/failure counts and percentages by materially relevant environment;
+- distribute versioned compatibility/two-player setup catalogs as static/signed/hash-checked data artifacts where practical;
+- keep protected-title results clearly experimental and never interpret them as anti-cheat safety.
+
+A broader binary extension SDK remains deferred unless concrete post-v1 needs justify its security and maintenance cost.
 
 ## Phase exit gate
 
-Phase 9 is complete when:
+Phase 9 closes only when:
 
-1. public SDK contracts have semantic versions and compatibility policy;
-2. extension packages have signed/hash-verified manifests and explicit permissions;
-3. untrusted extensions run out of process with bounded IPC/resources;
-4. capability negotiation cannot grant more than host policy and evidence allow;
-5. community profiles are schema-validated and cannot embed arbitrary code by default;
-6. input/display/audio/controller/provider/shell extension categories have conformance tests;
-7. extension failure cannot corrupt another Seat or host runtime;
-8. install/update/remove are transactional and reversible;
-9. sample extensions and developer documentation compile in CI;
-10. a security threat model and review pass;
-11. compatibility entries identify extension versions and trust level.
-
-## Dependency graph
-
-```text
-P8-CLOSE-01 + stable Phase 3-7 contracts
-            |
-            +-> P9-SDK-01 -> P9-CAP-01
-            +-> P9-PKG-01 -> P9-REG-01
-            +-> P9-RPC-01
-
-P9-SDK-01 + P9-RPC-01 + P9-CAP-01
-            -> P9-ADAPT-01 -> P9-PROV-01 / P9-SHELL-01 / P9-DIAG-01
-
-all extension contracts -> P9-TEST-01 -> P9-SEC-01 -> P9-DOC-01 -> P9-CLOSE-01
-```
+1. local compatibility results use a versioned bounded schema;
+2. sharing is explicit opt-in with exact redacted JSON preview;
+3. reports exclude credentials/raw typed text/Player names/personal paths by default;
+4. aggregation records sample size, success/failure, and useful sub-results;
+5. materially different game/HydraSeat/provider/Windows/compatibility environments are segmented rather than blindly averaged;
+6. `Untested` is distinct from failure;
+7. protected/experimental technical success never becomes an anti-cheat safety claim;
+8. community TwoPlayerSetup data has validation/provenance/trust boundaries;
+9. initial catalog distribution works without requiring a custom always-on HydraSeat backend;
+10. core remains fully functional offline with all community features disabled;
+11. contribution/security/privacy docs/tests pass;
+12. Phase-close verification passes.
 
 ---
 
-## P9-SDK-01 — Public SDK boundary and compatibility policy
+## P9-SDK-01 — Community compatibility result schema and version policy
 
 **State:** BLOCKED
 
 **Goal**
 
-Select which internal contracts become public and freeze their version/lifecycle rules.
+Freeze the first public **data** boundary for local/community compatibility evidence, not a broad in-process C++ plugin ABI.
 
 **Depends on**
 
-- stable production contracts from Phases 3–8
-- D-012, D-024
+- P8-CLOSE-01
+- P5-COMPAT-01
 
-**Create/modify**
+**Schema should cover**
 
-- `sdk/include/hydraseat/sdk_version.h`
-- `sdk/include/hydraseat/types.h`
-- `sdk/include/hydraseat/result.h`
-- public protocol/manifest schemas;
-- compatibility policy document;
-- ABI/schema tests.
-
-**Initial public concepts**
-
-- fixed-width IDs and version structs;
-- capability bitsets/descriptors;
-- Seat/process/window/display/device/audio/controller snapshots with privacy-limited fields;
-- extension result/diagnostic model;
-- host/extension handshake and lifecycle;
-- package/profile manifest references;
-- no raw internal C++ class ABI.
-
-**Version policy**
-
-- semantic SDK version;
-- explicit minimum/maximum host protocol versions;
-- additive reserved fields only within compatible minor versions;
-- structure size/version validation for C ABI;
-- schema `$id`/version and migration policy;
-- deprecation window and removal policy;
-- host rejects incompatible major version.
+- schema version/result ID/timestamp class;
+- Game/provider/version identity;
+- HydraSeat version/build;
+- Windows version/build class;
+- scenario (`different-games`, `same-game-two-instance`, protected experiment, etc.);
+- relevant compatibility/backend versions/capabilities;
+- launch/instance result;
+- receiver-verified input/bleed result;
+- controller/audio result where applicable;
+- clean exit/rollback result;
+- bounded resource/latency summary;
+- protection/experimental flag;
+- redaction/provenance metadata.
 
 **Invariants**
 
-- public ABI is C or language-neutral IPC/schema, not compiler-specific C++ ABI;
-- internal HWND/HANDLE/pointers are opaque or absent;
-- extensions cannot receive secrets/raw typed text by default;
-- public contract cannot mutate runtime except through typed capability-scoped requests;
-- every public sample/test is built against installed SDK layout.
-
-**Automated tests**
-
-- C/C++ ABI size/version;
-- old minor/new host and new minor/old host fixtures;
-- unknown field/version;
-- architecture/endian assumptions;
-- installed SDK sample build;
-- public header dependency hygiene.
+- no universal `certified=true` field;
+- unknown future required semantics fail closed;
+- missing measurement is `unknown/not measured`, never zero;
+- result data is evidence, not executable instructions;
+- schema can be reprocessed under newer aggregation rules.
 
 **Done when**
 
-A sample out-of-tree extension builds using only published SDK files and negotiates compatibility.
-
-**Suggested commit**
-
-`feat: implement P9-SDK-01 public SDK contracts`
+Valid/malformed/future/max-size/privacy fixtures and deterministic canonicalization tests pass, with compatibility to the local Phase 5/8 evidence sources.
 
 ---
 
-## P9-CAP-01 — Extension capability and permission negotiation
+## P9-CAP-01 — Evidence dimensions, grouping, and confidence policy
 
 **State:** BLOCKED
 
 **Goal**
 
-Ensure an extension receives only the data and operations declared by its package, supported by the host, permitted by user/policy, and required by the active plan.
+Define which environment differences require separate compatibility statistics so a simple percentage does not become misleading.
 
 **Depends on**
 
 - P9-SDK-01
-- existing planner capability model
 
-**Create/modify**
+**Dimensions may include**
 
-- `sdk/include/hydraseat/capabilities.h`
-- `include/hydra/extension_policy.hpp`
-- `src/extension_policy.cpp`
-- tests.
+- exact/compatible game version range;
+- HydraSeat version range;
+- provider/launch path;
+- Windows build family;
+- x86/x64 target path where relevant;
+- same-game versus different-game scenario;
+- input/controller/audio/display compatibility path;
+- protection status;
+- material setup revision.
 
-**Permission classes**
+**Aggregation rules**
 
-- read sanitized topology/runtime state;
-- receive Seat-scoped input/controller state;
-- propose process/window/display/audio/controller actions;
-- execute a narrow backend operation;
-- request elevation through broker;
-- persist extension-owned bounded state;
-- emit diagnostics/UI panels;
-- network access is separate and denied by default.
-
-**Negotiation inputs**
-
-- package-declared capabilities/permissions;
-- host/SDK versions;
-- extension trust/signature level;
-- user approval;
-- active profile/plan requirements;
-- Windows/architecture/backend availability;
-- support/evidence level.
-
-**Invariants**
-
-- extension declaration cannot self-grant permission;
-- host can reduce but not expand requested capability silently;
-- denied required permission prevents activation;
-- read scope is Seat/session-limited;
-- permission changes invalidate/restart session;
-- decisions are logged without secrets.
-
-**Automated tests**
-
-- over-request/under-request;
-- unsigned experimental package;
-- user denial;
-- profile does not require extension;
-- trust downgrade/update;
-- Seat scope spoof;
-- deterministic negotiation result.
+- show sample size;
+- show success/failure count;
+- allow sub-results (`launch`, `two instances`, `input`, `audio`, `clean shutdown`);
+- do not merge materially incompatible cohorts;
+- stale evidence can remain visible but is labeled/weighted/segmented by policy;
+- one maintainer run and one community run are both evidence, not official support guarantees.
 
 **Done when**
 
-A sample extension can do one allowed operation and is denied a non-declared/other-Seat operation.
-
-**Suggested commit**
-
-`feat: implement P9-CAP-01 extension permissions`
+Deterministic fixtures prove grouping/version/staleness rules and the same raw dataset always produces the same displayed cohort statistics.
 
 ---
 
-## P9-PKG-01 — Extension package manifest and lifecycle
+## P9-PKG-01 — Community setup/catalog package manifest and lifecycle
 
 **State:** BLOCKED
 
 **Goal**
 
-Define installable extension packages using the Phase 8 component trust model.
-
-**Depends on**
-
-- P8-TRUST-01/P8-INST-01/P8-UPD-01
-- P9-SDK-01
-
-**Create/modify**
-
-- `schemas/extension-package-v1.schema.json`
-- `include/hydra/extension_package.hpp`
-- `src/extension_package.cpp`
-- package install/remove/update transaction;
-- tests.
-
-**Manifest fields**
-
-- package ID/name/version/publisher;
-- SDK/host/protocol compatibility;
-- architectures/entrypoints;
-- extension categories;
-- capabilities/permissions;
-- file hashes/signature/license/source;
-- dependencies/conflicts;
-- profile/schema assets;
-- data/storage/network/elevation policy;
-- install/update/remove hooks are typed/allowlisted, never arbitrary scripts by default.
-
-**Lifecycle**
-
-1. validate signature/hash/schema/path;
-2. display publisher/license/permissions/risk;
-3. stage in package-specific directory;
-4. run static/conformance preflight;
-5. atomically register package;
-6. activate only in new plans;
-7. update side-by-side and health-check;
-8. roll back failed update;
-9. refuse removal while active or stop safely;
-10. remove code/registration while preserving/exporting extension data by choice.
-
-**Invariants**
-
-- package cannot write outside assigned roots through installer;
-- no DLL search path ambiguity;
-- dependency cycle/version conflict rejected;
-- modified package disabled;
-- package removal cannot strand an active plan silently;
-- untrusted package never becomes release-supported evidence.
-
-**Automated tests**
-
-- valid/tampered/path traversal/duplicate/dependency cycle;
-- update/rollback/remove-active;
-- architecture/SDK mismatch;
-- permission changes;
-- data preserve/delete/export.
-
-**Done when**
-
-A signed/test package installs, activates in a controlled plan, updates, rolls back, and removes transactionally.
-
-**Suggested commit**
-
-`feat: implement P9-PKG-01 extension packages`
-
----
-
-## P9-RPC-01 — Out-of-process extension host and isolation
-
-**State:** BLOCKED
-
-**Goal**
-
-Run normal extensions outside `hydra_host.exe` with bounded, authenticated IPC and failure isolation.
+Package compatibility metadata and TwoPlayerSetup entries as bounded data artifacts with provenance and trust information.
 
 **Depends on**
 
 - P9-SDK-01
-- P9-CAP-01
-- P8 watchdog/process/manifest foundations
+- P6-IMPORT-01
+- P8-TRUST-01
 
-**Create/modify**
+**Manifest**
 
-- `sdk/schemas/extension-protocol-v1.*`;
-- `include/hydra/extension_host.hpp`
-- `src/extension_host.cpp`
-- `src/extension_runner_main.cpp`
-- process/IPC/resource tests.
-
-**Architecture**
-
-```text
-hydra_host.exe
-  -> one extension runner per package or risk domain
-       -> extension process/module
-```
-
-**Lifecycle**
-
-- host verifies package and creates scoped session token;
-- runner starts with constrained environment/working directory;
-- handshake negotiates version/capabilities/Seat scope;
-- bounded request/event channels and heartbeats;
-- CPU/memory/process limits via Job Object where compatible;
-- timeouts/circuit breaker;
-- crash produces extension failure/degraded/rollback according to active plan;
-- restart only under bounded policy.
+- package/schema version;
+- setup/result/catalog entries;
+- source/provenance/license metadata;
+- hashes;
+- supported game/provider/version selectors;
+- minimum/maximum HydraSeat schema compatibility;
+- no executable/script payload by default.
 
 **Invariants**
 
-- extension cannot impersonate another package/session/Seat;
-- extension event cannot block host callback paths;
-- arbitrary host memory is unavailable;
-- process tree owned/cleaned;
-- protocol malformed/stale/replay fails closed;
-- network/filesystem access policy explicit, not assumed sandboxed by Job Object alone.
-
-**Automated tests**
-
-- handshake/spoof/version mismatch;
-- flood/backpressure;
-- hang/crash/restart limit;
-- memory/process child limits;
-- other-Seat request;
-- package update while inactive/active;
-- host/watchdog recovery.
+- data package cannot grant executable privileges;
+- path traversal/absolute output paths rejected;
+- duplicate/conflicting setup IDs deterministic;
+- unknown/tampered package disabled without corrupting local cache;
+- local user edits remain separate from downloaded package state.
 
 **Done when**
 
-A deliberately crashing/flooding extension cannot crash the host or affect another Seat and yields visible policy behavior.
-
-**Suggested commit**
-
-`feat: implement P9-RPC-01 extension runner`
+Create/import/update/rollback/tamper fixtures pass and a package can be mirrored as a static release/catalog artifact.
 
 ---
 
-## P9-ADAPT-01 — Backend adapter SDK
+## P9-RPC-01 — Optional community submission transport boundary
 
 **State:** BLOCKED
 
 **Goal**
 
-Publish one common lifecycle pattern for optional input, controller, display, audio, provider, and diagnostics backends while keeping category-specific contracts precise.
+Define a narrow optional transport for submitting redacted compatibility evidence while allowing v1 to operate without it.
 
 **Depends on**
 
-- P9-SDK-01/P9-CAP-01/P9-RPC-01
-- stable internal backend interfaces
+- P9-SDK-01
+- P8-DIAG-01
 
-**Create/modify**
+**v1 deployment options**
 
-- category descriptor/request/result schemas and headers;
-- host bridge implementations;
-- fake/sample adapters;
-- conformance tests.
+The implementation may start with a GitHub/community contribution workflow, static upload endpoint, or other simple bounded transport. A custom always-on backend is not a prerequisite for the product.
 
-**Common lifecycle**
+**Required client behavior**
 
-```text
-Describe -> Probe -> Plan -> Prepare -> Apply -> Verify -> Active
-       -> Stop -> Rollback -> VerifyStopped
-```
-
-**Category-specific requirements**
-
-### Input compatibility
-
-- target process/architecture/API scope;
-- startup/load method;
-- replacement/suppression guarantees;
-- unhook/rollback evidence.
-
-### Controller
-
-- source identity/API/slot mapping/vibration;
-- disconnect generation.
-
-### Display
-
-- create/destroy/mode/topology identity/reboot/signing;
-- no physical-display dependency.
-
-### Audio
-
-- process/session/endpoint/route persistence/latency;
-- exact Windows/backend support.
-
-### Provider
-
-- discovery/launch/process correlation only;
-- no credentials.
-
-**Invariants**
-
-- common interface does not erase category guarantees;
-- capability advertised only after conformance/evidence;
-- every mutation has verify/rollback;
-- extension does not mutate host state directly;
-- unsupported method explicit.
+- result is generated locally first;
+- user chooses Share/Submit;
+- exact redacted JSON preview is available before submission;
+- no automatic background telemetry submission by default;
+- timeout/offline/failure leaves local result intact;
+- duplicate/idempotent submission identity defined where transport supports it.
 
 **Done when**
 
-At least one sample fake adapter per category passes the common and category conformance suite.
+A reference submission path proves opt-in, redaction preview, offline failure, retry/idempotence, and no impact on local gameplay when the service is unavailable.
 
-**Suggested commit**
+---
 
-`feat: implement P9-ADAPT-01 backend adapter SDK`
+## P9-ADAPT-01 — Backend adapter binary SDK
+
+**State:** DEFERRED
+
+**Goal**
+
+Historical public backend plugin boundary.
+
+**Depends on**
+
+- P9-SDK-01
+
+**v1 decision**
+
+A broad third-party binary input/display/audio backend SDK is not required to launch the data-first community compatibility ecosystem. It creates a much larger code-execution/trust/ABI/security burden and is deferred.
+
+**Done when**
+
+Deferred. Reactivate only for a concrete capability that cannot reasonably ship as core or data-only configuration.
 
 ---
 
 ## P9-PROV-01 — Launcher provider extension SDK
 
-**State:** BLOCKED
+**State:** DEFERRED
 
 **Goal**
 
-Publish a provider-specific extension contract for lawful read-only discovery and normal launcher invocation without exposing credentials or runtime authority.
+Historical third-party launcher provider plugin boundary.
 
 **Depends on**
 
-- P9-ADAPT-01
-- P6-PROV-01
-- P9-PKG-01
+- P9-SDK-01
 
-**Create/modify**
+**v1 decision**
 
-- provider SDK headers/schemas;
-- host provider bridge;
-- fake provider sample;
-- provider conformance tests.
-
-**Public operations**
-
-- describe/probe provider and version;
-- discover bounded application/install metadata;
-- resolve launch candidates;
-- submit a typed normal launch request;
-- report expected process correlation hints;
-- cancel owned preparation/launch work;
-- emit diagnostics and limitations.
-
-**Invariants**
-
-- no credentials, cookies, OAuth/session tokens, DRM, or anti-cheat access;
-- provider extension cannot start arbitrary commands outside the approved launch candidate;
-- catalog/manifest input is untrusted and bounded;
-- process ownership is revalidated by the host;
-- network permission is separate and denied by default;
-- package trust/conformance do not automatically make an application profile supported.
-
-**Automated tests**
-
-- fake discovery/launch/cancel;
-- malformed/hostile metadata;
-- absent/updating provider;
-- process ambiguity;
-- permission denial;
-- crash/hang/backpressure;
-- package update/version incompatibility.
+Initial providers are core typed adapters. A public binary provider SDK is deferred until actual provider coverage needs justify the security/support cost.
 
 **Done when**
 
-An out-of-process sample provider catalogs and launches a controlled target through the production plan while prohibited credential/arbitrary-command requests are denied.
-
-**Suggested commit**
-
-`feat: implement P9-PROV-01 provider SDK`
+Deferred beyond the initial v1 ecosystem.
 
 ---
 
-## P9-PROFILE-01 — Community compatibility profile format and validator
+## P9-PROFILE-01 — Community TwoPlayerSetup format and validator
 
 **State:** BLOCKED
 
 **Goal**
 
-Allow community-authored declarative profiles without arbitrary code.
+Make lawful same-game setup knowledge easy to share and review without turning community profiles into arbitrary scripts.
 
 **Depends on**
 
-- Phase 6 compatibility schema
-- P9-PKG-01/P9-CAP-01
+- P6-PROFILE-01
+- P9-PKG-01
 
-**Allowed content**
+**Community entry includes**
 
-- application/provider/version match rules;
-- required/optional capabilities;
-- backend preference/deny;
-- API allowlist and typed hook flags;
-- process/window selector rules;
-- controller/audio/display policy;
-- start delays/timeouts/retries with bounds;
-- namespace rules from an allowlisted vocabulary;
-- evidence/support metadata;
-- no shell command/script/native code by default.
-
-**Create/modify**
-
-- public compatibility profile schema;
-- `hydra_profile lint/test/explain`;
-- static risk analyzer;
-- fixture/conformance corpus;
-- package integration.
+- exact Game/provider/version selectors;
+- setup schema version;
+- instance/data/config/argument/provider-account-reference fields allowed by P6;
+- compatibility requirements and known limitations;
+- protection/experimental status;
+- evidence/sample references;
+- source/provenance/license/author attribution metadata where applicable.
 
 **Invariants**
 
-- profile cannot grant unavailable capability;
-- every numeric/list/regex/path field bounded;
-- dangerous rule requires expert permission and remains declarative;
-- unknown API/workaround rejected;
-- game title is not the sole match identity;
-- support level requires matrix evidence.
-
-**Automated tests**
-
-- valid/malformed/oversized/catastrophic regex/path traversal;
-- ambiguous target match;
-- forbidden protected-process behavior;
-- profile dependency/conflict;
-- deterministic compiled plan;
-- imported untrusted profile remains experimental.
+- validator applies all local P6 safety bounds;
+- no credentials/tokens;
+- no arbitrary script/binary auto-execution;
+- protection bypass instructions are rejected/out of scope;
+- imported setup still requires local preflight and user-visible mutation review;
+- community popularity does not override a local safety failure.
 
 **Done when**
 
-A community profile can be linted, explained, tested against a controlled fixture, packaged, and safely rejected when unsupported.
-
-**Suggested commit**
-
-`feat: implement P9-PROFILE-01 community profiles`
+Community setup fixtures can be validated/imported/remapped and compiled locally while malicious/unsafe/tampered entries are rejected.
 
 ---
 
 ## P9-SHELL-01 — Seat shell extension SDK
 
+**State:** DEFERRED
+
+**Goal**
+
+Historical per-Seat UI extension interface.
+
+**Depends on**
+
+- P7-SHELL-01
+
+**v1 decision**
+
+The minimal Seat Launcher does not need arbitrary third-party UI extensions.
+
+**Done when**
+
+Deferred beyond v1.
+
+---
+
+## P9-DIAG-01 — Local compatibility test/export/submission model
+
 **State:** BLOCKED
 
 **Goal**
 
-Publish safe shell panels/actions/data sources without allowing UI extensions to bypass host policy.
+Unify local test results, human-readable details, redacted JSON preview, and optional community submission state.
 
 **Depends on**
 
-- P7-EXT-01
-- P9-SDK/CAP/RPC/PKG foundations
+- P9-SDK-01
+- P8-DIAG-01
+- P9-RPC-01
 
-**Extension types**
+**States**
 
-- read-only status panel;
-- launcher/catalog panel;
-- diagnostic visualization;
-- typed Seat action provider;
-- theme/asset package;
-- no arbitrary in-process UI DLL by default.
+- test not run;
+- local result available;
+- preview ready;
+- user declined sharing;
+- submit pending/succeeded/failed;
+- result superseded by newer local test;
+- protected/experimental marker retained throughout.
 
 **Invariants**
 
-- data is Seat-scoped and redacted;
-- action is a typed host request revalidated by policy;
-- panel render/update budget and queue bounded;
-- crash/hang isolated;
-- inaccessible/off-screen surfaces recover;
-- shell safe mode disables extensions.
-
-**Automated tests**
-
-- sample panel/action;
-- other-Seat access denied;
-- render/update flood;
-- crash/restart/disable;
-- package update/remove;
-- accessibility metadata.
+- local result is never deleted because upload failed;
+- upload state never changes technical result truth;
+- user can inspect/copy/export the exact redacted payload;
+- no background submission without explicit product setting/consent decision;
+- diagnostic detail not intended for community sharing remains separate.
 
 **Done when**
 
-A sample out-of-process panel displays one Seat's metrics and can request one allowed action without direct runtime access.
-
-**Suggested commit**
-
-`feat: implement P9-SHELL-01 shell extension SDK`
+A user can run a local compatibility check, inspect results, preview redaction, decline or submit, and continue offline regardless of submission outcome.
 
 ---
 
-## P9-DIAG-01 — Diagnostics/metrics exporter SDK
+## P9-REG-01 — Local catalog and optional remote/static catalog contract
 
 **State:** BLOCKED
 
 **Goal**
 
-Allow privacy-reviewed exporters and visualizers without exposing secrets or blocking runtime.
-
-**Depends on**
-
-- P8-DIAG-01
-- P9-CAP/RPC
-
-**Contract**
-
-- subscribe to selected structured metric/event categories;
-- receive bounded batches with schema/version;
-- declare retention/network/export policy;
-- host-side redaction before delivery;
-- no raw keyboard text or credentials;
-- exporter failure drops exporter data, not runtime events;
-- user-visible enable/disable and data preview.
-
-**Tests**
-
-- redaction and Seat scope;
-- slow/failing exporter;
-- queue overflow/sample policy;
-- network permission denied/approved;
-- schema version update;
-- uninstall deletes/preserves exporter data as selected.
-
-**Done when**
-
-A local sample exporter receives redacted metrics without impacting input/session latency.
-
-**Suggested commit**
-
-`feat: implement P9-DIAG-01 diagnostics exporter SDK`
-
----
-
-## P9-REG-01 — Local extension registry and optional remote catalog contract
-
-**State:** BLOCKED
-
-**Goal**
-
-Maintain installed/trusted extension inventory and define a future catalog feed without making network access mandatory.
+Define how compatibility/setup data is cached, updated, and rendered without a mandatory central service.
 
 **Depends on**
 
 - P9-PKG-01
-- P8 trust/update foundations
+- P9-CAP-01
+- P8-DATA-01
 
-**Local registry**
+**Initial model**
 
-- installed versions/hashes/signatures;
-- enabled/disabled/quarantined state;
-- permissions/user approvals;
-- compatible SDK/host versions;
-- active plan references;
-- update source/channel metadata;
-- last health/conformance result.
-
-**Optional remote catalog**
-
-- signed index and package metadata;
-- no automatic install/enable;
-- user-controlled refresh/channel;
-- download/staging through Phase 8 update/trust flow;
-- revocation/advisory metadata;
-- privacy-preserving access policy.
-
-**Invariants**
-
-- HydraSeat core works entirely offline;
-- catalog metadata cannot grant trust;
-- removed/revoked/tampered extension disabled visibly;
-- downgrade/rollback policy explicit;
-- active plan prevents unsafe remove/update.
+- bundled seed catalog optional;
+- local cache authoritative for offline display;
+- versioned static JSON/package releases may be hosted/mirrored through ordinary release infrastructure;
+- remote check is optional/disableable;
+- aggregation can be performed during catalog publication rather than requiring a live query service;
+- last valid cache survives refresh failure.
 
 **Done when**
 
-Installed extension inventory is deterministic and a signed fake catalog update/revocation flow passes tests.
-
-**Suggested commit**
-
-`feat: implement P9-REG-01 extension registry`
+Catalog install/update/offline/stale/tamper/rollback tests pass and the UI can show evidence/sample statistics with networking completely disabled.
 
 ---
 
-## P9-TEST-01 — Extension conformance kit
+## P9-TEST-01 — Community contribution conformance kit
 
 **State:** BLOCKED
 
 **Goal**
 
-Give extension authors and CI an executable way to prove contract behavior.
+Let contributors validate compatibility results and TwoPlayerSetup packages before submitting them.
 
 **Depends on**
 
-- all public SDK/category contracts
+- P9-PROFILE-01
+- P9-REG-01
 
-**Deliverables**
+**Kit**
 
-- `hydra_sdk_test` runner;
-- fake host/runtime/Seat/topology/process fixtures;
-- protocol/ABI/schema validators;
-- lifecycle/failure/backpressure/rollback suites;
-- category-specific tests;
-- report schema with host/SDK/extension versions;
-- sample GitHub Actions workflow.
-
-**Required test classes**
-
-- describe/probe/plan no side effects;
-- prepare/apply/verify/stop/rollback idempotency;
-- malformed/stale/replay/other-Seat input;
-- timeout/hang/crash/flood;
-- resource cleanup/no orphan;
-- permission denial;
-- x86/x64 where relevant;
-- package/update compatibility;
-- diagnostics/redaction;
-- performance budget declaration.
-
-**Invariants**
-
-- passing conformance does not automatically make a game/profile `Supported`;
-- test runner cannot execute arbitrary package commands;
-- failures are reproducible and machine-readable;
-- host can require minimum conformance version.
+- schema validator;
+- privacy/redaction validator;
+- provenance/license field checks;
+- forbidden executable/script payload checks;
+- deterministic canonicalization/hash checks;
+- version/cohort sanity checks;
+- example valid/invalid fixtures;
+- local dry-run of setup preflight against fake/local inventory.
 
 **Done when**
 
-Every sample extension category passes the kit and deliberate broken samples fail for the expected invariant.
-
-**Suggested commit**
-
-`test: implement P9-TEST-01 extension conformance kit`
+CI/community contributors can run one documented validation workflow and malformed/private/unsafe contribution fixtures fail with precise reasons.
 
 ---
 
-## P9-SEC-01 — Extension ecosystem threat model and security review
+## P9-SEC-01 — Community ecosystem threat model and privacy review
 
 **State:** BLOCKED
 
 **Goal**
 
-Review the SDK/package/runner/trust boundaries before encouraging third-party use.
+Review the data-first ecosystem as an untrusted-content boundary.
 
 **Depends on**
 
-- P9 SDK/package/RPC/capability/registry/conformance implementations
+- P9-TEST-01
+- P9-RPC-01
 
-**Threats to cover**
+**Threats**
 
-- malicious/tampered package;
-- publisher/signing compromise;
-- path/DLL search hijack;
-- protocol spoof/replay/flood;
-- Seat/runtime data exfiltration;
-- arbitrary process/driver/elevation request;
-- extension escape from assumed restrictions;
-- update/catalog compromise;
-- diagnostics/network privacy;
-- host/plugin version confusion;
-- rollback persistence and orphan processes.
-
-**Outputs**
-
-- `docs/security/EXTENSION_THREAT_MODEL.md`;
-- mitigations and residual risks;
-- fuzz targets for parsers/protocols;
-- secure defaults/checklist;
-- external review issues where possible;
-- incident/revocation response.
+- malicious JSON/package size/depth/path values;
+- setup attempting command/script/binary execution;
+- credential/private-path leakage;
+- forged/stale misleading compatibility evidence;
+- spam/duplicate reports;
+- protected-game result misrepresented as safety;
+- malicious artwork/URI/external resource references;
+- catalog rollback/tamper;
+- transport outage/compromise.
 
 **Done when**
 
-Critical/high findings are fixed or the affected feature remains disabled/experimental.
-
-**Suggested commit**
-
-`docs: complete P9-SEC-01 extension threat model`
+Threat model, mitigations, negative tests, retention/privacy rules, and reporting/withdrawal process are documented and reviewed before public ecosystem launch.
 
 ---
 
-## P9-DOC-01 — SDK documentation and samples
+## P9-DOC-01 — Community testing and setup contribution documentation
 
 **State:** BLOCKED
 
 **Goal**
 
-Make correct extension development easier than bypassing the architecture.
+Explain how users can help expand compatibility without needing the maintainer to own every game.
 
 **Depends on**
 
-- stable Phase 9 contracts and conformance kit
+- P9-TEST-01
+- P9-SEC-01
 
-**Documentation**
+**Document**
 
-- SDK overview and architecture;
-- package/permission/trust model;
-- lifecycle and rollback;
-- capability planning;
-- Seat scoping/privacy;
-- category guides;
-- profile authoring;
-- diagnostics/testing/conformance;
-- versioning/deprecation/migration;
-- security/anti-cheat/clean-room rules;
-- troubleshooting.
-
-**Samples**
-
-- out-of-process read-only status extension;
-- fake display adapter;
-- fake controller adapter;
-- provider adapter using controlled test catalog;
-- shell metrics panel;
-- declarative compatibility profile;
-- diagnostics exporter without network access.
-
-**Invariants**
-
-- samples compile/run in CI;
-- no sample weakens trust or bypasses planner;
-- no proprietary/unlicensed source copied;
-- limitations and unsupported behaviors explicit.
+- how to run a local test;
+- what each measured result means;
+- why success percentage is evidence rather than guarantee;
+- how same-game setup contributions work;
+- automatic versus manual setup paths;
+- privacy/redaction preview;
+- protected/experimental warnings;
+- no anti-cheat/DRM/provider restriction bypass;
+- offline use and optional sharing;
+- contribution validation/provenance.
 
 **Done when**
 
-A clean external checkout can build, test, package, and run the sample extensions using published instructions.
-
-**Suggested commit**
-
-`docs: implement P9-DOC-01 SDK guides and samples`
+A new contributor can produce a valid privacy-safe result/setup contribution using only public documentation and the conformance tools.
 
 ---
 
@@ -814,22 +455,30 @@ A clean external checkout can build, test, package, and run the sample extension
 
 **State:** BLOCKED
 
-**Closure checklist**
+**Goal**
 
-- public SDK/version policy stable;
-- package/trust/permission/runner boundaries implemented;
-- declarative profiles and adapter/shell/diagnostic SDKs available;
-- conformance kit and samples pass;
-- extension install/update/remove/rollback passes;
-- threat model critical/high findings resolved or features disabled;
-- compatibility matrix records extension versions/trust;
-- core remains functional with all extensions disabled/offline;
-- Phase 10 receives stable release/compatibility/security inputs.
+Verify that community compatibility can scale without official-certification theater, mandatory telemetry, or a broad binary plugin attack surface.
+
+**Depends on**
+
+- P9-DOC-01
+- P9-SEC-01
+- P9-REG-01
+- P9-DIAG-01
+
+**Verify**
+
+- local-first result flow;
+- opt-in redacted sharing;
+- success/failure/sample/sub-result aggregation;
+- cohort/version segmentation;
+- `Untested` semantics;
+- protected/experimental semantics;
+- community TwoPlayerSetup validation/provenance;
+- static/offline catalog operation;
+- all broad binary SDK packets remain deferred unless explicitly reactivated;
+- Phase-close review.
 
 **Done when**
 
-Phase 9 is complete and Phase 10 becomes current.
-
-**Suggested commit**
-
-`docs: close Phase 9 compatibility SDK`
+HydraSeat can publish/update a privacy-safe compatibility/setup catalog from community evidence while every user can keep using the complete core product offline and without sharing data.

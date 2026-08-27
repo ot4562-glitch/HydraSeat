@@ -2,19 +2,19 @@
 
 These decisions prevent future agents from repeatedly reopening settled architecture. A decision may change only through an explicit roadmap/document update that explains migration and compatibility impact.
 
-## D-001 — Seat is the primary product abstraction
+## D-001 — Seat is the primary physical-station abstraction
 
-A Seat is a logical local PC, not a single monitor and not merely a game window.
+A Seat is the physical local gaming station, not a single monitor, person, game, account, or game window.
 
 A Seat may own:
 
 - multiple physical or virtual displays;
 - one explicit primary display;
 - zero or more keyboards, mice, touchpads, controllers, audio endpoints, and microphones;
-- a process/window group;
-- virtual cursor/focus/input state;
-- launcher/profile state;
-- an optional Seat shell.
+- physical station hardware only at persistence time;
+- runtime process/window, cursor/focus/input, Player, Game, and setup state are associated later and are not permanent Seat identity.
+- saved Seat configuration may be incomplete; missing devices are checked against the selected game's requirements at launch.
+- a minimal Seat Launcher may be associated at runtime when the Seat is idle, but it is not permanent Seat identity and is not a general desktop shell.
 
 Persistent and public new code uses `Seat`, `SeatId`, `SeatConfig`, or `SeatRuntimeState`. Existing `Workspace*` names may remain temporarily for compatibility but must not drive new architecture.
 
@@ -44,7 +44,7 @@ The intended product is split into:
 - independent watchdog;
 - emergency reset CLI;
 - optional process-local adapters;
-- optional per-Seat shells.
+- minimal per-Seat launcher clients used only for idle/start/warning/recovery UX in v1.
 
 The UI is never the authority for runtime isolation and may close while Seats remain active. The host may never rely on a visible GUI message loop for recovery-critical work.
 
@@ -249,15 +249,15 @@ An agent cannot mark these complete without recorded user/hardware evidence:
 
 Latency, CPU, memory, queue depth, frame timing, audio delay, and rollback duration require measurement hooks and reproducible benchmarks. Source review or “it feels responsive” is not acceptance evidence.
 
-## D-030 — Upstream intent is preserved, product scope is extended
+## D-030 — Upstream intent is preserved while v1 product scope stays focused
 
-HydraSeat remains a Windows local gaming multiseat framework based on physical-device detection, assignment, Raw Input compatibility, display routing, and game profiles. The Seat-first multi-monitor environment, background host/watchdog, shell, and capability ecosystem extend that intent rather than replacing it with an unrelated remote-desktop or virtual-machine product.
+HydraSeat remains a Windows local gaming multiseat project based on physical-device detection, assignment, input compatibility, display routing, and repeatable game setup. v1 narrows that intent to two active gaming Seats, a background host/watchdog, game-first UI, minimal idle Seat Launcher, and evidence-driven compatibility rather than expanding into remote desktop, virtual machines, a general desktop shell, or an N-Seat platform.
 
 ## D-031 — One Management Seat owns the visible control plane
 
 HydraSeat separates the background runtime from the user's control surface. Exactly one configured `ManagementSeatId` owns the default visible control plane for the active session. The default is Seat 1 unless the user explicitly selects another Seat.
 
-The management control surface opens on the Management Seat's primary display and provides session status, device/display composition, Start, Stop/Return to Windows, Reconfigure, diagnostics, and recovery controls. Other Seat shells are read-mostly by default and cannot terminate or reconfigure the whole machine without an explicit permission policy.
+The management control surface opens on the Management Seat's primary display and provides game/Seat/Player status, Start/Stop for the relevant Seat, Return to Windows, Reconfigure, diagnostics, and recovery controls. A non-management Seat's minimal launcher is Seat-local by default and cannot terminate or reconfigure the whole machine without an explicit permission policy.
 
 If the configured management display is unavailable, HydraSeat falls back visibly to the current Windows primary display or a documented recovery surface; it never opens an invisible/off-screen control window.
 
@@ -376,3 +376,122 @@ Rules:
 - A phase with unresolved required evidence remains `Current`/incomplete even if every implementation packet is individually `VALIDATED`.
 - `docs/implementation/STATUS.md` records the exact phase-close scope, reviewed commits, test/CI/manual evidence, findings, repairs, and final pass/fail result.
 - Cross-phase prerequisite work explicitly declared by the roadmap may still be pulled forward, but it does not waive the prior phase's close gate.
+
+## D-039 — HydraSeat v1 supports exactly two active Seats
+
+HydraSeat v1 product activation, installer UX, acceptance matrix, documentation, and compatibility evidence target a maximum of two active Seats. Generic internal containers may remain where useful, but v1 must reject plans containing more than two active Seats and must not be delayed by N-Seat generalization.
+
+This decision narrows earlier `two or more` product wording in D-030/D-036 for v1. A later version may revisit the limit after the two-Seat product is mature.
+
+## D-040 — Seat, Player, Game, Two-player setup, and Runtime Session are separate concepts
+
+Persistent hardware configuration must not become a catch-all user/game profile.
+
+- `SeatConfig` describes the physical station only.
+- `PlayerProfile` describes a lightweight person identity/preferences independent from Seat.
+- `GameRecord` describes an installed/discovered title independent from Seat and Player.
+- `TwoPlayerSetup` describes the optional same-game/two-instance compatibility recipe.
+- runtime state binds Seat + Player + Game temporarily while playing.
+
+A Player may move between Seat 1 and Seat 2. A game, account, save, process, or window is not permanently owned by a Seat.
+
+HydraSeat does not become a general credential vault. Provider passwords/tokens remain provider-owned whenever practical; HydraSeat stores only the minimum account reference/selector metadata needed for an already authenticated provider identity.
+
+## D-041 — Game-first UX and a minimal Seat Launcher replace the full-shell v1 goal
+
+The normal v1 UI behaves like a lightweight game launcher:
+
+```text
+choose Game -> choose Seat 1 / Seat 2 / Both -> choose Player(s) -> Play
+```
+
+Click/tap is primary; drag-and-drop is optional convenience. Raw Input, HidHide, IAT, backend, device-path, plan-hash, and protocol terminology belongs in Diagnostics/Expert UI.
+
+An idle Seat may run a minimal `hydra_seat_ui.exe` for Player/game selection, launch progress, warnings, errors/recovery, and `End Playing`. Once the game runs, that UI disappears or remains non-intrusive.
+
+The following are deferred beyond v1: general per-Seat taskbar, wallpaper/desktop zones, arbitrary general-purpose app launching, per-Seat clipboard virtualization, and a full Windows shell replacement. Earlier optional-shell wording is interpreted under this narrower v1 scope.
+
+## D-042 — Game lifecycle is independent per Seat
+
+Whole-machine split/runtime state and per-Seat game lifecycle are distinct.
+
+Required v1 behavior:
+
+- Seat 1 may remain Playing while Seat 2 is Idle;
+- one Seat may stop its own game without stopping the other Seat;
+- an idle Seat may choose another Player/game and start again;
+- while at least one Seat remains active, an idle/ended Seat stays in HydraSeat's minimal waiting/launcher state rather than returning to an unrestricted ordinary Windows desktop;
+- both Seats ending, or an explicit Management UI `Return to Windows`, performs verified whole-machine rollback.
+
+A normal game exit on one Seat is not a crash and is not a whole-machine Stop.
+
+## D-043 — Two-player same-game setup has both automatic and guided manual paths
+
+When both Seats choose the same game, HydraSeat resolves a `TwoPlayerSetup` describing lawful instance separation: instance/data/config directories, arguments/environment, provider choices, account references when supported, bounded launch order, process/window expectations, and input/controller/audio/display requirements.
+
+Resolution order is:
+
+```text
+known validated local/community setup
+ -> validate against local installation/provider/version
+ -> bounded automatic setup generation where safe
+ -> guided manual editor when automation cannot finish
+```
+
+Automatic generation is read-only until reviewed. Any mutation is typed, bounded, user-visible, reversible, and scoped. Manual configuration does not grant arbitrary script execution by default.
+
+HydraSeat never defeats DRM, anti-cheat, account rules, launcher policy, or deliberate single-instance restrictions to make same-game multi-instance work.
+
+## D-044 — Compatibility uses transparent evidence, not an official certification badge
+
+HydraSeat v1 does not require a maintainer-created `HydraSeat Certified`/official support badge.
+
+Compatibility UI may show success/failure counts, sample size, overall percentage, and sub-results such as launch, two-instance start, input isolation, audio routing, and clean shutdown. Percentages are observations, not guarantees.
+
+Aggregation must segment materially different game versions, HydraSeat versions, providers, Windows environments, and compatibility paths. `Untested` means no useful evidence exists; it does not mean unsupported.
+
+## D-045 — Protected games may be explicit experiments but never bypass or safety claims
+
+This decision refines the status wording in D-007 while preserving its no-bypass boundary.
+
+Known anti-cheat/DRM/protected titles are not silently treated like ordinary games. Before any HydraSeat experiment the UI must clearly warn that HydraSeat has not established compatibility or anti-cheat safety, and that the game/protection system may refuse launch, disconnect, block the software, or take action under its own policy.
+
+The user may explicitly opt into an advanced experiment. HydraSeat still does not hide, evade, disable, bypass, or instruct bypass of any protection. A technically successful protected-game run remains `Protected / Experimental` and is never presented as proof of anti-cheat safety.
+
+## D-046 — Compatibility evidence is local-first, privacy-limited, and opt-in for community sharing
+
+Compatibility tests store results locally by default. Community upload is explicit opt-in and must support previewing the exact redacted JSON before submission.
+
+Default shared evidence excludes credentials, passwords, tokens, cookies, raw typed text, Player display names, Windows account names, personal absolute paths, unrelated process data, and unnecessary stable device serials/account identifiers.
+
+The evidence schema is versioned, bounded, and designed so scoring/aggregation rules can evolve without turning diagnostics into telemetry by default.
+
+## D-047 — Core operation is offline-first and compatibility data updates are separate from program updates
+
+HydraSeat core operation must work without a HydraSeat cloud account or continuous network access: Seat/Player configuration, local game discovery where provider metadata is available, saved two-player setups, local compatibility testing, launch/runtime, diagnostics, and recovery remain available offline.
+
+Compatibility/setup catalogs are optional data updates. They may refresh independently and can be disabled while the local cache remains usable. The initial ecosystem should support static/versioned JSON artifact distribution so v1 does not require a custom always-on backend.
+
+Executable/runtime/driver updates are a separate trust domain and require clear user approval plus version/hash/trust verification and rollback/health checking.
+
+## D-048 — Least privilege and a real installer are v1 requirements
+
+Normal `HydraSeat.exe` use and ordinary runtime operations run without elevation whenever Windows permits. UAC is requested only for narrowly defined installation, optional driver/service, explicit system mutation, or recovery operations that genuinely require administrator rights.
+
+Any elevated broker/service exposes only a small typed allowlist and cannot become a general privileged command runner.
+
+A developer CMake/MSVC/Qt workflow is not the end-user distribution contract. A usable v1 requires a Windows installer/repair/uninstaller with prerequisite checks, optional elevated component setup, first-run two-Seat wizard with `Set later`, safe update/rollback, and verified removal of HydraSeat-owned persistent state.
+
+## D-049 — Local game discovery is the normal path; manual executable entry remains a fallback
+
+The game library should discover installed titles read-only from supported local provider/install metadata before asking the user to browse for an EXE. Provider adapters are lawful integration layers, not restriction bypasses.
+
+Power users retain a manual `Add game / EXE` path for unsupported providers and unusual installations. The UI should prefer icons already available from the local executable, shortcut, or provider metadata rather than redistributing a large third-party artwork catalog.
+
+## D-050 — One-developer scope is a design constraint
+
+HydraSeat is a one-developer project unless that changes explicitly. When two technical choices are otherwise reasonable, prefer the one that makes the two-Seat game-first journey, recovery/safety, or compatibility evidence simpler and more reliable.
+
+Features that do not materially improve that v1 journey should normally be deferred rather than expanding HydraSeat into a general Windows multiseat desktop platform.
+
+The canonical product contract for D-039 through D-050 is `docs/PRODUCT_V1.md`.

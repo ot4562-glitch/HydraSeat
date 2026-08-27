@@ -1,271 +1,351 @@
 # HydraSeat Development Roadmap
 
-This file is the phase-level summary. The implementation source of truth is the packetized master roadmap under [`docs/implementation/`](implementation/README.md). Coding agents must read [`STATUS.md`](implementation/STATUS.md), [`DECISIONS.md`](implementation/DECISIONS.md), and the active phase packet before editing code.
+This is the phase-level product roadmap. Packet-level implementation truth lives in [`docs/implementation/`](implementation/README.md), and current evidence/state lives in [`docs/implementation/STATUS.md`](implementation/STATUS.md).
 
-Current default implementation packet:
-
-```text
-P8-JOURNAL-01 — Crash journal and safe-mode marker
-```
-
-Validate the roadmap with:
-
-```text
-python tools/validate_implementation_roadmap.py
-```
-
----
-
-### Phase completion rule
-
-A **phase** means a numbered roadmap phase in this file, not one chat turn or one implementation packet. After the phase's required packets and acceptance gates appear complete, HydraSeat performs a separate **Phase-close verification** across the entire phase-owned codebase and cross-packet integration. The phase is not marked `Complete`, and ordinary progression to the next numbered phase does not begin, until that verification passes. Findings reopen the owning packet or create a focused repair task, after which the phase-close verification is rerun. Explicitly declared cross-phase prerequisites remain allowed.
-
----
+The canonical v1 product definition is [`PRODUCT_V1.md`](PRODUCT_V1.md).
 
 ## Product north star
 
-HydraSeat is being built toward a practical shared-PC gaming product: when one Windows gaming PC has enough hardware headroom, a household or group of friends should be able to use separate monitors and input/audio devices as two or more local gaming Seats instead of requiring a second PC for every player.
+HydraSeat is built for households where one Windows gaming PC has useful CPU/GPU/memory/I/O headroom, but buying and maintaining a second complete desktop only so two people can play at the same time is expensive or inconvenient.
 
-The roadmap therefore prioritizes the complete user journey, not only isolated technical primitives:
+v1 therefore has a narrow target:
 
-- configure Seats without developer tools;
-- run different games/apps concurrently with measured zero-bleed behavior;
-- allow separate instances of the same multiplayer title only for exact profiles where the title/launcher/account/license/single-instance rules permit it;
-- keep overhead low enough to preserve useful gaming performance;
-- Start, Stop / Return to Windows, Reconfigure, diagnose, recover, install, update, and uninstall safely;
-- publish exact compatibility evidence rather than universal game-support claims;
-- evolve toward a broadly usable open-source/community project after the project license and contribution terms are formally resolved.
+> **Two people, one sufficiently capable Windows gaming PC, two local gaming Seats.**
 
-This product direction does not weaken the current safety boundary: HydraSeat does not bypass anti-cheat, DRM, protected processes, account limits, launcher policy, or single-instance protections.
+HydraSeat v1 is not a general Windows multiseat desktop platform. It is game-first, offline-first, limited to two active Seats, and designed so one person can stop/change games without interrupting the other.
 
----
+Core product concepts stay separate:
 
-## Phase 0 — Research and Foundation (Complete)
+```text
+Seat              = physical gaming station
+Player            = lightweight person profile
+Game              = installed/discovered title
+Two-player setup  = optional same-game two-instance recipe
+Runtime Session   = temporary Seat + Player + Game binding
+```
 
-- [x] Establish C++20 / optional Qt 6 project architecture
-- [x] Configure agent workflow and autonomous verification rules
-- [x] Document Windows input/display architecture
-- [x] Evaluate Interception, HidHide, ViGEmBus, IddCx/IDD, ProtoInput, Universal Split Screen, Nucleus Co-op, devreorder, Duo, and ASTER public behavior
-- [x] Record clean-room, source-license, and third-party research policy
+HydraSeat does not bypass anti-cheat, DRM, protected processes, account rules, launcher policy, or deliberate single-instance restrictions.
 
-Research:
+## Phase completion rule
 
-- [Phase 0 research](PHASE0_RESEARCH.md)
-- [Related systems research](RELATED_SYSTEMS_RESEARCH.md)
-- [Clean-room policy](CLEAN_ROOM_POLICY.md)
+A numbered phase is not complete merely because implementation packets compile. The phase closes only after its declared automated, Windows, physical/manual, recovery, and cross-packet acceptance gates pass. Synthetic or HydraSeat-owned controlled evidence never substitutes for a required physical/game gate.
+
+Selected reliability/recovery prerequisites may be implemented early when a risky earlier packet depends on them.
 
 ---
 
-## Phase 1 — Hardware Detection (Complete)
+## Phase 0 — Research and Foundation — Complete
 
-- [x] Implement hardware detector and diagnostic CLI
-- [x] Detect physical monitors and likely virtual displays
-- [x] Resolve distinct keyboards/mice/touchpads through Raw Input plus SetupAPI/ConfigMgr identity
-- [x] Detect XInput and generic HID controllers
-- [x] Add deterministic identity tests and Windows/MSVC CI
+Goals achieved:
 
----
+- C++20 / CMake foundation and Windows CI direction;
+- Windows input/display architecture research;
+- related-system research including ASTER, ProtoInput, Nucleus Co-op, Universal Split Screen, HidHide, devreorder, Duo, and documented Microsoft APIs;
+- clean-room / third-party source policy;
+- agent workflow and evidence rules.
 
-## Phase 2 — Seat Composition and Assignment UI (Complete)
+Product consequence:
 
-- [x] Replace single-display workspace assumptions with multi-display Seat composition
-- [x] Support explicit Seat primary display
-- [x] Assign keyboard, mouse, controller, render, and capture endpoint identities
-- [x] Enforce exclusive ownership by default with explicit sharing
-- [x] Save/load validated transactional UTF-8 JSON profiles
-- [x] Restore assignments in the current Win32 drag/drop prototype
+- HydraSeat does not assume the idea is unprecedented;
+- proprietary systems remain behavior/documentation references rather than implementation sources;
+- anti-cheat/DRM bypass is outside the product boundary.
 
 ---
 
-## Phase 3 — Input Compatibility and Isolation (Current)
+## Phase 1 — Hardware Detection — Complete
 
-### Completed implementation foundations
+Goals achieved:
 
-- [x] Raw Input observation and stable physical-device identity
-- [x] Composite-HID-aware hot-plug ledger
-- [x] Fail-closed exclusive keyboard/mouse Seat routing
-- [x] Gate A/B two-window diagnostic lab and JSONL traces
-- [x] Capability planner, backend descriptors, profile templates, and `hydra_plan`
-- [x] Versioned Gate C host/target protocol and local named-pipe transport
-- [x] Process-local adapter DLL with versioned C ABI
-- [x] Independent synthetic keyboard/mouse/cursor/focus state in two controlled processes
-- [x] Bounded per-target writer queues
-- [x] Fail-closed stale-sequence and child lifecycle tests
+- physical display discovery;
+- stable keyboard/mouse/HID identity through Raw Input + SetupAPI/ConfigMgr;
+- controller discovery foundations;
+- deterministic identity tests;
+- Windows/MSVC CI evidence.
 
-### Remaining critical path
-
-- [x] Controlled probe records real OS polling/cursor/focus baseline (`P3-API-01`)
-- [x] Startup-loaded polling shim for HydraSeat-owned probes
-- [x] Cursor/focus/capture shim for HydraSeat-owned probes
-- [x] Raw Input registration/data behavior probe (`P3-RAW-01`)
-- [x] Raw Input virtualization shim (`P3-RAW-02`)
-- [x] x86/x64 controlled adapter matrix
-- [x] Controlled normalized XInput state/remapping correctness remediation (`P3-CTRL-01`; fork PR #15 run `32832036967` validates native x64/x86 36/36 and x64-host-to-x64/x86 zero-cross controller acceptance)
-- [x] Controlled DirectInput enumeration/order/visibility adapter (`P3-CTRL-02`; fork PR #16 run `32840474306` validates native x64/x86 controlled policy/probes and read-only DirectInput 8 observation)
-- [ ] Production controller polling/routing and physical vibration evidence (later profile/runtime work)
-- [x] Input latency, queue, drop, and receiver-evidence-aware cross-Seat metrics (`P3-MET-01`; fork PR #18 run `32857666855` validates native x64/x86 43/43 CTest; physical zero-bleed/latency remains manual)
-- [ ] Physical Gate A/B/C acceptance with two input sets (`P3-HW-01` tooling `CODE_COMPLETE`; real hardware manifest/report still pending)
-- [x] Independent watchdog lease and bounded rollback foundation (`P8-WATCH-01`; fork PR #21 run `32919928489` validates native x64/x86 full CTest including forced host-death cleanup while Gate C cross-architecture remains green)
-- [x] Durable crash journal/safe-mode marker and Gate C watchdog/crash rollback acceptance are `VALIDATED` (`P8-JOURNAL-01` and `P3-REC-01`). Repair head `bb8fd28` passes PR #23 run `32973197727` on Windows x64/x86 plus Gate C cross-architecture; human actual Sign out and actual Restart also pass with exact-identity cleanup, zero HydraSeat orphans, durable `RollbackVerified`/`CleanStop`, and a verified `LastBootUpTime` transition on Restart
-- [ ] Emergency reset CLI (`P8-RESET-01` CODE_COMPLETE; standalone exact-identity reset and real dead/live-host + watchdog-race process tests pass 3/3 on local x64/x86, and Gate C cross regressions pass. Current interactive full suites are 55/56 on both architectures only at the pre-existing live-desktop cursor/focus assertion; exact-head non-interactive CI and actual emergency shortcut/task execution remain pending before VALIDATED)
-- [x] Read-only HidHide availability/capability probe (`P3-D-01`; fork PR #20 run `32915683414` validates final head `146b3e6` on native x64/x86 while Gate C cross-architecture remains green)
-- [ ] Guarded HidHide session-cloak experiment (`P3-D-02`; blocked by P3-HW-01 physical acceptance and P8-RESET-01; P3-REC-01 is validated)
-- [x] Open-source application profile (`P3-E-01` VALIDATED; exact code head `12957f0`, fork PR #24 run `33038227992` passes Windows x64/x86, Gate C cross-architecture, and pinned real GLFW 3.5.1 acceptance with 4/4 callbacks per Seat, 0 cross-pattern callbacks, 8 receiver-verified events, direct key cross-state separation, forced Job cleanup, and native relaunch)
-- [ ] First non-anti-cheat game profile
-- [ ] Two different target/game zero-bleed proof
-
-Detailed implementation:
-
-- [Phase 3 packet roadmap](implementation/PHASE3_INPUT_ISOLATION.md)
-- [Phase 3 design](PHASE3_INPUT_ISOLATION_DESIGN.md)
-- [Gate A/B testing](PHASE3_GATE_A_B_TESTING.md)
-- [Gate C testing](PHASE3_GATE_C_TESTING.md)
-
-Phase 3 closes only after controlled probes observe Seat-local values through the actual Windows API surfaces required by supported profiles, physical/recovery gates pass, and two different explicit targets produce objective zero-bleed evidence.
+The detector observes hardware only. Detection is not isolation.
 
 ---
 
-## Phase 4 — Production Runtime, Process/Window Ownership, and Display Routing (Planned)
+## Phase 2 — Two-Seat Hardware Composition — Complete foundation
 
-- [ ] Move runtime authority from GUI into `hydra_host.exe`
-- [ ] Add versioned UI/CLI/watchdog host protocol
-- [ ] Add Management Seat control console on Seat 1 primary by default, with safe visible fallback
-- [ ] Add verified `Stop / Return to Windows` and `Reconfigure` workflows that restore ordinary one-PC use before editing/restarting
-- [ ] Track Seat-owned process trees with Job Objects where compatible
-- [ ] Track Seat-owned windows without touching unrelated windows
-- [ ] Build DisplayConfig/DXGI topology and stable output identities
-- [ ] Implement multi-monitor Seat display groups and DPI-aware coordinate transforms
-- [ ] Place/restore owned windows and capability-gate fullscreen modes
-- [ ] Reconcile process/window/display events through one deterministic policy engine
-- [ ] Handle display removal/reconnect and host restart safely
-- [ ] Define optional virtual-display backend contract
-- [ ] Integrate one lawful external virtual-display adapter
-- [ ] Decide custom IddCx/IDD adoption only after measured feasibility
+Current foundation includes:
 
-Detailed implementation: [Phase 4 packet roadmap](implementation/PHASE4_RUNTIME_DISPLAY.md)
+- multi-display Seat composition;
+- explicit primary display;
+- keyboard/mouse/controller/render/capture identities;
+- exclusive resource ownership by default;
+- transactional UTF-8 JSON persistence;
+- current Win32 drag/drop configuration prototype.
 
----
+v1 product adjustment:
 
-## Phase 5 — Two-Seat Gaming MVP (Planned)
+- product activation is capped at two Seats;
+- Seat means physical station only, not Player/Game ownership;
+- hardware assignments may be incomplete/unset until a selected game requires them;
+- the end-user flow becomes an optional first-run wizard plus later Seat settings rather than a developer configuration screen.
 
-- [ ] Enumerate and validate stable audio endpoints
-- [ ] Implement capability-gated per-process audio routing
-- [ ] Move controller routing into production host/profile path
-- [ ] Compile one immutable two-Seat activation plan
-- [ ] Apply/verify/rollback all process/window/display/input/controller/audio actions transactionally
-- [ ] Produce integrated latency/drop/bleed/resource report
-- [ ] Validate an end-to-end controlled/open-source two-Seat session
-- [ ] Validate two different non-anti-cheat game profiles
-- [ ] Record an optional same-title/two-instance compatibility case only when the exact game/provider/account/license/single-instance rules permit it; this is not required for the baseline MVP
-- [ ] Test target restart and input/display/controller/audio reconnect
-- [ ] Provide truthful start/stop/status/reset UI
-- [ ] Publish machine-readable compatibility/hardware matrix
-
-Detailed implementation: [Phase 5 packet roadmap](implementation/PHASE5_TWO_SEAT_MVP.md)
+A later schema migration will separate physical Seat persistence from Player/Game/Two-player setup data.
 
 ---
 
-## Phase 6 — Launcher and Profile Manager (Planned)
+## Phase 3 — Input Compatibility and Isolation — Current
 
-- [ ] Define versioned Seat/target/compatibility/session profile schemas
-- [ ] Add transactional migration and backup
-- [ ] Build provider-neutral application catalog
-- [ ] Define launcher provider interface
-- [ ] Implement custom executable and Steam path first
-- [ ] Add Epic, EA, and GOG one provider packet at a time
-- [ ] Compile immutable provider-aware launch plans and plan hashes
-- [ ] Show exact preflight risks, mutations, capabilities, and recovery requirements
-- [ ] Provide typed profile editor/manager UI
-- [ ] Provide profile/catalog/plan CLI
-- [ ] Add portable import/export with redaction and hardware identity remapping
-- [ ] Maintain provider/profile regression fixture corpus
-- [ ] Make compatibility/profile formats contribution-friendly with provenance, validation, redaction, and exact evidence requirements for a future public community catalog
+### Completed/validated controlled foundations
 
-Detailed implementation: [Phase 6 packet roadmap](implementation/PHASE6_LAUNCHER_PROFILES.md)
+- Raw Input observation and stable physical-device identity;
+- composite-HID-aware hot-plug tracking;
+- fail-closed exclusive Seat routing in HydraSeat-owned labs;
+- capability planner and backend descriptors;
+- versioned Gate C protocol/adapter boundary;
+- controlled polling/cursor/focus/capture virtualization;
+- controlled Raw Input API virtualization;
+- x86/x64 controlled matrix;
+- controlled XInput state/remapping semantics;
+- controlled DirectInput visibility/order policy;
+- input latency/bleed metrics;
+- watchdog/crash journal/emergency reset prerequisites;
+- one pinned open-source external application acceptance path.
 
----
+### Required remaining gates
 
-## Phase 7 — Seat Shell and Local-PC Experience (Planned)
+- real two-keyboard/two-pointing-device Gate A/B/C physical acceptance;
+- guarded device-cloaking/suppression experiment only after recovery prerequisites and physical evidence;
+- first real non-protected game compatibility entry;
+- two different real-game zero-bleed evidence;
+- Phase 3 close verification.
 
-- [ ] Launch one scoped shell process per Seat
-- [ ] Keep an always-available HydraSeat management-console entry on the configured Management Seat shell; non-management Seats remain read-mostly for whole-machine controls
-- [ ] Add shared UI localization catalogs with English default plus Korean (`ko-KR`) and Simplified Chinese (`zh-CN`), while source comments and machine-readable identifiers remain English
-- [ ] Add Seat launcher and pinned profiles
-- [ ] Add Seat-owned task/window surface
-- [ ] Add per-Seat multi-monitor wallpaper and desktop zones
-- [ ] Render independent software cursors inside Seat display groups
-- [ ] Add Seat-scoped launcher/window/recovery hotkeys
-- [ ] Add Seat-scoped runtime notifications
-- [ ] Define truthful optional clipboard policy
-- [ ] Complete DPI/accessibility/localized-layout readiness across English/Korean/Chinese UI
-- [ ] Create internal shell extension boundary
-- [ ] Prove shell crash/restart and Explorer coexistence
+### Product rule
 
-Detailed implementation: [Phase 7 packet roadmap](implementation/PHASE7_SEAT_SHELL.md)
+Phase 3 should stop expanding merely to chase universal game compatibility. Once the declared physical and real-game gates prove a viable safe path, work advances toward the complete two-player user journey.
+
+Known protected titles may later be offered only as explicit advanced experiments with a strong warning; a successful launch is not anti-cheat safety evidence.
 
 ---
 
-## Phase 8 — Reliability, Watchdog, Installer, and Updates (Planned; selected prerequisites may start early)
+## Phase 4 — Production Runtime, Independent Seat Lifecycle, and Display/Window Ownership — Early foundation in progress
 
-- [ ] Independent watchdog lease and allowlisted rollback protocol
-- [ ] Emergency reset CLI
-- [ ] Crash journal and safe-mode startup marker
-- [ ] Narrow elevated privilege broker
-- [ ] User-selectable runtime modes: Manual, hidden BackgroundIdle, and validated AutoActivate-on-logon; controller remains reopenable from the Management Seat
-- [ ] Optional component manifest/hash/signature/trust policy
-- [ ] Production code/driver signing pipeline
-- [ ] Reversible installer/repair/uninstaller
-- [ ] Signed staged update with health check and rollback
-- [ ] Redacted diagnostic/support bundle
-- [ ] Long soak, reboot, and fault-injection campaign
+Phase 4 moves validated primitives into production runtime authority.
 
-Detailed implementation: [Phase 8 packet roadmap](implementation/PHASE8_RELIABILITY_DISTRIBUTION.md)
+Required outcomes:
 
----
+- `hydra_host.exe` owns runtime state independently from the visible UI;
+- versioned UI/CLI/watchdog IPC;
+- temporary Seat-owned process trees and windows;
+- stable physical display topology and Seat-local display groups;
+- deterministic window placement/restore;
+- Management UI can close/reopen without stopping games;
+- safe `Return to Windows` and reconfiguration flow;
+- **independent Seat game lifecycle**:
+  - Seat 1 may remain Playing while Seat 2 becomes Idle;
+  - Seat 2 may launch another game without restarting Seat 1;
+  - one Seat game exit is not a whole-machine Stop;
+  - while one Seat remains active, the other stays in HydraSeat idle/wait state;
+  - both Seats ended or explicit whole-machine return triggers verified rollback;
+- display hot-plug and runtime recovery preserve ownership boundaries.
 
-## Phase 9 — Compatibility SDK and Extension Ecosystem (Planned)
+Current branch truth:
 
-- [ ] Freeze public C/schema/IPC SDK boundary and compatibility policy
-- [ ] Add capability/permission negotiation
-- [ ] Add signed/hash-verified extension packages
-- [ ] Run normal extensions out of process with bounded IPC/resources
-- [ ] Publish backend/provider/profile/shell/diagnostic extension contracts
-- [ ] Add local extension registry and optional signed catalog contract
-- [ ] Build extension conformance kit and samples
-- [ ] Complete extension threat model and security review
-- [ ] Keep core fully functional offline with all extensions disabled
+- background runtime host, host IPC, Seat process/window ownership, and early display/control policy foundations exist locally/on the development branch;
+- they are not allowed to imply Phase 4 completion while Phase 3 physical close gates remain pending;
+- the current global-session command model still needs explicit independent per-Seat game-lifecycle work.
 
-Detailed implementation: [Phase 9 packet roadmap](implementation/PHASE9_COMPATIBILITY_SDK.md)
+Optional virtual displays remain secondary. Physical local monitors are the required v1 path.
 
 ---
 
-## Phase 10 — Release Hardening and 1.0 Readiness (Planned)
+## Phase 5 — Real Two-Seat Gaming MVP — Planned
 
-- [ ] Freeze exact supported platform/hardware/profile scope
-- [ ] Qualify latency, CPU, memory, queue, rollback, and scalability budgets
-- [ ] Run complete compatibility regression matrix
-- [ ] Complete product threat model, hardening, privacy, and dependency review
-- [ ] Run long-duration release soak/fault/reboot/update campaign
-- [ ] Complete clean-machine onboarding, accessibility, help, and recovery docs
-- [ ] Resolve project license/contribution terms and third-party notices
-- [ ] Publish contribution/onboarding guidance and community compatibility-profile evidence rules once the license gate permits describing the project as open source
-- [ ] Produce signed reproducible artifacts, checksums, SBOM, and provenance
-- [ ] Establish support/regression/security intake policy
-- [ ] Pass release-candidate stabilization gate
-- [ ] Publish and immediately revalidate 1.0 artifacts
-- [ ] Publish maintenance/EOL/retest policy
+This phase proves HydraSeat as a gaming product rather than a collection of primitives.
 
-Detailed implementation: [Phase 10 packet roadmap](implementation/PHASE10_RELEASE_HARDENING.md)
+Required outcomes:
+
+- exactly two v1 Seats;
+- requirement-aware hardware preflight;
+- production controller routing for selected test games;
+- per-process audio routing where required;
+- transactional input/process/window/display/controller/audio activation;
+- two different real non-protected games running concurrently;
+- objective receiver-aware input bleed/latency evidence;
+- one player exits while the other game continues;
+- idle Seat can start another game;
+- game restart/device reconnect behavior;
+- both players finish -> verified ordinary Windows restore;
+- truthful error/status/recovery UI.
+
+The MVP does not require dozens of games. It requires a small number of real scenarios that prove the full lifecycle.
+
+A lawful same-title/two-instance demonstration may be recorded here when available, but the reusable user-facing setup system belongs to Phase 6.
 
 ---
 
-## Product-defining traceability
+## Phase 6 — Game Library, Player Profiles, and Two-Player Setup — Planned
 
-The original Seat-first requirements and the packets/evidence that prove them are mapped in [Product Requirement Traceability](implementation/TRACEABILITY.md).
+Phase 6 turns the MVP into a repeatable game-first product.
 
-The complete execution rules are in:
+### Game discovery
 
-- [Master implementation roadmap](implementation/README.md)
-- [Non-negotiable decisions](implementation/DECISIONS.md)
-- [Codex implementation playbook](implementation/CODEX_PLAYBOOK.md)
-- [Current packet status](implementation/STATUS.md)
+- provider-neutral installed-game catalog;
+- local read-only discovery first;
+- Steam path/provider integration first where practical;
+- Epic/EA/GOG as separate bounded provider work;
+- manual `Add game / EXE` fallback;
+- local executable/shortcut/provider icons where possible;
+- provider credentials remain provider-owned.
+
+### Player profiles
+
+- lightweight display name/avatar;
+- recent games and recent Seat preference;
+- per-game instance/data preferences;
+- provider account references only where supported;
+- Player remains independent from Seat;
+- no HydraSeat password vault.
+
+### Two-player setup
+
+When both Seats choose the same game:
+
+- find a known local/community setup;
+- validate it against local provider/version/environment;
+- otherwise attempt bounded automatic setup creation;
+- otherwise offer a guided manual editor;
+- represent instance directories, args, provider choices, start order, window/input/audio/controller requirements, limitations, and evidence;
+- never bypass game/provider restrictions;
+- validate/import/export through typed schemas rather than arbitrary JSON/script execution.
+
+### UX
+
+Normal UI uses `Game`, `Player`, `Seat`, and `Two-player setup` terminology. Internal Target/Compatibility/Session schemas may remain separate engineering concepts but should not be imposed on normal users.
+
+---
+
+## Phase 7 — Minimal Seat Launcher and Game-First UX — Planned
+
+The old vision of a full per-Seat desktop shell is intentionally reduced for v1.
+
+Required v1 surface:
+
+- lightweight game-library main UI;
+- click/tap first; drag-and-drop as optional shortcut;
+- optional first-run two-Seat wizard with `Set later`;
+- minimal `hydra_seat_ui.exe` on an idle Seat;
+- Player selection/change;
+- recent/available game selection;
+- launch/preflight progress;
+- protected-game warning/advanced experiment acknowledgement;
+- errors and bounded recovery actions;
+- `End Playing`;
+- UI disappears or remains non-intrusive while the game runs;
+- English, Korean, and Simplified Chinese localization readiness;
+- DPI/accessibility testing.
+
+Deferred beyond v1:
+
+- general Seat taskbar;
+- wallpaper/desktop zones;
+- arbitrary general app launcher;
+- clipboard virtualization;
+- full Windows shell replacement.
+
+---
+
+## Phase 8 — Reliability, Installer, Least Privilege, and Updates — Planned with some prerequisites already validated
+
+Existing cross-phase foundations include watchdog, crash journal, and emergency reset work.
+
+Remaining product outcomes:
+
+- least-privilege runtime: normal UI/runtime without elevation when Windows permits;
+- narrow typed privileged broker only for operations genuinely requiring UAC;
+- real Windows installer/repair/uninstaller;
+- optional driver/service setup only when required;
+- first-run wizard integration;
+- clean uninstall with ordinary Windows postconditions;
+- staged signed/hash-verified executable updates;
+- **program/runtime/driver update requires user approval**;
+- compatibility/setup catalog refresh is a separate data update path;
+- compatibility catalog can be disabled and local cache continues working;
+- core remains fully usable offline with already available local games/setups;
+- diagnostics/support bundle redaction;
+- reboot/logon/fault/soak acceptance.
+
+A developer-only CMake/MSVC install path cannot satisfy Phase 8.
+
+---
+
+## Phase 9 — Community Compatibility and Setup Ecosystem — Planned
+
+The first ecosystem goal is not a large plugin SDK. It is scalable compatibility knowledge for a one-maintainer project.
+
+Required outcomes:
+
+- versioned local compatibility-result JSON schema;
+- explicit opt-in community submission;
+- visible redacted JSON preview before upload;
+- no credentials/raw typed text/Player names/personal paths by default;
+- versioned compatibility/setup catalog format;
+- success/failure counts, sample size, percentages, and sub-results;
+- aggregation keyed/segmented by materially relevant environment such as game version, HydraSeat version, provider, Windows, and compatibility path;
+- protected-game results remain `Protected / Experimental` and never imply anti-cheat safety;
+- no mandatory `HydraSeat Certified` support badge;
+- initial static/versioned JSON artifact distribution so v1 does not require a custom always-on backend;
+- signed/hash/trust policy for downloaded community setup data;
+- contribution validation/provenance/redaction rules.
+
+A broader binary extension SDK may remain a later sub-track only where real product needs justify its complexity.
+
+---
+
+## Phase 10 — v1 Release Hardening — Planned
+
+v1 is complete when the user journey works on real hardware, not when a packet counter reaches 100%.
+
+Required release gate:
+
+- clean Windows install and uninstall;
+- exactly two supported v1 Seats;
+- real two-display/two-input physical acceptance;
+- objective tested zero-bleed evidence;
+- separate audio/controller routing for declared scenarios;
+- two different real games concurrently;
+- at least one lawful real same-title/two-instance demonstration;
+- Game-first UX + Player profiles;
+- automatic local game discovery + manual fallback;
+- automatic + manual two-player setup paths;
+- one Seat ending/changing games while the other continues;
+- idle Seat Launcher;
+- both Seats end -> verified ordinary Windows restore;
+- watchdog/crash/emergency recovery;
+- offline core operation;
+- local-first compatibility JSON + optional community sharing;
+- user-approved executable update path;
+- latency/CPU/memory/resource budgets measured;
+- security/privacy/dependency review;
+- clean-machine onboarding and recovery docs;
+- checksums/SBOM/provenance/reproducible release artifacts where practical;
+- project license/contribution terms resolved before describing the release as open source.
+
+There is no required count of officially certified games. HydraSeat should publish evidence and limitations rather than a misleading universal support promise.
+
+---
+
+## Cross-cutting rules
+
+### Compatibility truth
+
+- `Untested` means untested, not unsupported.
+- Community success percentage is evidence, not a guarantee.
+- Protected experimental success does not prove anti-cheat safety.
+- Synthetic/controlled CI does not replace physical/game evidence.
+
+### Privacy
+
+Compatibility collection is local-first. Upload is explicit opt-in and previewable/redacted.
+
+### Legal boundary
+
+HydraSeat is intended to become an open-source project, but the current repository license/contribution terms are unresolved. Source reuse and public claims must continue to follow [`CLEAN_ROOM_POLICY.md`](CLEAN_ROOM_POLICY.md) until the release legal gate is complete.
+
+### One-developer scope rule
+
+When a proposed feature does not materially improve the two-Seat game-first user journey, its recovery/safety, or its compatibility evidence, defer it rather than expanding HydraSeat into a general multiseat desktop system.

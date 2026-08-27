@@ -2,416 +2,561 @@
 
 [English](README.md) | [한국어](README.ko.md) | **简体中文**
 
-HydraSeat 是一个实验性的 Windows 本地游戏多席位（multiseat）框架，目标是在一台物理 Windows PC 上提供多个彼此独立的本地游戏环境。仓库许可证目前尚未正式确定；复用外部代码前请先阅读[洁净室策略](docs/CLEAN_ROOM_POLICY.md)。
+> **一台性能充足的 Windows 游戏 PC，两名本地玩家，各自的显示器、输入设备、手柄和音频——不需要虚拟机、远程桌面或游戏串流。**
 
-> 本文件是简体中文 README。实现状态、命令和稳定标识符以[英文 README](README.md)为准。
+HydraSeat 是一个实验性的 Windows 本地游戏多座席项目，面向这样一种家庭场景：现有游戏 PC 仍有明显的 CPU、GPU、内存和 I/O 余量，但仅仅为了让第二个人同时玩游戏，再购买和维护一整台台式机成本过高或不方便。
+
+v1 的目标有意保持狭窄：
+
+> **让两个人把一台性能足够的 Windows 游戏 PC 的剩余性能，作为两个本地游戏座席来共享。**
+
+HydraSeat 正在公开开发，并以未来的开源发布模式为目标。不过，**当前仓库尚未正式声明项目许可证和贡献条款**，因此在该法律门槛解决之前，不能把当前仓库描述为法律意义上的开源项目。请参阅 [Clean-room 与许可策略](docs/CLEAN_ROOM_POLICY.md)。
 
 ---
 
-## 🎯 项目目标
+## 为什么要做 HydraSeat
 
-HydraSeat 希望在不依赖虚拟机、远程桌面或游戏串流的前提下，让**一台物理 Windows PC 在体验上像多台独立的本地游戏 PC**。
+现代游戏 PC 的性能不断提高，但许多游戏并不会持续占满全部 CPU 核心、内存和 GPU 能力。于是，一个人在玩游戏时，机器往往仍有可利用的性能余量。
 
-核心抽象是 **Seat（席位）**，而不是单个显示器。一个 Seat 可以同时拥有多个显示器、输入设备、音频端点、进程和窗口。
+而同一家庭中的第二个人如果也想同时玩游戏，通常仍需要另一台完整 PC。
+
+HydraSeat 尝试改变这个取舍：
 
 ```text
-Physical Windows PC
-├─ LG Monitor
-├─ Samsung Monitor
-├─ BenQ Monitor
-├─ Keyboard A / Mouse A
-├─ Keyboard B / Mouse B
-├─ Controller A / Controller B
-├─ Headset A
-└─ Speakers B
-
-HydraSeat
-├─ Seat 1 — "Player 1 PC"
-│  ├─ LG Monitor       (Primary)
-│  ├─ Samsung Monitor  (Secondary)
-│  ├─ Keyboard A
-│  ├─ Mouse A
-│  ├─ Controller A
-│  ├─ Headset A
-│  └─ Seat 1 拥有的游戏 / 应用
+一台 Windows 游戏 PC
 │
-└─ Seat 2 — "Player 2 PC"
-   ├─ BenQ Monitor     (Primary)
-   ├─ Keyboard B
-   ├─ Mouse B
-   ├─ Controller B
-   ├─ Speakers B
-   └─ Seat 2 拥有的游戏 / 应用
-```
-
-目标体验并不是“一台 PC 接了三台显示器”，而更接近**“一台双显示器 PC + 一台单显示器 PC，只是底层共享同一套硬件”**。
-
-Windows 默认把前台焦点、鼠标光标、键盘状态和桌面视为全局资源。HydraSeat 的长期工作是对本地游戏所需要的这些状态进行按 Seat 虚拟化或中介，使每个 Seat 尽可能独立运行。
-
-### 产品北极星：一台高性能 PC，多个本地玩家
-
-HydraSeat 的目标不是停留在输入隔离研究工具，而是逐步成为家庭和朋友可以实际使用的共享 PC 产品。当一台电脑拥有足够的 CPU、GPU、内存以及显示和输入设备余量时，家庭成员或朋友应当能够把一台 Windows 游戏 PC 同时作为两个或更多本地游戏席位使用。
-
-主要使用场景包括：
-
-- 两个人在不同 Seat 上同时玩不同的游戏；
-- 只有在游戏、启动器、账号/许可证规则、单实例行为以及明确的 HydraSeat 兼容性配置都允许时，两个 Seat 才运行同一多人游戏的独立实例；
-- 一个人玩游戏，同时另一个 Seat 运行其他游戏或普通应用；
-- 无需重启，也无需开发者专用恢复步骤，就可以返回普通的单机 Windows 状态。
-
-HydraSeat **不会**绕过 DRM、反作弊、账号限制、启动器限制、受保护进程或游戏的单实例保护。因此，同一游戏的多 Seat 运行属于按游戏验证的兼容性能力，而不是对所有游戏的通用承诺。
-
-产品化还意味着：引导式设备/Seat 配置、经过测量的低开销、精确的兼容性证据、安全的安装/更新/卸载/恢复，以及未来便于社区贡献配置、兼容性结果、诊断和扩展的格式。长期目标是把 HydraSeat 发展为可广泛使用的开源项目，但当前仓库的许可证和贡献条款**尚未正式确定**，因此在该法律门槛解决之前，不应把当前仓库描述为开源项目。
-
-### Management Seat 与后台运行
-
-默认情况下，**Seat 1 是 Management Seat（管理席位）**。当分席会话处于活动状态时，打开 `HydraSeat.exe` 会把管理控制台放到 Seat 1 的主显示器上。
-
-关闭管理窗口**不会**停止分席会话。`hydra_host.exe` 与 `hydra_watchdog.exe` 继续在后台工作；再次打开 HydraSeat 时会连接到已有 Host，并把控制台重新显示在 Management Seat 的显示器上。
-
-```text
-HydraSeat — Management Seat
-├─ 当前状态: Normal Windows / Starting / Split Active / Degraded / Recovery Required
-├─ Seat 1: LG + Samsung | Keyboard A | Mouse A | Controller A | Headset
-├─ Seat 2: BenQ         | Keyboard B | Mouse B | Controller B | Speakers
+├─ Seat 1
+│  ├─ 显示器 A
+│  ├─ 键盘 / 鼠标 A
+│  ├─ 手柄 A
+│  └─ 音频 A
 │
-├─ [ 启动分席会话 ]
-├─ [ 停止 / 返回普通 Windows ]
-├─ [ 重新配置显示器和输入设备 ]
-├─ [ 识别 / 测试设备 ]
-├─ [ 启动模式 ] Manual | Background Idle | Auto-Activate Validated Session
-├─ [ 诊断 ]
-└─ [ 恢复 / Reset ]
+└─ Seat 2
+   ├─ 显示器 B
+   ├─ 键盘 / 鼠标 B
+   ├─ 手柄 B
+   └─ 音频 B
 ```
 
-`Stop / Return to Windows` 不是简单的关闭窗口。Host 必须回滚本次 Seat 会话修改过的输入、设备、窗口、显示器、音频、控制器和 Shell 状态，并确认普通 Windows 输入与显示状态已经恢复，之后才可以报告 `Stopped`/`Idle`。
+目标用户包括情侣、兄弟姐妹、室友、家庭成员和朋友：他们已经拥有一台足够强的 PC，希望利用空闲性能，而不是再购买第二台完整台式机。
 
-`Reconfigure` 默认采用安全流程：
-
-```text
-Active split session
-  -> Stop / Return to Windows + 验证 rollback
-  -> 在 Management Seat 显示器上打开配置界面
-  -> 识别 / 测试 / 重新分配显示器、键盘、鼠标、控制器和音频
-  -> validate + 保存新的 plan
-  -> Start Now，或继续保持普通 Windows 状态
-```
-
-计划支持三种启动模式：
-
-- **Manual** — 用户打开 HydraSeat 并按下 Start 之前不进行分席。
-- **Background Idle** — 登录时 Host/Watchdog 静默启动，但 PC 仍保持普通单机状态，直到 Management Seat 手动 Start。
-- **Auto-Activate Validated Session** — 只允许自动恢复一个明确选择、之前已验证的 Seat 布局。crash journal、safe mode、硬件/拓扑、capability、privilege、watchdog 与 rollback preflight 必须全部通过；否则安全地保持 Idle，而不是进入半完成的分席状态。
-
-### 语言支持
-
-UI/UX 的基准语言是英语 `en-US`。初始计划支持：
-
-- English — `en-US`
-- 한국어 — `ko-KR`
-- 简体中文 — `zh-CN`
-
-用户可见文本将使用稳定的 localization message ID，并以英语作为 fallback。以下内容保持稳定英文标识，不做本地化：
-
-- 源代码注释与开发者 docstring；
-- 协议和 schema key；
-- CLI 参数；
-- diagnostic/error code；
-- capability/backend/profile/packet ID。
-
-完整规则参见 [Localization Policy](docs/LOCALIZATION.md)。README 已提供多语言版本，并不表示运行时 UI 本地化已经实现；该工作由 `P7-I18N-01` 跟踪。
+HydraSeat 并不保证任意 PC 都能流畅同时运行两个游戏。所选工作负载仍然需要足够的 CPU、GPU、内存、存储、显示输出和外设能力。
 
 ---
 
-## 🪑 Seat 模型
+## v1：只做两个 Seat
 
-```text
-Seat
-├─ Displays[]
-│  └─ PrimaryDisplay
-├─ Keyboards[]
-├─ Mice[]
-├─ Controllers[]
-├─ AudioOutputs[]
-├─ AudioInputs[]
-├─ Seat-local cursor domain
-├─ Seat-local display coordinate space
-├─ Process group
-├─ Window placement policy
-├─ Input isolation policy
-└─ Desktop / launcher profile
-```
+HydraSeat v1 的正式产品范围是 **两个本地游戏 Seat**。
 
-例如：
+内部实现可以在合理时继续使用通用集合结构，但 v1 的 UI、安装程序、测试矩阵、产品承诺和兼容性证据都以最多两个活动 Seat 为准。
 
-```text
-Seat 1 = LG + Samsung + Keyboard A + Mouse A + DualSense + Headset
-Seat 2 = BenQ + Keyboard B + Mouse B + Xbox Controller + Speakers
-Seat 3 = Living-room TV + Controller C
-```
-
-HydraSeat 不假设“一台显示器就是一个 Seat”。多个显示器可以组成同一个 Seat display group。
+支持第三、第四个 Seat 会迅速增加显示器、键盘、鼠标、手柄、音频设备、物理空间和测试组合的数量，而实际家庭用户需求可能很小。因此 HydraSeat 优先把 **两个 Seat 真正做成可用产品**。
 
 ---
 
-## 🖥️ Seat 本地 PC 体验
+## 核心模型
 
-HydraSeat 的目标是提供轻量级 **Seat Shell**，而不是创建完整 VM 或第二套 Windows 安装。
+HydraSeat 明确区分 **Seat / Player / Game / Two-player setup / Runtime Session**。
 
-每个 Seat 长期可拥有：
+### 🪑 Seat = 物理座位
 
-- 独立 launcher / desktop surface；
-- 类 taskbar 的窗口列表；
-- wallpaper / profile；
-- 独立 process/window group；
-- 一个或多个显示器以及 primary display；
-- 限制在本 Seat 显示器范围内的可见 cursor；
-- 独立 audio input/output；
-- 独立 game launcher/profile 设置。
-
-真实 Windows 仍保留一个全局坐标空间，但 HydraSeat 维护 Seat-local 坐标变换：
+Seat 类似网吧中的一个座位。它描述硬件，不描述某个人或某个游戏。
 
 ```text
 Seat 1
-LG       -> local (0, 0), primary
-Samsung  -> local (2560, 0)
+├─ 显示器
+├─ 键盘       可暂不设置
+├─ 鼠标       可暂不设置
+├─ 手柄       可选
+└─ 音频       可选
+```
 
+Seat 配置允许不完整。首次设置向导可以跳过，某些设备可以选择“以后设置”，之后再进入 Seat 设置补充。
+
+启动游戏时，HydraSeat 根据该游戏的真实需求进行 preflight。例如，仅使用手柄的游戏不应因为 Seat 没有键盘就被判定为整体无效。
+
+### 👤 Player = 玩家本人
+
+Player 是独立于 Seat 的轻量个人资料。
+
+它可以记住：
+
+- 显示名称和可选本地头像；
+- 最近游戏；
+- 最近使用的 Seat；
+- 每个游戏的实例/数据目录偏好；
+- 在 provider 支持时，对已由原始启动器认证的账号的引用。
+
+Player 可以在 Seat 1 和 Seat 2 之间交换位置而不丢失这些关联。
+
+HydraSeat 不应成为通用密码保险箱。尽可能让 Steam、Minecraft 启动器等原始 provider 继续持有登录凭据和认证 token，HydraSeat 只保存选择已有认证身份所需的最小引用。
+
+### 🎮 Game = 已安装游戏
+
+正常 UX 应从支持的启动器和本地安装信息中自动发现游戏。
+
+对于未知游戏或特殊安装，仍保留手动添加 EXE 的高级用户路径。
+
+UI 尽量使用本机 EXE、快捷方式或 provider 元数据中已经存在的游戏图标，而不是随 HydraSeat 打包大量第三方美术资源。
+
+### 🔁 Two-player setup = 同一游戏双实例配方
+
+Seat 1 和 Seat 2 运行不同游戏时，用户无需感知额外的 Profile 概念。
+
+只有两个 Seat 选择 **同一个游戏** 时，HydraSeat 才查找或创建该游戏的 Two-player setup。
+
+其中可以包含：
+
+- 独立实例/配置/数据目录；
+- 启动参数与 working directory；
+- provider 特定启动方式；
+- provider 支持时的 Player 账号引用；
+- 启动顺序；
+- 窗口识别和放置；
+- 输入/手柄/音频要求；
+- 已知限制。
+
+HydraSeat 应尽可能自动生成，同时保留 **引导式手动编辑器**，让自动化暂时不理解的游戏仍能被有耐心的高级用户尝试。
+
+> **HydraSeat 只在游戏和 provider 本身允许的范围内自动化多实例配置，不会通过突破限制来制造多实例支持。**
+
+### ▶ Runtime Session = 当前正在运行的组合
+
+```text
+Seat 1 + Mario + Minecraft 实例 A
+Seat 2 + Luigi + Minecraft 实例 B
+```
+
+Seat 是硬件，Player 是人，Two-player setup 是可复用的游戏知识，只有当前运行映射属于 Runtime Session。
+
+完整定义见 [HydraSeat v1 产品规格](docs/PRODUCT_V1.md)。
+
+---
+
+## 以游戏为中心的 UI/UX
+
+HydraSeat 应该看起来像一个轻量游戏启动器，而不是 Windows 系统管理工具。
+
+正常流程：
+
+```text
+打开 HydraSeat
+    ↓
+选择游戏
+    ↓
+选择 Seat 1 / Seat 2 / Both
+    ↓
+为每个 Seat 选择 Player
+    ↓
+只确认必要风险
+    ↓
+Play
+```
+
+点击/轻触是主要交互方式。把游戏图标拖到 Seat 卡片上的 Drag & Drop 可以作为快捷方式同时提供。
+
+Raw Input、HidHide、IAT、backend、plan hash、设备路径等技术词汇应该隐藏在 Diagnostics 或 Expert 设置中。
+
+示例主界面：
+
+```text
+HydraSeat
+──────────────────────────────────────
+
+Games
+[Minecraft] [Terraria] [Stardew] [...]
+
+Seat 1                         Seat 2
+Mario                          Luigi
+Minecraft                      Terraria
+Ready                          Ready
+
+                 ▶ PLAY
+```
+
+当两边选择同一游戏：
+
+```text
+Seat 1                         Seat 2
+Mario                          Luigi
+Minecraft ═══════════════════ Minecraft
+
+        Two-player setup ready
+
+                 ▶ PLAY
+```
+
+---
+
+## 首次 Seat 设置向导是可选的
+
+第一次运行时可以提供：
+
+```text
+Welcome
+  → 识别显示器
+  → 分配 Seat 1 输入设备
+  → 分配 Seat 2 输入设备
+  → 可选手柄
+  → 可选音频
+  → 测试
+  → 保存
+```
+
+用户可以跳过整个向导，也可以对单个项目选择 **以后设置**。
+
+游戏启动前只检查该游戏真正需要的资源。
+
+---
+
+## Seat 独立生命周期
+
+两名玩家不必同时开始，也不必同时结束。
+
+如果 Luigi 退出 Terraria，而 Mario 继续 Minecraft：
+
+```text
+Seat 1                         Seat 2
+Mario                          Luigi
+Minecraft                      Idle
+Playing                        可选择其他游戏
+```
+
+Seat 2 可以在不影响 Seat 1 的情况下启动另一款游戏，或者结束本次游玩。
+
+只要还有一个 Seat 在运行游戏，空闲 Seat 就保持在简单的 HydraSeat 等待/游戏选择界面，而不是直接恢复为不受限制的普通 Windows 桌面。
+
+当两个 Seat 都结束，或 Management UI 明确选择返回 Windows 时，HydraSeat 执行经过验证的 rollback，恢复普通单 PC Windows 状态。
+
+---
+
+## 最小 Seat Launcher，而不是完整桌面 Shell
+
+HydraSeat v1 **只正式支持游戏场景**。
+
+它管理选中的游戏，以及游戏所需的启动器、helper、子进程、窗口、输入/手柄/音频路由和恢复路径。
+
+v1 不尝试为每个 Seat 制作完整独立的 Windows 桌面。
+
+Idle Seat 只需要类似：
+
+```text
 Seat 2
-BenQ     -> local (0, 0), primary
+Luigi
+
+Minecraft
+Terraria
+Stardew Valley
+More Games...
+
+End Playing
 ```
+
+游戏启动后 Seat Launcher 应消失或保持不干扰。
+
+以下功能推迟到 v1 之后：
+
+- Seat 独立 taskbar；
+- Seat 独立 wallpaper / desktop zone；
+- 把 Chrome、Office、Discord 等任意应用作为独立 Seat 应用自由运行；
+- Seat 独立 clipboard 虚拟化；
+- 完整替换 Windows Shell。
+
+这是为了让单人开发项目保持聚焦：**两个人在一台 PC 上本地玩游戏。**
 
 ---
 
-## ⌨️ 输入隔离目标
+## 输入与运行时方案
 
-仅仅用 Raw Input 区分物理设备还不够。游戏仍可能直接读取全局 keyboard/mouse/cursor/focus 状态。
+Windows 的 foreground、cursor、keyboard state 和输入天然具有全局特征，不同游戏使用的 API 也不同。
 
-最终目标：
+因此 HydraSeat 把输入隔离视为 **兼容性问题**，而不是简单事件转发。
+
+当前研究/实现覆盖或评估：
+
+- Win32 Raw Input 设备识别与路由；
+- HID / SetupAPI / ConfigMgr 稳定设备身份；
+- 对声明 API 的 controlled process-local 输入虚拟化；
+- XInput / DirectInput 兼容策略；
+- 进程/窗口所有权；
+- 适当情况下的 HidHide 等可选设备 visibility/isolation backend；
+- watchdog、crash journal、emergency reset 和 rollback。
+
+HydraSeat 不隐藏、绕过、禁用或规避 anti-cheat、DRM、protected process、账号限制、launcher 政策或游戏故意设置的 single-instance restriction。
+
+---
+
+## 受保护游戏：明确风险，而不是假装安全
+
+受保护游戏仍可能值得实验，因为未来 HydraSeat 的改进、provider 变化或更干净的兼容路径可能使某些配置可用。因此没有必要永久硬性屏蔽所有 protected title。
+
+但在对已知受保护游戏进行 HydraSeat 实验前，必须显示醒目警告：
+
+> 该游戏使用 anti-cheat、DRM 或其他保护系统。HydraSeat 尚未证明此配置安全或兼容。游戏或保护系统可能阻止软件、拒绝启动、断开连接，或依据自身政策采取其他措施。HydraSeat 不会绕过或禁用保护功能。
+
+只有用户明确选择高级实验后才继续。
+
+**成功启动不等于证明 anti-cheat 安全。** 受保护游戏的数据必须持续标记为 Protected / Experimental。
+
+---
+
+## 不做官方支持徽章，展示真实兼容性证据
+
+HydraSeat 不需要给每款游戏制作 `HydraSeat Certified` 官方徽章。
+
+更诚实的方式是显示真实用户观察结果：
 
 ```text
-Keyboard A + Mouse A -> Seat 1 applications only
-Keyboard B + Mouse B -> Seat 2 applications only
+Community results
+87% 成功 (45 reports)
+39 成功 / 6 失败
 
-Seat 1 输入不会进入 Seat 2 游戏
-Seat 2 输入不会抢走 Seat 1 游戏的控制
+Launch              98%
+Two instances       91%
+Input isolation     89%
+Audio routing       96%
+Clean shutdown      99%
 ```
 
-Phase 3 把输入隔离视为兼容性问题，而不是简单的事件转发问题。根据具体 profile，可能需要组合：
+如果游戏版本、HydraSeat 版本、provider、Windows 版本或兼容路径明显不同，就不应盲目合并成一个误导性的百分比。
 
-- Win32 Raw Input routing；
-- HID / SetupAPI physical-device identity；
-- per-process input compatibility hooks；
-- virtual keyboard/mouse/cursor state；
-- foreground/focus mediation；
-- 必要时使用 HidHide 一类可选 device visibility/isolation backend。
+用户可看到简单状态：
 
-ProtoInput、Universal Split Screen、Nucleus Co-op、HidHide 与 Microsoft 官方 Windows API 文档可以作为研究材料。只有许可证兼容时才复用源代码；否则依据公开文档与可观察行为进行独立洁净室实现。
+- **Community results available** — 显示成功/失败比例与样本数量；
+- **Untested** — 尚无有效证据，可执行本地测试；
+- **Protected / Experimental** — 已知存在保护系统，需要明确风险确认。
+
+百分比代表观察结果，不是保证。
 
 ---
 
-## 🎮 Process / Game 所有权
+## Local-first 兼容性测试
 
-通过 HydraSeat 启动的应用属于 Seat，而不是仅属于某一台显示器。
+单一维护者不可能购买并测试所有游戏，所以 HydraSeat 本身应帮助用户结构化测试过程。
 
-```text
-Seat 1 Process Group
-├─ minecraft.exe
-├─ discord.exe
-└─ chrome.exe
+本地测试可以记录有限的证据，例如：
 
-Seat 2 Process Group
-├─ fconline.exe
-├─ launcher.exe
-└─ browser.exe
-```
+- 游戏/provider/version；
+- HydraSeat 版本；
+- 进程/实例启动结果；
+- 预期实例数量；
+- Seat/process/window 所有权；
+- receiver-verified input 与测量到的 cross-Seat bleed；
+- 音频路由结果；
+- 干净退出与 rollback；
+- 必要的 Windows/backend 元数据。
 
-Seat-aware window manager 只管理所属进程的窗口，并在新窗口创建、全屏切换或目标重启时重新验证所有权。
+结果默认 **只保存在本地**。
 
----
+提交社区数据必须显式 opt-in，并在上传前向用户显示实际 redacted JSON。
 
-## 🔊 音频隔离
-
-```text
-Seat 1 games/apps -> Headset A
-Seat 1 voice chat  -> Microphone A
-
-Seat 2 games/apps -> Speakers B
-Seat 2 voice chat  -> Microphone B
-```
-
-Per-application audio endpoint routing 是最终 Seat 模型的一部分。
+默认提交不能包含密码、token、raw typed text、Player 名称、个人绝对路径或不必要的稳定设备序列号。
 
 ---
 
-## 🧭 设计原则
+## Offline-first
 
-1. **不要求 VM** — 游戏直接运行在 host Windows 上。
-2. **Seat 而非显示器是所有权单位** — 一个 Seat 可拥有多个 display。
-3. **物理设备 identity 必须稳定且可重复** — 相同型号 USB/HID 设备仍需区分。
-4. **目标是 zero cross-Seat input bleed** — 仅观察 Raw Input 不算完成。
-5. **游戏应认为自己在本地处于 active 状态** — 可能需要处理 foreground/cursor/keyboard state/Raw Input API。
-6. **不夸大实现状态** — 研究和原型必须如实标记。
-7. **优先官方 Windows API 和许可证兼容的开源实现** — 否则采用 clean-room 独立实现。
-8. **游戏优先** — 目标不是企业 VDI 或通用办公 multiseat。
-9. **源代码注释使用英文** — UI 翻译文本与开发者稳定标识分离。
+HydraSeat 核心功能不应要求 HydraSeat 云账号或持续联网。
 
----
+离线可用：
 
-## 🚫 非目标
+- Seat 设置；
+- Player 创建；
+- 从本地 metadata 发现已安装游戏；
+- 本地游戏库；
+- 自动/手动 Two-player setup；
+- 本地兼容测试；
+- 启动已保存游戏/配置；
+- 诊断与恢复。
 
-HydraSeat 不打算成为：
+可选在线功能：
 
-- 学校机房多席位系统；
-- 企业办公 multiseat；
-- 远程桌面软件；
-- 云游戏服务；
-- 企业 VM 管理器；
-- hypervisor 或 Windows kernel/session manager 替代品。
+- compatibility/profile catalog 更新；
+- 用户明确同意的 community result 上传；
+- HydraSeat 程序更新检查。
+
+早期兼容数据可以通过 versioned JSON/catalog artifact 发布，无需一开始就维护自定义常在线后端服务。
 
 ---
 
-## 🏗️ 架构
+## 更新策略
 
-```text
-HydraSeat.exe
-  Management Seat 按需管理控制台
-        │
-        ▼
-hydra_host.exe
-  权威的 per-user background runtime
-        │
-        ├── hydra_watchdog.exe
-        ├── Seat 1 process group / adapters / shell
-        └── Seat 2 process group / adapters / shell
+兼容性数据和 HydraSeat 程序本体采用不同更新周期。
 
-hydra_reset.exe
-  不依赖 UI/Host 的紧急恢复路径
-```
+**Compatibility/Profile 更新**体积小、变化频繁，可以独立刷新。用户可以关闭自动刷新并继续使用本地缓存。
 
-主要技术领域：
+**程序/runtime/driver 更新**必须得到用户明确批准。仅仅因为存在新版本，不应强制替换当前可正常工作的版本。
 
-- **GUI / Seat Shell**: Qt 6 / Win32
-- **Input Detection**: Win32 Raw Input, HID, SetupAPI / ConfigMgr
-- **Input Compatibility**: Raw Input routing, 必要时 process-local compatibility hooks, optional HID visibility backends
-- **Controllers**: XInput + HID/DirectInput
-- **Display**: `EnumDisplayMonitors`, `EnumDisplayDevices`, DXGI, `QueryDisplayConfig`
-- **Virtual Displays**: 后续 Phase 的 IddCx / IDD 或兼容 adapter
-- **Process Management**: Windows process APIs / Job Objects
-- **Audio**: Windows Core Audio per-application endpoint routing
-- **Launcher**: Steam, Epic, EA, GOG, generic executable profiles
+下载内容使用前必须验证版本、hash 和信任策略。
 
 ---
 
-## 📍 当前开发状态
+## 最小权限
 
-- **Phase 0 — Research & Foundation:** 已完成。
-- **Phase 1 — Hardware Detection:** 已完成，并通过 Windows/MSVC CI 验证。
-- **Phase 2 — Seat Composition / Assignment UI:** 当前 Win32 原型已完成，包括 multi-display Seat、primary display、exclusive device ownership 与 validated JSON profile。
-- **Phase 3 — Input Compatibility / Isolation:** 当前阶段。Capability planner、Gate A/B observation、Gate C controlled-process protocol/adapter 基础已实现。**物理 acceptance、真实 Windows API interposition、device cloaking、游戏 zero-bleed 验证仍未完成。**
-- **后续 Phase:** background runtime、process/window/display ownership、two-game MVP、profile/launcher、Seat shell、localization、watchdog/installer/update、SDK 与 release hardening。
+只要 Windows 允许，HydraSeat 默认使用普通用户权限完成工作。
 
-最重要的里程碑不是“启动两个窗口”，而是证明**两个用户能同时运行不同游戏，而且任一用户的键盘/鼠标输入与 foreground 行为都不会干扰另一个 Seat**。
+仅对真正需要权限提升的狭窄操作请求 UAC，例如安装、可选 driver/service 配置、某些系统级恢复或配置操作。
+
+正常的游戏选择 → Play 流程不应要求以管理员身份运行主 UI。
 
 ---
 
-## 🧪 Phase 3 工具
+## 安装程序是产品的一部分
 
-`hydra_plan` 是只读诊断工具，用于分析 compatibility profile 与假定 backend environment。它不会执行 process injection、driver 安装、device hiding 或 physical suppression。
+普通用户不应该为了尝试 HydraSeat 而安装 Visual Studio、MSVC、Qt、CMake 并自行构建。
 
-```text
-hydra_plan --list
-hydra_plan observation-harness
-hydra_plan raw-input-game
-hydra_plan polled-keyboard-mouse-game --protoinput --hidhide --allow-injection --admin --recovery-ready
-```
+v1 Windows installer/uninstaller 必须覆盖：
 
-### Gate A/B Input Lab
+- prerequisite 与 architecture 检查；
+- 必要 runtime 安装；
+- 仅在需要时安装可选 elevated component；
+- 首次 Seat 设置；
+- repair/uninstall；
+- 安全 update/rollback；
+- 安装失败诊断。
 
-```powershell
-.\build\Release\hydra_input_lab.exe --no-profile
-.\build\Release\hydra_input_lab.exe --profile workspace_config.json
-.\build\Release\hydra_input_lab.exe --profile workspace_config.json --trace phase3-input-lab.jsonl
-.\build\Release\hydra_input_lab.exe --self-test
-```
+卸载后只删除 HydraSeat 自己拥有的持久状态，并确保普通 Windows 可正常使用。
 
-当前 Gate A/B lab 可以观察并分类物理输入，但不会抑制普通 Windows 输入。真实双键盘/双鼠标 physical acceptance 仍需执行。参见 [Gate A/B 测试文档](docs/PHASE3_GATE_A_B_TESTING.md)。
+---
 
-### Gate C Controlled Process Lab
+## 当前开发状态
 
-```powershell
-.\build\Release\hydra_gate_c_host.exe `
-  --self-test `
-  --target .\build\Release\hydra_gate_c_target.exe
+HydraSeat **目前还不是可直接安装使用的完成产品**。
 
-.\build\Release\hydra_gate_c_host.exe `
-  --profile workspace_config.json `
-  --trace hydra_gate_c_host.jsonl
-```
+已经建立的重要基础包括：
 
-Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe 的 process-local polling 与 cursor/clip/logical-focus/capture shim 已通过 x64/x86 Windows CI 验证。独立 Raw Input behavior probe 与 bounded trace/parser 也已在 Windows run `32800513365` 通过 native x64/x86 验证。XInput generation/snapshot 正确性修复已经在 fork PR #15 run `32832036967` 中针对 remediation head `b351afdd` 完成验证：native x64/x86 均为 36/36，并通过 x64-host→x64/x86 zero-cross controller acceptance，因此当前状态为 `VALIDATED`。旧 run `32816241577` 仅保留为修复前证据。当前不实现 remote injection、physical suppression 或第三方/商业 target 支持。
+- Phase 0 研究与 clean-room policy；
+- 稳定的 Windows hardware identity/detection；
+- 两个 Seat 的硬件组合/保存基础；
+- controlled Raw Input、polling/cursor/focus、XInput、DirectInput 兼容实验；
+- input metrics 与物理 acceptance 工具；
+- watchdog、crash journal、emergency reset 基础；
+- 真实开源应用 compatibility test 路径；
+- 早期 Phase 4 background runtime / IPC / process / window / display foundation。
+
+真实两套输入设备的物理 acceptance 和真实游戏验证仍然是重要未完成门槛。合成测试或 HydraSeat 自有 controlled process 测试不会被夸大成通用游戏支持。
 
 相关文档：
 
-- [Related systems research](docs/RELATED_SYSTEMS_RESEARCH.md)
-- [Phase 3 input isolation design](docs/PHASE3_INPUT_ISOLATION_DESIGN.md)
-- [Clean-room policy](docs/CLEAN_ROOM_POLICY.md)
-- [Gate A/B testing](docs/PHASE3_GATE_A_B_TESTING.md)
-- [Gate C testing](docs/PHASE3_GATE_C_TESTING.md)
-- [Localization policy](docs/LOCALIZATION.md)
+- [Implementation status](docs/implementation/STATUS.md)
+- [Development roadmap](docs/ROADMAP.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [v1 product specification](docs/PRODUCT_V1.md)
+- [Compatibility evidence](docs/COMPATIBILITY_MATRIX.md)
 
 ---
 
-## 🧱 Codex 实现路线图
+## Roadmap 方向
 
-后续工作拆分为 bounded packet，防止 Codex 自行重新设计架构、越过阶段或把未执行的物理/游戏验证标记为完成。
-
-当前默认 packet：
-
-总制作进度：**14%**（`115` 个路线图 packet 中有 `16` 个已达到 `CODE_COMPLETE` 或更高状态，按 packet 数量计算）。
+路线图现在针对 **单人开发者可完成的两 Seat 游戏产品**，而不是通用 Windows 多座席桌面平台。
 
 ```text
-P3-HW-01 — Gate A/B/C 物理验收运行器（CODE_COMPLETE；工具和 CI 已完成，但使用两个物理键盘和两个指向设备的引导式验收仍为 PENDING。P8-RESET-01 已由 PR #25 run 33050902127 验证；P3-D-02 现在仅被 P3-HW-01 物理验收阻塞。）
+Phase 3  输入隔离 + 物理 evidence
+   ↓
+Phase 4  background runtime + 独立 Seat lifecycle + display/window ownership
+   ↓
+Phase 5  真实两 Seat gaming MVP
+   ↓
+Phase 6  游戏发现 + Player profile + 自动/手动同游戏 setup
+   ↓
+Phase 7  最小 Idle Seat Launcher UX
+   ↓
+Phase 8  installer + reliability + least privilege + offline update/catalog sync
+   ↓
+Phase 9  community compatibility/profile ecosystem
+   ↓
+Phase 10 release/legal/security/performance hardening
 ```
 
-开始编码前阅读：
+完整 packet 路线图见 [`docs/implementation/`](docs/implementation/README.md)。
 
-1. [Agent rules](.agents/AGENTS.md)
-2. [Non-negotiable decisions](docs/implementation/DECISIONS.md)
-3. [Master implementation roadmap](docs/implementation/README.md)
-4. [Current packet status](docs/implementation/STATUS.md)
-5. [Codex implementation playbook](docs/implementation/CODEX_PLAYBOOK.md)
+---
+
+## v1 发布成功条件
+
+真正的 v1 需要完整用户流程通过，包括：
+
+- clean install/uninstall；
+- 恰好两个 v1 Seat；
+- 真实双显示器/双输入设备验证；
+- 测试配置中的客观 input isolation evidence；
+- 两个不同真实游戏同时运行；
+- 至少一个游戏/provider 本身允许的真实 same-title/two-instance 案例；
+- Player profiles 与 game-first 选择；
+- 自动游戏发现 + 手动添加 fallback；
+- 自动/手动 Two-player setup 创建；
+- 一个 Seat 退出或切换游戏时另一个 Seat 不被停止；
+- Idle Seat Launcher；
+- 两个 Seat 结束后验证恢复普通 Windows；
+- watchdog/crash/emergency recovery；
+- local-first compatibility JSON 与可选 community 分享；
+- 使用本地数据时的 offline 运行；
+- 用户批准的软件更新；
+- 在把发行版称为开源之前解决项目 license/contribution terms。
+
+目标不是第一天就宣布数十或数百款游戏的官方支持，而是通过真实 evidence 和可复用的社区知识持续扩大兼容性。
+
+---
+
+## v1 明确不做的事情
+
+HydraSeat v1 不承诺：
+
+- 超过两个活动 Seat；
+- VM 或 Seat 独立 Windows 安装；
+- Seat 独立 Windows 登录 session；
+- 通用独立 Windows 桌面；
+- 所有游戏的同游戏多实例；
+- anti-cheat/DRM/account/launcher/single-instance 绕过；
+- anti-cheat 安全认证；
+- 强制 cloud account/telemetry；
+- 与所有游戏兼容。
+
+---
+
+## 相关系统与 Clean-room 边界
+
+HydraSeat 会研究 ASTER、ProtoInput、Nucleus Co-op、Universal Split Screen、HidHide、devreorder、Duo 以及 Microsoft 官方 Windows API 的公开资料和可观察行为。
+
+研究对象的代码不会自动成为 HydraSeat 代码。专有系统只作为公开文档和普通 observable behavior 参考，任何外部 source 复用都必须符合许可证和 [Clean-room policy](docs/CLEAN_ROOM_POLICY.md)。
+
+`C:\HydraSeat\references` 下的 reference checkout 只用于研究，不是 build input。
+
+---
+
+## 开发与验证
+
+当前开发使用 C++20、CMake、Windows MSVC，UI 可选 Qt 6。
+
+仓库明确区分：
+
+- automated controlled evidence；
+- real-process evidence；
+- physical/manual evidence；
+- community compatibility evidence。
+
+合成测试通过不会自动提升为真实物理环境或通用游戏支持声明。
+
+开发前：
 
 ```text
 python tools/show_implementation_packet.py --current
-python tools/show_implementation_packet.py --current --prompt
-python tools/show_implementation_packet.py --ready
 python tools/validate_implementation_roadmap.py
-git diff --check
 ```
 
-UI 国际化由 `P7-I18N-01` 实现。在英语/韩语/简体中文真实 UI acceptance 完成之前，不得把该功能标记为完成。
+Repository agent 在实现前必须阅读 [`.agents/AGENTS.md`](.agents/AGENTS.md)。
 
 ---
 
-## 🛠️ 构建要求
+## 许可证与贡献
 
-- **OS**: Windows 10 / Windows 11 (64-bit)
-- **Compiler**: Visual Studio 2022 / MSVC C++20
-- **Build System**: CMake 3.20+
-- **Framework**: Qt 6.x (Widgets / Core)
-- **Windows SDK**: Windows 10/11 SDK
+长期目标是一个可以合法复用和贡献的开源项目，但目前项目许可证和贡献条款尚未正式声明。
 
----
+在解决之前：
 
-## 🚀 路线图 / 详细文档
+- 不把当前仓库描述为法律意义上的开源；
+- 不擅自假定外部代码的复用权；
+- 遵循 [`docs/CLEAN_ROOM_POLICY.md`](docs/CLEAN_ROOM_POLICY.md)；
+- 把 license/contribution 决策视为发布前必须完成的产品 gate。
 
-- [Phase 0–10 Roadmap](docs/ROADMAP.md)
-- [Master implementation roadmap](docs/implementation/README.md)
-- [Current status](docs/implementation/STATUS.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Localization policy](docs/LOCALIZATION.md)
-- [Phase 0 research](docs/PHASE0_RESEARCH.md)
-- [Related systems research](docs/RELATED_SYSTEMS_RESEARCH.md)
-- [Clean-room policy](docs/CLEAN_ROOM_POLICY.md)
-- [Gate A/B testing](docs/PHASE3_GATE_A_B_TESTING.md)
-- [Gate C testing](docs/PHASE3_GATE_C_TESTING.md)
+法律门槛解决后，HydraSeat 的游戏设置、compatibility evidence、文档和贡献流程应尽量方便社区合法扩展。

@@ -1,1033 +1,660 @@
-# Phase 4 — Production Runtime, Process/Window Ownership, and Display Routing
+# Phase 4 — Production Runtime, Independent Seat Lifecycle, and Display/Window Ownership
 
 ## Phase objective
 
-Move proven Phase 3 components into a background production runtime and make each Seat own a process tree, window set, and one-or-more-display group. Seat-owned windows must stay within their display group across launch, fullscreen transitions, DPI changes, display hot-plug, target restart, and host restart.
+Move the validated Phase 3 foundations into an authoritative background runtime and establish the production ownership boundaries needed by the two-Seat v1 product.
 
-Physical displays are completed first. Virtual displays remain optional capability backends.
+Phase 4 does **not** complete Phase 3 on behalf of the still-pending physical input gate. Selected Phase 4 foundation packets were intentionally implemented early because their contracts are useful and independently testable.
+
+The v1 product contract comes from `docs/PRODUCT_V1.md` and D-039 through D-050:
+
+- at most two active Seats;
+- Seat is hardware, not Player/Game identity;
+- one Seat can be Playing while the other is Idle;
+- one Seat may stop/change games without stopping the other;
+- an idle Seat remains under a minimal HydraSeat launcher/wait state while the other Seat is active;
+- a whole-machine `Return to Windows` is a separate verified rollback transaction;
+- physical displays are the required v1 path; virtual displays are optional/deferred.
 
 ## Phase exit gate
 
-Phase 4 is complete when:
+Phase 4 closes only when:
 
-1. the UI can close while `hydra_host.exe` keeps validated Seat runtime state;
-2. UI/CLI/watchdog obtain the same authoritative state snapshot;
-3. one configured Management Seat owns the visible control console, which opens on that Seat's primary display with a safe visible fallback;
-4. the control console can Start, Stop/Return to Windows, and enter Reconfigure without owning runtime authority;
-5. every launched process/child/window is attributed to one Seat or explicitly unowned;
-6. Seat 1 may own multiple displays and Seat 2 a different display set;
-7. window placement and restore survive DPI/topology changes;
-8. display removal/return and target restart have deterministic recovery;
-9. no unrelated window is moved;
-10. physical-display support works without any virtual-display dependency;
-11. optional virtual-display backends are capability-gated and reversible;
-12. crash/restart tests leave ordinary Windows display topology usable.
+1. `hydra_host.exe` remains authoritative when the visible UI closes/reopens;
+2. UI/CLI/watchdog use the same versioned state/control boundary;
+3. exactly two v1 Seats can be represented and more than two active Seats fail closed;
+4. Seat-owned process trees and windows never adopt unrelated processes/windows;
+5. physical display groups and window placement are deterministic and recoverable;
+6. one Seat can stop its own game and become Idle while the other remains Playing;
+7. the idle Seat can select another Player/game and start again without restarting the other Seat;
+8. both Seats ending, or explicit `Return to Windows`, reaches ordinary Windows only after rollback verification;
+9. display removal/reconnect and target restart preserve ownership boundaries;
+10. Windows x64/x86 regression matrices pass;
+11. declared physical display/manual gates pass;
+12. a dedicated Phase-close verification finds no false completion or rollback gap.
 
-## Dependency graph
+## Dependency overview
 
 ```text
-P3-CLOSE-01 -> P4-RUN-01 -> P4-IPC-01
-                    |
-                    +-> P4-CTRL-01 -> P4-CTRL-02
-                    |
-                    +-> P4-PROC-01 -> P4-WIN-01 -> P4-WIN-02
-                    |
-                    +-> P4-DIS-01 -> P4-DIS-02 -> P4-DIS-03
+P4-RUN-01 -> P4-IPC-01
+     |
+     +-> P4-PROC-01 -> P4-WIN-01
+     |
+     +-> P4-DIS-01 -> P4-DIS-02 -> P4-WIN-02 -> P4-POL-01 -> P4-DIS-03
+     |
+     +-> P4-CTRL-01 -> P4-CTRL-02
 
-P4-WIN-01 + P4-DIS-02 -> P4-POL-01
-P4-POL-01 + P4-DIS-03 + P4-CTRL-02 -> P4-REC-01
-P4-DIS-01 -> P4-VID-01 -> P4-VID-02 -> optional P4-IDD-01
+P4-IPC-01 + P4-PROC-01 + P4-WIN-01 + P4-CTRL-02 -> P4-SEAT-01
+P4-SEAT-01 + P4-DIS-03 -> P4-REC-01 -> P4-CLOSE-01
 
-required packets -> P4-CLOSE-01
+P4-DIS-01 -> P4-VID-01 -> P4-VID-02 -> P4-IDD-01   (optional/deferred v1 path)
 ```
 
 ---
 
 ## P4-RUN-01 — Production `hydra_host.exe` runtime skeleton
 
-**State:** BLOCKED
+**State:** VALIDATED
 
 **Goal**
 
-Extract runtime authority from the configuration GUI into a per-user background host process.
+Make a headless per-user process the authoritative owner of runtime state rather than tying active state to the configuration UI.
 
 **Depends on**
 
-- P3-CLOSE-01 or stable Phase 3 host/adapter contracts
-- D-004, D-019
+- P3-STATE-01
+- P8-WATCH-01
 
-**Create/modify**
+**Implemented surface**
 
 - `include/hydra/runtime_state.hpp`
 - `include/hydra/runtime_host.hpp`
 - `src/runtime_state.cpp`
 - `src/runtime_host.cpp`
 - `src/host_main.cpp`
-- `hydra_host` CMake target
-- tests with fake hardware/process/display backends
+- `hydra_host.exe`
+- runtime state-machine and process self-tests
 
-**Core types**
+**Evidence**
 
-```cpp
-enum class HostLifecyclePhase;
-enum class SeatSessionPhase;
-struct RuntimeSessionId;
-struct SeatRuntimeState;
-struct HostRuntimeSnapshot;
-struct RuntimeTransition;
-class RuntimeHost;
-```
-
-**Implementation skeleton**
-
-1. Separate host-process lifecycle from Seat-session lifecycle. The host may be `Running` while the Seat session is `Idle`. Define `SeatSessionPhase` as `Idle -> Planning -> Prepared -> Starting -> Active -> Degraded -> Stopping -> RollingBack -> Idle`, with failures entering `RecoveryRequired` until verified recovery; do not use host process exit as the normal meaning of Stop.
-2. load a validated Seat profile without starting any backend;
-3. expose `Plan`, `Prepare`, `Start`, `StopAndReturnToWindows`, `Reset`, `ExitHostWhenIdle`, and read-only snapshot operations; keep closing a UI client separate from every session transition;
-4. inject interfaces for hardware/input/process/window/display/audio backends;
-5. ensure transitions are serialized and correlated;
-6. own all worker threads and Phase 3 production routing components;
-7. make start/stop idempotent;
-8. keep the existing labs separate.
+Fork PR #26, exact head `0fdaf80`, run `33062975789` passed Windows x64, Win32/x86, Gate C cross-architecture, and P3-E regression jobs. The packet implementation commit is `c139354`.
 
 **Invariants**
 
-- GUI presence is irrelevant to runtime continuity;
-- closing or crashing the control UI never transitions the Seat session;
-- `StopAndReturnToWindows` reaches session `Idle` only after rollback postconditions pass and does not require the host process to exit;
-- `ExitHostWhenIdle` is rejected or converted to a Stop-first transaction while a Seat session is active;
-- only the host mutates runtime state;
-- one active mutation transaction at a time;
-- a failed transition records rollback state;
-- profile parsing alone does not advertise active isolation.
-
-**Automated tests**
-
-- every valid/invalid transition;
-- concurrent command rejection/serialization;
-- partial backend startup rollback;
-- repeated start/StopAndReturn/reset while the host remains Running;
-- close/reopen UI during Active leaves the Seat-session phase unchanged;
-- ExitHostWhenIdle succeeds only from Idle and an Active request follows the declared Stop-first/reject policy;
-- snapshot consistency under readers;
-- host process self-test and clean exit.
+- GUI lifetime does not own runtime lifetime;
+- host and session lifecycle are explicit typed state;
+- one mutation transaction at a time;
+- start/stop/reset are idempotent where declared;
+- failed startup records/executes rollback rather than pretending Active;
+- profile parsing alone never claims active isolation.
 
 **Done when**
 
-A headless host can start a fake two-Seat session, publish state, stop, and recover independently of `HydraSeat.exe`.
-
-**Suggested commit**
-
-`feat: implement P4-RUN-01 background runtime host`
+A headless host can load a validated two-Seat profile, exercise fake backend activation/rollback, publish a stable snapshot, and exit cleanly without the GUI owning authority.
 
 ---
 
 ## P4-IPC-01 — UI/CLI/watchdog control and state protocol
 
-**State:** BLOCKED
+**State:** VALIDATED
 
 **Goal**
 
-Provide a versioned local protocol so UI, tray, CLI, and watchdog control/observe the same host.
+Expose one bounded/versioned local control protocol so UI and CLI observe/mutate the same authoritative host state.
 
 **Depends on**
 
 - P4-RUN-01
-- D-012, D-019
 
-**Create/modify**
+**Implemented surface**
 
 - `include/hydra/host_protocol.hpp`
-- `src/host_protocol.cpp`
 - `include/hydra/host_transport.hpp`
+- `src/host_protocol.cpp`
 - `src/host_transport.cpp`
 - `hydra_hostctl.exe`
-- UI client adapter;
-- protocol/process tests.
+- protocol and real host-process IPC tests
 
-**Messages**
+**Evidence**
 
-- `Hello` / `HelloAck`;
-- `GetSnapshot` / `Snapshot`;
-- `PlanSession` / `PlanResult`;
-- `StartSession` / progress/result;
-- `StopAndReturnToWindows`;
-- `BeginReconfigure`;
-- `ExitHostWhenIdle`;
-- `EmergencyReset`;
-- `SubscribeEvents` / runtime events;
-- `Ping` / lease;
-- `Error`.
-
-**Implementation skeleton**
-
-1. Reuse fixed-width/bounded protocol utilities where appropriate without coupling Gate C message semantics.
-2. authenticate the same Windows user/session;
-3. enforce one command correlation ID and response;
-4. make event subscriptions bounded with reconnect/resnapshot;
-5. provide CLI output in human and JSON form;
-6. make protocol version mismatch explicit.
+Fork PR #26 run `33062975789` passed exact head `0fdaf80` across native x64/x86 and existing cross-architecture regressions. Packet implementation commit: `1813d39`.
 
 **Invariants**
 
-- read-only clients cannot mutate;
-- watchdog reset path remains available if UI protocol client fails;
-- UI never infers state from a command timeout;
-- reconnect starts from a full snapshot then applies events;
-- no command contains credentials or raw input data.
-
-**Automated tests**
-
-- malformed/version/permission/reconnect;
-- simultaneous UI and CLI readers;
-- duplicate command correlation;
-- host restart and resnapshot;
-- subscription overflow recovery.
+- protocol is bounded/versioned and rejects malformed/future/stale input;
+- same-user local boundary is explicit;
+- clients resnapshot authoritative state rather than inferring success from timeouts;
+- no command transports credentials or raw typed input;
+- UI is a client, not runtime authority.
 
 **Done when**
 
-The main UI uses host IPC rather than owning runtime components directly.
-
-**Suggested commit**
-
-`feat: implement P4-IPC-01 host control protocol`
+A separate client can connect, read snapshots, issue declared host commands, survive reconnect/host restart semantics, and receive explicit failures without corrupting host state.
 
 ---
 
 ## P4-PROC-01 — Seat process tree and Job Object ownership
 
-**State:** BLOCKED
+**State:** VALIDATED
 
 **Goal**
 
-Track each launched process and compatible descendants as one Seat-owned process group.
+Represent a launched game/launcher tree as temporary Seat-owned runtime state and clean it without touching unrelated processes.
 
 **Depends on**
 
 - P4-RUN-01
 
-**Create/modify**
+**Implemented surface**
 
-- `include/hydra/process_group.hpp`
-- `src/process_group.cpp`
-- `include/hydra/process_launcher.hpp`
-- `src/process_launcher.cpp`
-- process test child executables;
-- tests.
+- process identity/group/launcher library
+- controlled child tree executable
+- PID + creation-identity validation
+- Job Object ownership where compatible
+- process-group tests
 
-**Core types**
+**Evidence**
 
-```cpp
-struct ProcessIdentity;
-struct ProcessLaunchSpec;
-struct ProcessTreeSnapshot;
-class SeatProcessGroup;
-```
-
-**Implementation skeleton**
-
-1. launch controlled targets with explicit executable, arguments, environment, working directory, architecture, and policy;
-2. create a Job Object before resume where compatible;
-3. record root/child PIDs, creation time, executable identity, and exit code;
-4. subscribe to process/job completion without polling the UI;
-5. support profiles that cannot join a Job Object through an explicit weaker capability;
-6. expose graceful stop then timeout/terminate policy;
-7. prevent PID reuse confusion with creation identity.
+Fork PR #26 run `33062975789` passed exact head `0fdaf80` on x64/x86. Packet implementation commit: `e0e7334`.
 
 **Invariants**
 
-- a process belongs to at most one Seat;
-- unowned processes are never terminated/moved;
-- child tracking capability is explicit;
-- target exit propagates to window/adapter cleanup;
-- termination is profile/policy-controlled and logged.
-
-**Automated tests**
-
-- parent/child/grandchild tracking;
-- root exits before child;
-- Job Object breakaway supported/unsupported cases;
-- graceful timeout and forced termination;
-- PID reuse fixture;
-- no orphan test processes.
+- a live process belongs to at most one Seat;
+- Seat configuration does not persist PID/process ownership;
+- PID reuse cannot silently transfer ownership;
+- unrelated/unowned processes are never terminated;
+- weaker non-Job capability is explicit rather than silently assumed equivalent.
 
 **Done when**
 
-Runtime snapshots show deterministic per-Seat process trees and cleanup.
-
-**Suggested commit**
-
-`feat: implement P4-PROC-01 Seat process groups`
+Controlled parent/child/grandchild trees are assigned to one Seat, observed through lifecycle changes, and torn down deterministically with zero owned test-process orphans.
 
 ---
 
 ## P4-WIN-01 — Window ownership tracker
 
-**State:** BLOCKED
+**State:** VALIDATED
 
 **Goal**
 
-Attribute top-level/owned windows to Seat process groups and track their lifecycle without moving unrelated windows.
+Attribute controlled top-level/owned windows to validated Seat process ownership without adopting unrelated windows.
 
 **Depends on**
 
 - P4-PROC-01
 
-**Create/modify**
+**Implemented surface**
 
 - `include/hydra/window_tracker.hpp`
 - `src/window_tracker.cpp`
-- `include/hydra/window_identity.hpp`
-- controlled multi-window test app;
-- tests.
+- controlled test window application
+- stale HWND/process validation and tests
 
-**Implementation skeleton**
+**Evidence**
 
-1. enumerate initial top-level windows;
-2. use WinEvent hooks or equivalent out-of-context notifications for create/show/hide/name/location/destroy;
-3. map HWND to process identity and Seat;
-4. classify primary game, launcher, dialog, overlay, child-owned popup, and ignored window by profile rules;
-5. debounce duplicate events through a bounded queue;
-6. validate HWND/process before every action;
-7. publish window snapshots/events to the host.
+Fork PR #26 run `33062975789` passed exact head `0fdaf80` on Windows x64/x86. Packet implementation commit: `0fdaf80`.
 
 **Invariants**
 
-- callback performs minimal bounded enqueue work;
-- stale/reused HWND is rejected with process identity check;
-- system shell/security/other-user/unowned windows are never adopted;
-- profile overrides are typed and diagnostic;
-- destroy removes state idempotently.
-
-**Automated tests**
-
-- create/destroy/show/hide/title/location;
-- multiple windows from one process;
-- launcher spawning game process;
-- fake/stale HWND;
-- unrelated window remains untouched;
-- callback queue overflow visible.
+- process ownership precedes window ownership;
+- HWND reuse is rejected with process identity validation;
+- unrelated/system/unowned windows are not adopted;
+- callbacks do bounded event work only;
+- destroy/removal is idempotent.
 
 **Done when**
 
-Each controlled target window is attributed to the correct Seat and unrelated windows are proven unaffected.
-
-**Suggested commit**
-
-`feat: implement P4-WIN-01 window ownership tracking`
+Controlled windows are deterministically attributed to the correct Seat process group and unrelated windows remain untouched through create/show/hide/destroy cycles.
 
 ---
 
 ## P4-DIS-01 — Display topology inventory and stable output identity
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
-Build one authoritative display topology combining Windows Display Configuration and DXGI data.
+Build a read-only authoritative physical-display topology with stable output identity independent from enumeration order.
 
 **Depends on**
 
-- P3-CLOSE-01
+- P1-HW-01
 
-**Create/modify**
+**Implemented surface**
 
+- `include/hydra/display_identity.hpp`
 - `include/hydra/display_topology.hpp`
 - `src/display_topology.cpp`
-- `include/hydra/display_identity.hpp`
-- `hydra_display_diag.exe`;
-- topology fixtures/tests.
+- `src/display_diag_main.cpp`
+- `DisplayTopologyTests`
 
-**Data model**
+**Local automated evidence — 2026-08-27**
 
-```cpp
-struct DisplayAdapterIdentity;
-struct DisplayOutputIdentity;
-struct DisplayMode;
-struct DisplayOutput;
-struct DisplayTopologySnapshot;
-```
-
-Fields include:
-
-- stable target/adapter identity;
-- GDI device name;
-- connector/EDID-friendly metadata where available;
-- physical/likely-virtual classification and confidence;
-- desktop bounds/orientation/refresh/pixel format;
-- DPI/effective scale;
-- primary/active/attached state;
-- adapter LUID and DXGI output relation;
-- topology generation.
-
-**Implementation skeleton**
-
-1. query active/all paths with retry for topology changes;
-2. enrich targets via display-config device info;
-3. correlate with DXGI adapters/outputs;
-4. preserve partial data with explicit confidence/errors;
-5. sort deterministically by stable identity;
-6. emit read-only diagnostics.
-
-**Invariants**
-
-- persistent identity never uses array index alone;
-- topology query races retry with a bounded count;
-- unavailable EDID/friendly name does not drop an output;
-- likely-virtual is heuristic, not certainty;
-- no display mode is changed in this packet.
-
-**Automated tests**
-
-- synthetic topology correlation;
-- duplicate names/adapters;
-- disconnected/disabled outputs;
-- orientation/negative coordinates;
-- topology-changing retry;
-- actual Windows read-only integration.
+- MSVC x64 full build passes;
+- MSVC x64 CTest passes 70/70;
+- MSVC Win32/x86 full build passes;
+- MSVC Win32/x86 CTest passes 70/70;
+- topology unit/native read-only paths are included in those suites.
 
 **Manual acceptance**
 
-Record three-monitor example including two displays in Seat 1 and one in Seat 2.
+Record the user's real physical monitor topology, stable identities, reconnect behavior, and intended Seat 1/Seat 2 grouping. This remains pending.
+
+**Invariants**
+
+- persistent identity does not use index/friendly name alone;
+- topology races retry only a bounded number of times;
+- missing optional metadata does not erase an output;
+- virtual classification is reported as confidence, not certainty;
+- this packet does not mutate display modes.
 
 **Done when**
 
-Seat profiles can reference stable output IDs independent of monitor enumeration order.
-
-**Suggested commit**
-
-`feat: implement P4-DIS-01 display topology inventory`
+Automated topology tests pass and real physical-display identities/grouping have been recorded without relying on enumeration order.
 
 ---
 
 ## P4-DIS-02 — Seat display groups and coordinate transforms
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
-Represent each Seat's display set, primary display, bounds, DPI, and reversible global/local coordinate transforms.
+Resolve physical outputs into at most two v1 Seat display groups and provide deterministic global/Seat-local coordinate transforms.
 
 **Depends on**
 
 - P4-DIS-01
 - P2-SEAT-01
 
-**Create/modify**
+**Implemented surface**
 
 - `include/hydra/seat_display_layout.hpp`
 - `src/seat_display_layout.cpp`
-- `tests/test_seat_display_layout.cpp`
+- `SeatDisplayLayoutTests`
 
-**Core types**
+**Local automated evidence — 2026-08-27**
 
-```cpp
-struct SeatDisplayOutput;
-struct SeatDisplayGroup;
-struct CoordinateTransform;
-struct DisplayLayoutValidation;
-```
-
-**Implementation skeleton**
-
-1. resolve profile display IDs into active topology;
-2. validate exclusivity/share policy;
-3. compute union bounds and primary origin;
-4. define point/rect transforms between global, Seat-local, output-local, and client coordinates;
-5. handle negative coordinates, orientation, and per-output DPI;
-6. report missing output/degraded layout explicitly.
+x64 and Win32/x86 full CTest each pass 70/70.
 
 **Invariants**
 
-- multiple displays per Seat are normal;
-- transform round trips within documented rounding tolerance;
-- no assumption that Seat primary is Windows global primary;
-- overlapping display assignment is rejected unless explicitly shareable;
-- missing required output blocks or degrades according to profile.
-
-**Automated tests**
-
-- horizontal/vertical/L-shaped layouts;
-- negative origin;
-- mixed DPI/orientation;
-- one/zero/missing outputs;
-- transform round trip and rectangle clipping;
-- two Seats with disjoint groups.
+- multiple displays per Seat are valid;
+- v1 activation rejects more than two active Seat groups;
+- Seat primary need not equal Windows global primary;
+- overlapping exclusive assignment fails closed;
+- transform round-trips are tested across negative coordinates/DPI/orientation;
+- missing required output is explicit.
 
 **Done when**
 
-Window and cursor routing can consume one stable `SeatDisplayGroup` contract.
-
-**Suggested commit**
-
-`feat: implement P4-DIS-02 Seat display layouts`
+The same stable `SeatDisplayGroup` contract can be consumed by window placement and Management/Seat UI placement on x64/x86, with physical acceptance still tracked by the owning display gates.
 
 ---
 
 ## P4-WIN-02 — Window placement, mode, and restore engine
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
-Place and keep owned windows within the Seat display group according to a typed profile policy.
+Compute/apply bounded policies that keep owned game/launcher windows inside their Seat display group and restore captured state safely.
 
 **Depends on**
 
 - P4-WIN-01
 - P4-DIS-02
 
-**Create/modify**
+**Implemented surface**
 
 - `include/hydra/window_policy.hpp`
-- `src/window_policy.cpp`
 - `include/hydra/window_placement.hpp`
+- `src/window_policy.cpp`
 - `src/window_placement.cpp`
-- controlled fullscreen/DPI test app;
-- tests.
+- `WindowPolicyTests`
 
-**Policies**
+**Local automated evidence — 2026-08-27**
 
-- leave-native;
-- place on primary output;
-- span Seat group;
-- borderless on selected output;
-- restore last Seat-local rect;
-- profile-specified delay/retry/stable-window selector;
-- exclusive fullscreen allowed/blocked/unsupported.
+MSVC x64 and Win32/x86 full build + 70/70 CTest pass after the complete local Phase 4 foundation was linked into the shared GUI test target.
 
-**Implementation skeleton**
+**Manual acceptance**
 
-1. compute desired rect/style/mode from owned window + display group + profile;
-2. apply only after ownership validation;
-3. distinguish requested placement from observed final placement;
-4. handle window recreation and launcher-to-game transitions;
-5. save previous style/rect/show state for rollback;
-6. rate-limit correction loops and detect fighting applications;
-7. expose degraded/unsupported mode rather than infinite repositioning.
+Two real physical display groups, game-like borderless/fullscreen transitions, DPI changes, alt-tab, and restore behavior remain pending.
 
 **Invariants**
 
 - never move an unowned window;
-- no infinite `SetWindowPos` loop;
-- DPI context is explicit;
-- rollback restores captured state when window still exists;
-- exclusive fullscreen is not assumed controllable.
-
-**Automated tests**
-
-- controlled windows recreating/changing style;
-- mixed DPI placement;
-- target ignores/reverses position;
-- borderless restore;
-- stale HWND/process identity;
-- unrelated window unchanged.
-
-**Manual acceptance**
-
-Two physical display groups, multiple windows, alt-tab, fullscreen/borderless transitions.
+- no unbounded correction loop;
+- observed final placement is distinct from requested placement;
+- rollback uses captured previous state when the exact owned window still exists;
+- exclusive fullscreen is capability-specific, never assumed.
 
 **Done when**
 
-Owned windows remain inside assigned physical display groups for the tested policies.
-
-**Suggested commit**
-
-`feat: implement P4-WIN-02 Seat window placement`
+Automated ownership/placement tests pass and the declared real physical display/window acceptance is recorded with no unrelated-window movement.
 
 ---
 
 ## P4-POL-01 — Seat window/display runtime policy coordinator
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
-Combine process, window, and display events into one deterministic runtime policy without module-specific ad hoc reactions.
+Serialize process/window/display events into deterministic desired-versus-observed Seat policy rather than module-specific ad hoc mutation.
 
 **Depends on**
 
-- P4-WIN-01
 - P4-WIN-02
 - P4-DIS-02
 
-**Create/modify**
+**Implemented surface**
 
 - `include/hydra/seat_runtime_policy.hpp`
 - `src/seat_runtime_policy.cpp`
-- host integration;
-- policy state-machine tests.
+- `SeatRuntimePolicyTests`
 
-**Implementation skeleton**
+**Local automated evidence — 2026-08-27**
 
-1. consume serialized process/window/display events;
-2. maintain desired versus observed Seat state;
-3. calculate idempotent actions;
-4. execute actions through interfaces with correlation IDs;
-5. retry only retryable actions with bounded backoff;
-6. enter `Degraded` on missing displays/windows;
-7. initiate rollback on invariant violation.
+MSVC x64 and Win32/x86 full CTest each pass 70/70.
 
 **Invariants**
 
-- deterministic event order and reconciliation;
-- no direct window move from callbacks;
-- duplicate event produces no duplicate mutation;
-- action failure is visible in runtime snapshot;
-- policy can be unit-tested with fake backends.
+- serialized deterministic event order;
+- duplicate events do not duplicate mutation;
+- callbacks do not directly move windows;
+- retries are bounded and only for retryable outcomes;
+- failed invariants become visible degraded/recovery state.
 
 **Done when**
 
-A synthetic event replay produces the same final state and actions every run.
-
-**Suggested commit**
-
-`feat: implement P4-POL-01 Seat runtime policy`
+Deterministic event replay produces identical actions/final policy state and failures cannot silently mutate unrelated resources.
 
 ---
 
 ## P4-DIS-03 — Display hot-plug, degradation, and rollback
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
-Handle assigned display removal/reconnect/topology changes without losing windows or corrupting the desktop.
+Handle assigned display disappearance/reappearance without silently moving a Seat onto another Seat's display or corrupting the ordinary desktop.
 
 **Depends on**
 
 - P4-DIS-02
 - P4-POL-01
 
-**Create/modify**
+**Implemented surface**
 
-- display-change observer;
-- topology generation/event contracts;
-- safe fallback placement;
-- tests and manual checklist.
+- `include/hydra/display_recovery.hpp`
+- `src/display_recovery.cpp`
+- `DisplayRecoveryTests`
 
-**Behavior**
+**Local automated evidence — 2026-08-27**
 
-- debounce topology bursts;
-- rebuild topology and Seat groups;
-- if an optional secondary disappears, move owned windows to Seat primary and mark degraded;
-- if required primary disappears, pause/stop according to profile and preserve process state;
-- on reconnect, restore only when stable identity/mode is confirmed;
-- never make another Seat's display the silent fallback;
-- capture/restore pre-session Windows placement where possible.
-
-**Automated tests**
-
-- secondary removal;
-- primary removal;
-- reconnect with changed coordinates/DPI;
-- monitor enumeration reordering;
-- rapid disconnect/reconnect burst;
-- host restart while display missing.
+MSVC x64 and Win32/x86 full CTest each pass 70/70.
 
 **Manual acceptance**
 
-Physical unplug/replug and display disable/enable across two Seats.
+Physical unplug/replug, disable/enable, coordinate/DPI change, and stable-identity reappearance across the user's two Seat display groups remain pending.
+
+**Invariants**
+
+- topology bursts are bounded/debounced;
+- missing optional secondary is degraded explicitly;
+- missing required primary never silently steals another Seat's output;
+- reconnect uses stable identity, not index;
+- rollback preserves captured ordinary Windows state where possible.
 
 **Done when**
 
-Display change results are deterministic, visible, and recoverable.
-
-**Suggested commit**
-
-`feat: implement P4-DIS-03 display hotplug recovery`
+Automated recovery tests plus physical unplug/replug acceptance demonstrate deterministic, visible, recoverable behavior.
 
 ---
 
 ## P4-VID-01 — Virtual display backend interface
 
-**State:** BLOCKED
+**State:** DEFERRED
 
 **Goal**
 
-Define virtual display creation as an optional capability backend without requiring any one driver/tool.
+Retain a future capability boundary for virtual displays without making them part of the v1 physical-monitor critical path.
 
 **Depends on**
 
 - P4-DIS-01
 
-**Create/modify**
+**v1 decision**
 
-- `include/hydra/virtual_display_backend.hpp`
-- `src/virtual_display_registry.cpp`
-- fake backend/tests;
-- planner capabilities/profile fields.
-
-**Contract**
-
-```cpp
-struct VirtualDisplayRequest;
-struct VirtualDisplayInstance;
-struct VirtualDisplayBackendDescriptor;
-class IVirtualDisplayBackend;
-```
-
-Operations:
-
-- read-only probe;
-- prepare/create;
-- wait for topology appearance;
-- update mode where supported;
-- destroy;
-- restore previous state;
-- diagnostics/version/trust metadata.
-
-**Invariants**
-
-- backend absence does not break physical displays;
-- create/destroy are correlated and idempotent;
-- host confirms output in real topology before success;
-- persistent driver state is explicit;
-- unknown backend version is unsupported.
+Physical local displays are sufficient for the intended household two-Seat product. A virtual-display API may be implemented later only if a real v1/user scenario needs it and the extra driver/install/recovery burden is justified.
 
 **Done when**
 
-A fake backend and one read-only external probe pass planner/transaction tests.
-
-**Suggested commit**
-
-`feat: implement P4-VID-01 virtual display backend contract`
+Deferred for v1. If reactivated, it requires a fake backend, bounded lifecycle, trust/version checks, and proof that physical-only operation remains unaffected.
 
 ---
 
 ## P4-VID-02 — External virtual display adapter integration
 
-**State:** BLOCKED
+**State:** DEFERRED
 
 **Goal**
 
-Integrate one user-supplied/licensed external virtual-display implementation through P4-VID-01 without bundling unclear binaries.
+Potential future integration of one lawful user-supplied/licensed virtual-display implementation.
 
 **Depends on**
 
 - P4-VID-01
-- P8-TRUST-01 optional component manifest/hash verification
-
-**Implementation skeleton**
-
-1. choose an adapter with documented automation/control and acceptable license;
-2. require configured path/version/hash;
-3. implement read-only probe first;
-4. implement create/destroy under a transaction;
-5. confirm topology identity and latency;
-6. crash/host-exit cleanup;
-7. document redistribution/install expectations.
-
-**Manual acceptance**
-
-Create/destroy/reboot/update/rollback and GPU/display latency matrix.
+- P8-TRUST-01
 
 **Done when**
 
-One virtual output can be assigned to a Seat while physical-only operation remains unaffected.
-
-**Suggested commit**
-
-`feat: implement P4-VID-02 external virtual display adapter`
+Deferred for v1 unless a concrete product requirement reactivates it with install/create/destroy/reboot/rollback evidence.
 
 ---
 
 ## P4-IDD-01 — Custom IddCx/IDD feasibility gate
 
-**State:** BLOCKED / OPTIONAL
+**State:** DEFERRED
 
 **Goal**
 
-Decide whether HydraSeat should own a custom indirect display driver.
+Avoid committing a one-developer v1 project to a custom display driver unless measured product need justifies signing, WDK, update, crash, and maintenance cost.
 
 **Depends on**
 
 - P4-VID-01
-- evidence from P4-VID-02
-- P8 driver signing/install/recovery foundations
-
-**Research/prototype outputs**
-
-- official sample-based minimal driver in a separate component/repository area;
-- WDK build/sign/test plan;
-- user-mode control protocol;
-- mode/EDID/adapter/GPU behavior;
-- latency and resource use;
-- install/update/uninstall/reboot/crash recovery;
-- legal/signing/maintenance cost comparison.
-
-**Decision**
-
-- `ADOPT`: packets are added for production driver work;
-- `DEFER`: external adapter remains recommended;
-- `REJECT`: no custom driver in supported scope.
 
 **Done when**
 
-A written decision is based on measurements, not the roadmap assumption that a custom driver is automatically better.
-
-**Suggested commit**
-
-`docs: decide P4-IDD-01 custom display driver feasibility`
+Deferred for v1. A future `ADOPT`, `DEFER`, or `REJECT` decision must be based on measurements and support burden rather than architectural ambition.
 
 ---
 
 ## P4-CTRL-01 — Management Seat control console placement and permissions
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
-Make `HydraSeat.exe` an on-demand management console that always opens on the configured Management Seat, default Seat 1, while `hydra_host.exe` continues to own the runtime in the background.
+Make `HydraSeat.exe` an on-demand game-first Management UI whose placement/permissions are derived from the authoritative two-Seat configuration/runtime state.
 
 **Depends on**
 
+- P4-RUN-01
 - P4-IPC-01
 - P4-DIS-02
-- D-031, D-032
 
-**Create/modify**
+**Implemented surface**
 
 - `include/hydra/management_seat.hpp`
 - `src/management_seat.cpp`
 - `include/hydra/control_surface_model.hpp`
 - `src/control_surface_model.cpp`
-- `HydraSeat.exe` host-client/window placement integration;
-- Seat/session profile field for `managementSeatId`;
-- tests with fake host/display clients.
+- Win32 GUI host-client integration
+- `ManagementSeatTests`
+- `ControlSurfaceModelTests`
 
-**Core types**
+**Local automated evidence — 2026-08-27**
 
-```cpp
-struct ManagementSeatConfig;
-struct ControlSurfacePlacement;
-enum class ControlSurfaceFallback;
-struct GlobalControlPermission;
-class ControlSurfaceModel;
-```
-
-**Required visible controls**
-
-- current runtime mode and session state;
-- current Seat 1/Seat 2 display, keyboard, mouse, controller, and audio assignments;
-- `Start`;
-- `Stop / Return to Windows`;
-- `Reconfigure`;
-- identify/flash/test selected display and input device;
-- startup mode selection: Manual, Background Idle, Auto-Activate Validated Session;
-- diagnostics/export;
-- recovery/reset entry point.
-
-**Implementation skeleton**
-
-1. Add `managementSeatId` to the typed Seat/session configuration with a deterministic default of Seat 1.
-2. Resolve the Management Seat's active primary display through `SeatDisplayGroup` and stable display identity.
-3. On launch/reopen, position the control window wholly inside that primary display's work area and restore only a still-valid Seat-local rectangle.
-4. If the configured display is unavailable, place the window visibly on the current Windows primary display, mark the session degraded, and explain why fallback occurred.
-5. Bind every button/view to the authoritative host snapshot and versioned host commands; never mutate runtime components from UI code.
-6. Keep other Seat shells read-mostly for whole-machine operations unless an explicit permission policy grants otherwise.
-7. Make closing the control window close only the client; the active host/watchdog/session continue according to runtime mode.
-8. Allow reopening from the Management Seat shell shortcut, tray/recovery entry point, Start Menu shortcut, or `hydra_hostctl ui`-style command without creating a second host.
-9. Keep one visible control-console instance per Windows user session and bring the existing instance to the Management Seat display on duplicate launch.
+MSVC x64 and Win32/x86 full build + 70/70 CTest pass. A discovered linker defect in `hydra_tests` was fixed by linking the same control/display dependency surface used by `HydraSeat.exe`.
 
 **Invariants**
 
-- runtime authority never moves into the control UI;
-- global Start/Stop/Reconfigure commands are accepted only from an authorized control client/session;
-- the control window cannot become permanently off-screen after monitor removal, DPI change, or profile change;
-- another Seat cannot accidentally terminate or reconfigure the whole machine through its default shell;
-- closing/crashing/restarting `HydraSeat.exe` does not change active Seat isolation;
-- all displayed assignments and state come from the host snapshot or validated inactive configuration, not stale UI memory;
-- normal operation requires no console window or repeated administrator prompt.
-
-**Automated tests**
-
-- default Management Seat is Seat 1;
-- explicit Management Seat 2 override;
-- Seat 1 with two displays chooses its configured primary;
-- primary display removal falls back visibly and reports degraded state;
-- saved off-screen rectangle is clamped/rejected;
-- duplicate UI launch activates existing instance;
-- UI kill/restart/resnapshot while host remains Active;
-- unauthorized other-Seat/global command rejection;
-- host disconnect shows unknown/degraded state rather than optimistic Active/Stopped text.
-
-**Manual acceptance**
-
-- run Seat 1 on two monitors and Seat 2 on one monitor;
-- verify the console always appears on Seat 1 primary while the split session is active;
-- close and reopen the console several times without disturbing either game;
-- unplug the Management Seat primary and verify visible fallback/recovery placement.
+- UI close/crash does not stop runtime;
+- runtime snapshot is authoritative;
+- Management Seat defaults to Seat 1 but remains explicit configuration;
+- visible fallback never silently changes Seat hardware ownership;
+- normal UI presents user concepts rather than backend/protocol jargon;
+- whole-machine mutation permission is explicit.
 
 **Done when**
 
-A user can leave HydraSeat running invisibly in the background, reopen one authoritative control console on Seat 1's primary display, and inspect/control the session without affecting runtime merely by opening or closing the window.
-
-**Suggested commit**
-
-`feat: implement P4-CTRL-01 Management Seat control console`
+The UI can reconnect to a running host, resolve Management placement/permissions deterministically, and its model remains consistent on x64/x86. Real display placement acceptance remains part of the Phase 4 physical gate.
 
 ---
 
 ## P4-CTRL-02 — Return-to-Windows and safe reconfiguration workflow
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
-Make ending the split-PC experience and changing the hardware composition normal, obvious, verified UI operations instead of requiring process termination, reboot, or manual cleanup.
+Separate UI close, Seat/game stop, reconfiguration, host exit, and whole-machine `Return to Windows` into explicit state transitions.
 
 **Depends on**
 
 - P4-CTRL-01
-- P4-RUN-01
-- P4-POL-01
-- D-033, D-034
+- P4-IPC-01
 
-**Create/modify**
+**Implemented surface**
 
 - `include/hydra/session_control_transition.hpp`
 - `src/session_control_transition.cpp`
-- host protocol commands/results for `StopAndReturnToWindows`, `BeginReconfigure`, and `ExitHostWhenIdle` where not already represented;
-- control-surface button/state model;
-- inactive configuration/editing gate;
-- tests with fake rollback actions and UI client.
+- host/profile control protocol additions
+- GUI control integration
+- `SessionControlTransitionTests`
 
-**User-visible flows**
+**Local automated evidence — 2026-08-27**
 
-### Stop / Return to Windows
+MSVC x64 and Win32/x86 full build + 70/70 CTest pass.
 
-```text
-Active split session
-  -> user presses Stop / Return to Windows
-  -> host enters Stopping/RollingBack
-  -> target launch/input acceptance stops
-  -> session-specific input/device/window/display/audio/controller/shell actions roll back
-  -> host verifies ordinary Windows postconditions
-  -> state becomes Idle/Stopped
-  -> all monitors and ordinary keyboard/mouse behavior are usable as one normal PC
-```
+**Important limitation**
 
-### Reconfigure
-
-```text
-Active split session
-  -> user presses Reconfigure
-  -> save/snapshot current profile and requested edit intent
-  -> verified Stop / Return to Windows
-  -> open configuration mode on Management Seat display
-  -> identify/flash/test monitors and input devices
-  -> edit Seat assignments and primary displays
-  -> Validate / Preflight
-  -> Save
-  -> Start Now OR remain in normal Windows mode
-```
-
-### Exit HydraSeat completely
-
-```text
-Active session
-  -> Stop / Return to Windows first
-  -> verify rollback
-  -> stop idle host/watchdog if startup mode permits
-  -> close control/tray clients
-```
-
-**Implementation skeleton**
-
-1. Model Stop, Reconfigure, and Exit as host state-machine transitions, not button-specific UI procedures.
-2. Have every active backend contribute captured state and an idempotent rollback/verify action.
-3. Disable configuration mutation while runtime is Active except for explicitly capability-tested hot-reconfiguration operations.
-4. `Reconfigure` records edit intent, requests the same verified stop transaction, and opens the editor only after the host reaches a safe inactive state.
-5. Preserve the previous valid profile until the edited profile validates and writes transactionally.
-6. On cancel, remain in normal Windows mode with the previous saved profile untouched.
-7. On Save + Start, compile a new immutable plan and run normal preflight rather than patching the old active plan.
-8. If any rollback postcondition fails, enter `RecoveryRequired`, keep Start/Reconfigure blocked where unsafe, and surface `hydra_reset`/watchdog recovery.
-9. Distinguish `Stop Session`, `Exit Controller UI`, and `Exit Background Host` so users do not accidentally stop a split session by closing a window.
+The current transition foundation is still centered on several whole-session operations. It does **not** yet prove the independent per-Seat game lifecycle required by D-042. That gap is deliberately isolated into P4-SEAT-01 rather than falsely declaring Phase 4 complete.
 
 **Invariants**
 
-- `Stopped` means rollback verification passed, not merely that games/windows exited;
-- no new profile is activated until the old session is fully inactive;
-- failed reconfiguration never overwrites the last valid profile;
-- another Seat receives no global stop/reconfigure authority by default;
-- Stop/Reconfigure are idempotent under duplicate clicks/IPC retries;
-- the recovery/reset path remains available if the console disappears mid-transition;
-- ordinary Windows remains the safe fallback state.
-
-**Automated tests**
-
-- Active -> Stop -> Idle with all fake rollback postconditions verified;
-- duplicate Stop while Stopping/RollingBack;
-- Active -> Reconfigure -> Idle -> editor-ready;
-- reconfigure cancel preserves prior profile;
-- invalid edited profile cannot Start;
-- Save + Start compiles a new plan hash;
-- rollback failure -> `RecoveryRequired` and no false Stopped state;
-- UI crashes during stop, reconnects, and resnapshots transition/result;
-- Exit Controller leaves Active session running;
-- Exit Host while Active is rejected or converted to Stop-first flow;
-- Management Seat display disappears during reconfigure and UI falls back visibly.
-
-**Manual acceptance**
-
-- from a physical two-Seat session, press `Stop / Return to Windows` and verify all monitors/input work as one normal PC without reboot;
-- start again, press `Reconfigure`, change one monitor and one keyboard assignment, validate/save/start, and verify the new composition;
-- close only the UI during Active and prove the split session continues;
-- choose Exit HydraSeat completely and prove rollback finishes before host/watchdog exit.
+- reconfiguration edits do not occur while risky active state remains unrolled-back;
+- `Return to Windows` is not UI close;
+- host exit is not normal Seat/game stop;
+- failed rollback enters RecoveryRequired rather than enabling configuration over unknown state;
+- saved profile replacement is transactional/validated.
 
 **Done when**
 
-A normal user can split the PC, close/reopen the controller, return the machine to ordinary Windows with one clear action, change the monitor/input composition with a few guided steps, and start the new session without manual cleanup or reboot.
-
-**Suggested commit**
-
-`feat: implement P4-CTRL-02 return and reconfigure workflow`
+Whole-machine stop/reconfigure transitions are deterministic on x64/x86 and the remaining per-Seat lifecycle is delegated explicitly to P4-SEAT-01.
 
 ---
 
-## P4-REC-01 — Runtime/window/display crash and restart matrix
+## P4-SEAT-01 — Independent per-Seat game lifecycle and v1 two-Seat limit
 
 **State:** BLOCKED
 
 **Goal**
 
-Prove the production host can restart or fail without losing control of owned processes/windows or damaging display placement.
+Implement the v1 product behavior where each Seat owns an independent temporary game lifecycle while sharing one recoverable HydraSeat whole-machine runtime.
 
 **Depends on**
 
 - P4-IPC-01
-- P4-POL-01
-- P4-DIS-03
-- P8-WATCH-01
-- P8-JOURNAL-01
+- P4-PROC-01
+- P4-WIN-01
+- P4-CTRL-02
 
-**Failure matrix**
+**Required model**
 
-- UI killed;
-- host killed and restarted;
-- window tracker failure;
-- target process crash/restart;
-- display unplug during activation;
-- topology query failure;
-- optional virtual backend failure;
-- logoff/shutdown.
+Introduce explicit per-Seat runtime state separate from whole-machine session state, for example:
 
-**Automated/manual evidence**
+```text
+SeatGamePhase = Idle | Planning | Starting | Playing | Stopping | Degraded | RecoveryRequired
+```
 
-- no unowned window moved;
-- owned windows restored or session marked recovery-required;
-- process groups reconciled;
-- watchdog state/leases correct;
-- previous user window state restored on stop;
-- repeated reset safe.
+The exact type/version may differ after implementation review, but the observable contract is fixed.
+
+**Required commands/events**
+
+- assign/change Player for an Idle Seat;
+- plan/start game on Seat 1 or Seat 2 independently;
+- stop one Seat game only;
+- observe normal target exit and return that Seat to Idle;
+- start another game on the idle Seat without stopping the other;
+- end playing for one Seat;
+- when both Seats have ended, expose/execute the declared whole-machine return policy;
+- reject a third active Seat in v1;
+- preserve explicit emergency whole-machine reset/return path.
+
+**Invariants**
+
+- `Seat 1 = Playing, Seat 2 = Idle` is healthy;
+- one Seat's normal game exit never becomes whole-machine Stop;
+- Seat-local stop kills/cleans only exact owned process/window/input/audio/controller state for that Seat;
+- global resources required by the remaining active Seat are preserved;
+- an idle Seat remains under minimal HydraSeat Seat Launcher control while another Seat is active;
+- more than two active Seats fail closed;
+- Player/Game identity is runtime binding, not Seat persistence;
+- both Seats ended or explicit Management return can trigger verified whole-machine rollback.
+
+**Automated tests**
+
+- Seat 1 playing / Seat 2 idle and the reverse;
+- stop Seat 2 while Seat 1 process remains alive and unchanged;
+- restart Seat 2 with another synthetic/controlled game;
+- one Seat target exits unexpectedly but cleanly;
+- one Seat fault becomes Seat degraded/recovery without killing healthy Seat unless a shared global invariant is lost;
+- simultaneous commands/correlation/duplicate commands;
+- third-Seat activation rejected;
+- both Seats end -> correct global rollback trigger;
+- host/UI reconnect retains both Seat states.
 
 **Done when**
 
-The runtime survives the matrix on physical two-Seat displays.
+Two controlled Seat process trees can independently start/stop/restart while the other remains active, a third active Seat is rejected, and whole-machine rollback occurs only under the declared both-ended/explicit-return/recovery rules.
 
-**Suggested commit**
+---
 
-`test: implement P4-REC-01 runtime display recovery matrix`
+## P4-REC-01 — Runtime/window/display/Seat-lifecycle crash and restart matrix
+
+**State:** BLOCKED
+
+**Goal**
+
+Prove the complete Phase 4 runtime can recover from host/UI/Seat target/window/display faults without crossing ownership or leaving ordinary Windows unusable.
+
+**Depends on**
+
+- P4-SEAT-01
+- P4-DIS-03
+- P8-WATCH-01
+- P8-JOURNAL-01
+- P8-RESET-01
+
+**Required evidence**
+
+- UI crash/reopen while both Seats active;
+- one Seat target crash while other Seat continues where global safety permits;
+- host crash -> watchdog/reset path;
+- display loss/reconnect;
+- stale PID/HWND rejection;
+- repeated start/Seat-stop/restart/global-return cycles;
+- sign-out/restart regression of the already validated recovery ordering;
+- zero owned orphan process/window helpers;
+- ordinary Windows postcondition after forced global recovery.
+
+**Done when**
+
+The complete Phase 4 runtime fault matrix passes x64/x86 and required physical/manual display/session-end acceptance with exact ownership and rollback evidence.
 
 ---
 
@@ -1035,24 +662,30 @@ The runtime survives the matrix on physical two-Seat displays.
 
 **State:** BLOCKED
 
-**Closure checklist**
+**Goal**
 
-- GUI no longer owns runtime authority;
-- Management Seat control console placement, permissions, close/reopen behavior, and safe display fallback are proven;
-- Stop / Return to Windows and Reconfigure workflows complete verified rollback before editing or exit;
-- host IPC/state model stable and versioned;
-- process/window ownership proven;
-- multi-monitor Seat groups and DPI transforms proven;
-- physical hot-plug/recovery evidence recorded;
-- virtual displays remain optional and capability-gated;
-- no unrelated windows moved in tests;
-- Phase 5 receives stable launch/process/window/display contracts;
-- architecture, status, and README agree.
+Perform the independent Phase-close verification required by D-038.
+
+**Depends on**
+
+- P4-REC-01
+- P4-CTRL-02
+- P4-SEAT-01
+- P4-DIS-03
+
+**Verify**
+
+- all non-deferred required packet implementations and tests;
+- two-Seat limit and concept separation;
+- independent Seat lifecycle;
+- process/window/display ownership;
+- UI/host authority separation;
+- whole-machine return/reconfigure semantics;
+- x64/x86 regressions;
+- physical display gates;
+- recovery/no-orphan postconditions;
+- docs/README/product claims against actual implementation.
 
 **Done when**
 
-Phase 4 is complete and Phase 5 becomes current.
-
-**Suggested commit**
-
-`docs: close Phase 4 runtime and display routing`
+A dedicated review records a passing Phase 4 closeout in `STATUS.md`; otherwise the owning packet is reopened and Phase 4 remains incomplete.
