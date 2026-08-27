@@ -59,6 +59,7 @@ endif()
 
 # Find Qt6 components if available
 find_package(Qt6 COMPONENTS Core Widgets QUIET)
+find_package(Threads REQUIRED)
 
 if(Qt6_FOUND)
     set(CMAKE_AUTOMOC ON)
@@ -119,6 +120,22 @@ add_library(hydra_hardware STATIC
 )
 if(WIN32)
     target_link_libraries(hydra_hardware PRIVATE User32.lib Cfgmgr32.lib Setupapi.lib Xinput.lib)
+endif()
+
+# P4-RUN-01 authoritative, headless production runtime state machine. The
+# library is UI-independent and all mutable backends are injected explicitly.
+add_library(hydra_runtime STATIC
+    src/runtime_state.cpp
+    src/runtime_host.cpp
+    include/hydra/runtime_state.hpp
+    include/hydra/runtime_host.hpp
+)
+target_link_libraries(hydra_runtime PUBLIC Threads::Threads)
+if(MSVC)
+    target_compile_options(hydra_runtime PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_runtime PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 if(MSVC)
     target_compile_options(hydra_hardware PRIVATE /W4 /permissive-)
@@ -402,6 +419,21 @@ if(WIN32)
     target_link_libraries(HydraSeat PRIVATE ${WIN32_LIBS})
 endif()
 
+# P4-RUN-01 headless per-user runtime authority. It deliberately has no Qt or
+# GUI dependency; P4-IPC-01 will add the long-lived local control transport.
+add_executable(hydra_host
+    src/host_main.cpp
+    src/workspace_manager.cpp
+    include/hydra/workspace_manager.hpp
+)
+target_link_libraries(hydra_host PRIVATE hydra_runtime)
+if(MSVC)
+    target_compile_options(hydra_host PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_host PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 if(Qt6_FOUND)
     target_link_libraries(HydraSeat PRIVATE Qt6::Core Qt6::Widgets)
     target_compile_definitions(HydraSeat PRIVATE HYDRA_HAS_QT=1)
@@ -624,6 +656,19 @@ if(Qt6_FOUND)
     target_link_libraries(hydra_tests PRIVATE Qt6::Core Qt6::Widgets)
 endif()
 add_test(NAME EngineUnitTests COMMAND hydra_tests)
+
+# P4-RUN-01 pure runtime transition/rollback/concurrency tests and controlled
+# headless process self-test. No hardware or persistent system state is touched.
+add_executable(runtime_host_tests tests/test_runtime_host.cpp)
+target_link_libraries(runtime_host_tests PRIVATE hydra_runtime Threads::Threads)
+if(MSVC)
+    target_compile_options(runtime_host_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(runtime_host_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME RuntimeHostTests COMMAND runtime_host_tests)
+add_test(NAME RuntimeHostProcessSelfTest COMMAND hydra_host --self-test)
 
 # Pure Phase 1 identity checks: deterministic and independent of attached hardware.
 add_executable(hardware_identity_tests
