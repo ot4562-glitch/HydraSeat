@@ -118,6 +118,19 @@ $harnessProcess = Start-Process -FilePath $HarnessPath -ArgumentList @(
 ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $harnessStdout -RedirectStandardError $harnessStderr
 $harnessExitCode = $harnessProcess.ExitCode
 if ($harnessExitCode -ne 0) {
+    if (Test-Path -LiteralPath $harnessStdout) {
+        Write-Host '--- P3-E-01 harness stdout ---'
+        Get-Content -LiteralPath $harnessStdout
+    }
+    if (Test-Path -LiteralPath $harnessStderr) {
+        Write-Host '--- P3-E-01 harness stderr ---'
+        Get-Content -LiteralPath $harnessStderr
+    }
+    $failedReportPath = Join-Path $runDirectory 'p3-e-01-report.json'
+    if (Test-Path -LiteralPath $failedReportPath) {
+        Write-Host '--- P3-E-01 failed report ---'
+        Get-Content -LiteralPath $failedReportPath
+    }
     throw "P3-E-01 harness failed with exit code $harnessExitCode. Evidence: $runDirectory"
 }
 
