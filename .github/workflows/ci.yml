@@ -101,6 +101,12 @@ jobs:
         -CMakePath cmake.exe
         -DumpBinPath dumpbin.exe
 
+    - name: Install per-app Mesa software OpenGL for headless runner
+      uses: f3d-app/install-mesa-windows-action@v1
+      with:
+        path: ${{ runner.temp }}\p3-e-glfw-build\tests\Release
+        version: 23.3.5
+
     - name: Run real open-source application acceptance
       shell: powershell
       run: >-
