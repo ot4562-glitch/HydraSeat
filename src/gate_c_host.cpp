@@ -2,6 +2,7 @@
 #include "hydra/gate_c_architecture.hpp"
 #include "hydra/gate_c_recovery.hpp"
 #include "hydra/rollback_registry.hpp"
+#include "hydra/reset_actions.hpp"
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/gate_c_probe_snapshot.hpp"
 #include "hydra/gate_c_transport.hpp"
@@ -1072,10 +1073,13 @@ struct TargetSession {
 
 struct GateCRecoveryContext {
     explicit GateCRecoveryContext(std::filesystem::path directory)
-        : storage(std::move(directory)), store(storage) {}
+        : storage(directory),
+          store(storage),
+          resetRegistration(std::move(directory)) {}
 
     hydra::recovery::NativeCrashJournalStorage storage;
     hydra::recovery::CrashJournalStore store;
+    hydra::reset::RuntimeResetRegistrationStore resetRegistration;
     GateCWatchdogClient watchdog;
     std::optional<hydra::gatec::GateCRecoveryJournal> journal;
     std::uint64_t runtimeGeneration{0};
@@ -1457,23 +1461,35 @@ private:
 
     bool preflightRecovery(GateCRecoveryContext& recovery,
                            std::string* error = nullptr) {
-        const auto assessment = recovery.store.assessStartupAndEnterSafeMode();
-        if (assessment.state != hydra::recovery::StartupRecoveryState::Clean) {
+        const auto startupAssessment = recovery.store.assessStartupAndEnterSafeMode();
+        if (startupAssessment.state !=
+            hydra::recovery::StartupRecoveryState::Clean) {
             if (error != nullptr) {
-                *error = assessment.diagnostic.empty()
+                *error = startupAssessment.diagnostic.empty()
                     ? "Gate C recovery preflight is not clean"
-                    : assessment.diagnostic;
+                    : startupAssessment.diagnostic;
             }
             return false;
         }
-        if (assessment.journal) {
-            if (assessment.journal->runtimeGeneration ==
+        const auto resetRegistration = recovery.resetRegistration.load();
+        if (resetRegistration.status !=
+            hydra::reset::RuntimeRegistrationReadStatus::Missing) {
+            if (error != nullptr) {
+                *error = resetRegistration.status ==
+                        hydra::reset::RuntimeRegistrationReadStatus::Success
+                    ? "runtime reset registration remains; run hydra_reset before activation"
+                    : resetRegistration.diagnostic;
+            }
+            return false;
+        }
+        if (startupAssessment.journal) {
+            if (startupAssessment.journal->runtimeGeneration ==
                 (std::numeric_limits<std::uint64_t>::max)()) {
                 if (error != nullptr) *error = "runtime generation exhausted";
                 return false;
             }
             recovery.runtimeGeneration =
-                assessment.journal->runtimeGeneration + 1;
+                startupAssessment.journal->runtimeGeneration + 1;
         } else {
             recovery.runtimeGeneration = 1;
         }
@@ -1528,11 +1544,17 @@ private:
             watchdogVerified = recovery.watchdog.disarm(&error);
         }
 
+        bool resetRegistrationCleared = false;
         if (journalHealthy && processesClean && watchdogVerified) {
             journalHealthy = recovery.journal->verifyRollback(&error) &&
                 recovery.journal->markCleanStop(&error);
+            if (journalHealthy) {
+                resetRegistrationCleared =
+                    recovery.resetRegistration.remove(&error);
+            }
         }
-        if (!journalHealthy || !processesClean || !watchdogVerified) {
+        if (!journalHealthy || !processesClean || !watchdogVerified ||
+            !resetRegistrationCleared) {
             if (recovery.journal) {
                 std::string ignored;
                 (void)recovery.journal->markRecoveryRequired(&ignored);
@@ -1594,9 +1616,34 @@ private:
         const auto manifest = hydra::gatec::makeGateCRecoveryPlan(
             sessionId, recovery.runtimeGeneration, leaseTimeoutMilliseconds,
             6'000, targets, &error);
-        if (!manifest || !recovery.watchdog.start(*manifest, &error)) {
+        if (!manifest) {
+            std::cerr << "Gate C recovery plan creation failed: " << error << '\n';
+            terminateSessionsNoJournal(sessions);
+            return false;
+        }
+
+        hydra::watchdog::ProcessIdentity ownerIdentity;
+        std::uint32_t ownerIdentityError = 0;
+        if (!hydra::watchdog::queryProcessIdentity(
+                GetCurrentProcessId(), ownerIdentity, &ownerIdentityError)) {
+            std::cerr << "Gate C reset owner identity query failed: "
+                      << ownerIdentityError << '\n';
+            terminateSessionsNoJournal(sessions);
+            return false;
+        }
+        hydra::reset::RuntimeResetRegistration resetRegistration;
+        resetRegistration.ownerProcess = ownerIdentity;
+        resetRegistration.manifest = *manifest;
+        if (!recovery.resetRegistration.write(resetRegistration, &error)) {
+            std::cerr << "Gate C reset registration failed: " << error << '\n';
+            terminateSessionsNoJournal(sessions);
+            return false;
+        }
+        if (!recovery.watchdog.start(*manifest, &error)) {
             std::cerr << "Gate C watchdog arm failed: " << error << '\n';
             terminateSessionsNoJournal(sessions);
+            std::string ignored;
+            (void)recovery.resetRegistration.remove(&ignored);
             return false;
         }
 

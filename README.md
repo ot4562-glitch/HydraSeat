@@ -455,7 +455,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P8-RESET-01 — Emergency reset CLI (READY; P3-E-01 is VALIDATED at code head `12957f0` by PR #24 run `33038227992`, including Windows x64/x86, Gate C cross-architecture, and pinned real GLFW 3.5.1 acceptance; P3-D-02 remains BLOCKED by P3-HW-01 physical acceptance and P8-RESET-01)
+P8-RESET-01 — Emergency reset CLI (CODE_COMPLETE; reset-focused tests pass 3/3 on local x64/x86 and x64-host-to-x64/x86 Gate C cross regressions pass. Current interactive full suites are 55/56 on both architectures only at the pre-existing live-desktop cursor/focus assertion; exact-head non-interactive fork CI and actual emergency shortcut/task execution remain PENDING before VALIDATED; P3-D-02 remains BLOCKED by P3-HW-01 physical acceptance and validated P8-RESET-01)
 ```
 
 Start every coding task by reading:

@@ -368,7 +368,7 @@ Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe
 当前默认 packet：
 
 ```text
-P8-RESET-01 — 紧急重置 CLI（READY；P3-E-01 已在 code head `12957f0` 通过 PR #24 run `33038227992` 的 Windows x64/x86、Gate C 跨架构以及 pinned GLFW 3.5.1 真实应用验收，现为 VALIDATED；P3-D-02 仍因 P3-HW-01 物理验收和 P8-RESET-01 而 BLOCKED）
+P8-RESET-01 — 紧急重置 CLI（CODE_COMPLETE；reset-focused 测试在本地 x64/x86 均为 3/3 PASS，x64 host→x64/x86 Gate C 跨架构回归也通过。当前 interactive 完整 suite 在两种架构均为 55/56，唯一失败是既有的 live-desktop cursor/focus assertion；exact-head non-interactive fork CI 与真实 emergency shortcut/task 启动仍需完成后才能 VALIDATED；P3-D-02 仍受 P3-HW-01 物理验收和已 VALIDATED 的 P8-RESET-01 阻塞）
 ```
 
 开始编码前阅读：

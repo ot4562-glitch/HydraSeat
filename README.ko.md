@@ -368,7 +368,7 @@ Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled prob
 현재 기본 packet:
 
 ```text
-P8-RESET-01 — 비상 리셋 CLI (READY; P3-E-01은 code head `12957f0`에서 PR #24 run `33038227992`의 Windows x64/x86, Gate C cross-architecture 및 pinned GLFW 3.5.1 실제 앱 검증까지 통과해 VALIDATED; P3-D-02는 P3-HW-01 물리 승인과 P8-RESET-01 때문에 계속 BLOCKED)
+P8-RESET-01 — 비상 리셋 CLI (CODE_COMPLETE; reset-focused 테스트는 로컬 x64/x86에서 각각 3/3 PASS이고 x64 host→x64/x86 Gate C cross 회귀도 PASS. 현재 interactive 전체 suite는 기존 live-desktop cursor/focus assertion 1건 때문에 양쪽 모두 55/56이며, exact-head non-interactive fork CI와 실제 emergency shortcut/task 실행은 VALIDATED 전까지 PENDING; P3-D-02는 P3-HW-01 물리 승인과 VALIDATED된 P8-RESET-01 때문에 계속 BLOCKED)
 ```
 
 작업 시작 전:

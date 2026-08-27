@@ -139,7 +139,7 @@ A HydraSeat-owned controlled-process harness can register a harmless rollback pl
 
 ## P8-RESET-01 — Emergency reset CLI
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -202,6 +202,16 @@ hydra_reset export-diagnostics
 **Done when**
 
 A user can recover from a forced host/target failure through one documented command and verification report.
+
+**P8-RESET-01 implementation note (2026-08-27)**
+
+- `hydra_reset.exe` is a standalone console executable with `status`, `dry-run`, `session <id>`, `all --confirm`, `safe-mode on|off`, and `export-diagnostics`; support output can be emitted as bounded JSON and the tool has no Qt/main-UI dependency.
+- Before risky Gate C activation, the host durably writes a bounded/versioned `reset-runtime.bin` containing only the exact runtime-owner `PID + creationTime100ns` and the same trusted watchdog rollback manifest. Its integrity digest covers both the exact owner identity and canonical manifest bytes. The crash journal remains evidence-only and cannot invent actions.
+- Reset first validates the manifest, pre-opens and revalidates exact rollback-target process objects, then stops the exact runtime owner and replays rollback in reverse activation order. This preflight is required because the independent watchdog may begin target teardown as soon as the owner exits; reset trusts only the already-verified process object handles, never a later PID-only lookup or process-name match. Concurrent watchdog cleanup is accepted only when that exact held process object signals within the bounded action timeout.
+- No broad process-name kill, arbitrary registry deletion, user-profile deletion, HidHide mutation, global Raw Input unregister, or arbitrary path command exists. The obsolete `src/reset_input.cpp` global Raw Input unregister helper is removed. Only the fixed reset registration files, crash-journal slots, and allowlisted watchdog actions are touched.
+- Verification failures preserve the trusted registration and persist `RecoveryRequired` evidence. The pre-journal crash window is also covered: if cleanup fails after the reset registration was written but before the host journal began, reset promotes that trusted manifest into a minimal durable `Preparing` journal plus correlated `RecoveryRequired` marker so a later reset can retry safely.
+- Real Windows process tests cover no-session/repeat, live owner + target cleanup, dead-owner/stale journal, wrong creation identity, unrelated same-name sentinel preservation, and a live Gate C host with an independently armed watchdog racing the same target teardown. Reset-focused unit/process/live-watchdog tests pass 3/3 on both local x64 and Win32/x86, and the x64 host-to-x64/x86 architecture/polling/cursor-focus/Raw Input/XInput cross matrix passes locally. Current interactive full suites are 55/56 on both architectures only at the pre-existing live-desktop `GateCCursorFocusShimProcessSelfTest`; exact-head non-interactive fork CI remains authoritative for the full regression suite.
+- Automated implementation is complete, but the packet remains `CODE_COMPLETE`: actual user-facing emergency shortcut/task execution is still a manual acceptance gate. P3-D-02 therefore remains blocked, and P3-HW-01 physical Gate A/B/C acceptance is independently still pending.
 
 **Suggested commit**
 

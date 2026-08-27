@@ -3,7 +3,7 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P8-RESET-01 — Emergency reset CLI** (`READY`; P3-E-01 is now `VALIDATED` by exact-head Windows x64/x86/cross plus real GLFW 3.5.1 acceptance. P3-D-02 remains blocked by P3-HW-01 physical acceptance and completion of P8-RESET-01.)
+- Current default packet: **P8-RESET-01 — Emergency reset CLI** (`CODE_COMPLETE`; reset-focused unit/process/live-watchdog tests pass 3/3 on local x64 and x86, and the x64-host-to-x64/x86 Gate C cross matrix passes. Current interactive full suites are 55/56 on both architectures only because the pre-existing cursor/focus process assertion observes live desktop global-state movement. Exact-head non-interactive fork CI and actual emergency shortcut/task execution remain required before `VALIDATED`. P3-D-02 remains blocked by P3-HW-01 physical acceptance and validated P8-RESET-01.)
 - Parent fork-main baseline for P8-WATCH-01 validation: `494426e882832b0ae6d94a75d038473ba96f104a` (P3-D-01 integrated; physical acceptance remains pending)
 - Current P3-REC evidence: fork PR #23 run `32973197727` validates session-end repair head `bb8fd28` on Windows x64, Win32/x86, and Gate C cross-architecture. Human actual Sign out and actual Restart both pass on the repaired binary with exact-identity cleanup, zero HydraSeat orphans, durable `RollbackVerified`/`CleanStop`, and the Restart re-test additionally proves a real boot transition (`LastBootUpTime` `2026-08-25T09:52:03.9523380+09:00` -> `2026-08-27T07:46:40.5000000+09:00`).
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
@@ -57,7 +57,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | Packet | State | Reason |
 | --- | --- | --- |
 | P8-WATCH-01 Watchdog protocol and lease model | VALIDATED | Fork PR #21 run `32919928489` validates head `dceaab9`: native x64/x86 full CTest including `WatchdogProcessFaultTests` plus Gate C cross-architecture pass; its Gate C integration is now validated by P3-REC-01 |
-| P8-RESET-01 Emergency reset CLI contract | READY | P8-WATCH-01 and P8-JOURNAL-01 are validated. It is the current default packet because P3-D-02 requires the emergency reset path before guarded cloaking; implementation has not started in this P3-E closure task |
+| P8-RESET-01 Emergency reset CLI contract | CODE_COMPLETE | Standalone `hydra_reset.exe` implements status/dry-run/session/all/safe-mode/diagnostics against a bounded exact-owner + trusted-watchdog-manifest registration. Real process tests preserve unrelated same-name/PID-reuse identities and recover both dead-host and live-host/watchdog races; reset-focused tests pass 3/3 on local x64/x86 and cross-architecture Gate C regressions pass. Current interactive full suites are 55/56 on both architectures solely at the pre-existing live desktop cursor/focus global-state assertion. Exact-head non-interactive fork CI plus actual emergency shortcut/task execution are still PENDING before `VALIDATED` |
 | P8-JOURNAL-01 Crash journal and safe-mode marker | VALIDATED | Fork PR #22 run `32947110442` validates exact implementation head `2b42d9a`: native x64/x86 full-project CTest plus Gate C cross-architecture pass; bounded durable journal/startup safe-mode contract is now integrated and validated by P3-REC-01 |
 | P4-RUN-01 Production host service/process skeleton | BLOCKED | Start after P3 controlled shim contract stabilizes |
 
@@ -72,6 +72,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | Gate C Raw Input API behavior baseline | VALIDATED (CONTROLLED CI) | Run `32800513365` retained native x64/x86 registration traces and validated replacement/remove/destroyed-HWND/process teardown; physical `WM_INPUT` and hot-plug remain P3-HW-01 |
 | Gate C Raw Input API virtualization | VALIDATED (CONTROLLED CI) | Run `32806163164` passed native x64/x86 plus x64-host-to-x64/x86 ordinary registration/data/buffer APIs, two-process zero-cross counters, rollback, and existing polling/cursor regressions; physical evidence remains P3-HW-01 |
 | Gate C watchdog/crash recovery | VALIDATED | Existing crash/process acceptance remains green. Repair head `bb8fd28` fixes the real-session ordering defect and PR #23 run `32973197727` passes Windows x64/x86 and Gate C cross-architecture. Human actual Sign out and actual Restart pass with exact-identity cleanup, zero HydraSeat orphans, safe PID-reuse discrimination, metrics/trace output, durable `RollbackVerified`/`CleanStop`, and a verified boot-time transition on Restart |
+| Emergency reset shortcut/task execution | PENDING | P8-RESET-01 code and real-process tests are complete, but a user-facing emergency shortcut or scheduled-task launch must still be exercised manually and its JSON/postcondition report recorded before P8-RESET-01 can be `VALIDATED` |
 | Gate D device cloaking | NOT IMPLEMENTED | Guarded session-cloak experiment with spare input and automatic rollback |
 | Gate E two-game zero bleed | NOT IMPLEMENTED | Two distinct profile entries and objective cross-Seat metrics |
 
@@ -347,25 +348,35 @@ Real-application evidence: reproducible preparation verified exact source commit
 Automated/local regression: focused stable x64 planner/shim/external-harness checks pass 6/6 and fresh Win32/x86 bridge/harness builds pass after the launch hardening. A final interactive-desktop full local CTest run produced 49/54 because five pre-existing API-probe cases compare live global cursor/foreground state and observed unrelated desktop movement; no HydraSeat/GLFW processes remained. This result is retained rather than rewritten as a false 54/54 claim, while the exact-head non-interactive Windows x64/x86 CI full suites are green.
 Validation CI: fork PR #24 run `33038227992` validates exact code head `12957f0`: Windows x64 full CTest, Win32/x86 full CTest, Gate C x64-to-x64/x86 cross-architecture, and dedicated `p3-e-open-source-application` real GLFW acceptance all pass. The CI clones the pinned GLFW commit outside HydraSeat, rejects commit/import-mask drift, pins `f3d-app/install-mesa-windows-action` to immutable commit `1824e370ed7fb1795f5bc88fd1f6c81eb15d92bc` with Mesa `23.3.5`, runs the same real two-process acceptance, and uploads ignored evidence.
 Manual/known limits: synthetic Gate C Seat events exercise the real external app, but physical Gate A/B/C remains P3-HW-01. No physical input suppression, HidHide cloaking, x86 GLFW compatibility, commercial game, anti-cheat, DRM, protected-process, or existing-process injection claim is made. P3-E-02 remains blocked because its suppression/cloaking prerequisite is not satisfied.
-Next action: P8-RESET-01 is READY and becomes the current default packet because P3-D-02 requires an independently launchable emergency reset path. Do not start P3-D-02 or P3-E-02 before their remaining prerequisites pass, and do not run the whole-Phase-3 audit while physical Gate A/B/C and later Phase 3 packets remain incomplete.
+Next action: P8-RESET-01 is `CODE_COMPLETE`; require exact-head fork CI and then perform only its remaining manual emergency shortcut/task launch acceptance. Do not start P3-D-02 or P3-E-02 before their remaining prerequisites pass, and do not run the whole-Phase-3 audit while physical Gate A/B/C and later Phase 3 packets remain incomplete.
+
+### 2026-08-27 — P8-RESET-01
+
+State: CODE_COMPLETE
+Branch: `feat/p8-reset-01-emergency-reset`
+Implementation: added standalone `hydra_reset.exe`, bounded `reset-runtime.bin` authority, exact owner/process cleanup, dry-run/JSON diagnostics, session filtering, manual safe-mode controls, and fail-closed `RecoveryRequired` persistence. The crash journal remains evidence-only; reset authority is the separately persisted exact owner identity plus the same validated watchdog rollback manifest.
+Safety boundary: no process-name kill, arbitrary command/path field, registry sweep, user-profile deletion, HidHide mutation, or global Raw Input unregister. Reset validates/arms the manifest and pre-acquires exact rollback target process objects before stopping the runtime owner, then uses only those verified handles through the watchdog/reset race. PID reuse and same-name unrelated processes are preserved.
+Recovery evidence: no-session and repeated reset, live owner/target cleanup, dead-host/stale journal, wrong creation identity, unrelated same-name sentinel, transient rollback failure/retry, pre-journal failure promotion to `Preparing` + `RecoveryRequired`, and a live Gate C host with independently armed watchdog all pass on real Windows process paths.
+Local regression: reset-focused `ResetActionsTests`, `ResetProcessTests`, and `GateCWatchdogRecoveryTests` pass 3/3 on both x64 and Win32/x86. The local x64-host-to-x64/x86 architecture, protocol-error, baseline, polling, cursor/focus, Raw Input, and XInput cross matrix passes with zero cross-delivery/API-failure counters where applicable. Current interactive full CTest is 55/56 on both architectures only because the pre-existing `GateCCursorFocusShimProcessSelfTest` observes live host desktop cursor/foreground movement; exact-head non-interactive fork CI remains authoritative for the full suite.
+Manual/CI limits: exact-head fork CI is still pending at this point in the local implementation record. Actual emergency shortcut/task execution is also PENDING and must be recorded before `VALIDATED`. P3-HW-01 physical Gate A/B/C remains independently PENDING, so P3-D-02 stays BLOCKED and Phase 3 is not ready for its whole-phase audit.
 
 ## Next Codex task
 
 Use:
 
 ```text
-Implement only P8-RESET-01 — Emergency reset CLI.
+Finish only P8-RESET-01 validation acceptance.
 
 P3-E-01 is VALIDATED at code head 12957f0 by PR #24 run 33038227992: Windows
 x64/x86, Gate C cross-architecture, and the pinned real GLFW 3.5.1 acceptance all
 pass. Preserve the validated recovery, profiled-shim, external-process ownership,
 and fail-closed contracts.
 
-Implement the small independently launchable hydra_reset.exe exactly from
-PHASE8_RELIABILITY_DISTRIBUTION.md. Reuse the validated watchdog and crash-journal
-contracts; terminate only exact validated HydraSeat-owned process identities, make
-reset idempotent, preserve user profiles by default, provide dry-run/JSON evidence,
-and report RecoveryRequired with a nonzero exit when cleanup cannot be verified.
+P8-RESET-01 is CODE_COMPLETE on branch feat/p8-reset-01-emergency-reset.
+Reset-focused tests pass 3/3 on local x64/x86 and the Gate C cross matrix passes;
+Require exact-head fork x64/x86/cross CI, then perform the remaining user-facing
+emergency shortcut/task launch and record JSON/postcondition evidence. Preserve exact
+owner/target identity and fail-closed RecoveryRequired behavior; do not mark VALIDATED yet.
 
 Do not implement P3-D-02, P3-E-02, physical cloaking, or later packets in the same
 task. P3-HW-01 physical Gate A/B/C remains CODE_COMPLETE/PENDING, so Phase 3 is not

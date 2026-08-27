@@ -223,6 +223,22 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P8-RESET-01 bounded runtime reset registration and verified emergency-reset
+# execution. The crash journal remains evidence-only; reset authority is the
+# journal-correlated exact watchdog manifest plus exact runtime-owner identity.
+add_library(hydra_reset_actions STATIC
+    src/reset_actions.cpp
+    include/hydra/reset_actions.hpp
+)
+target_link_libraries(hydra_reset_actions PUBLIC
+    hydra_crash_journal hydra_watchdog_core)
+if(MSVC)
+    target_compile_options(hydra_reset_actions PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_reset_actions PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P3-REC-01 Gate C recovery contract. The trusted rollback manifest contains
 # only exact controlled-process termination identities; process-local shim and
 # adapter state disappears with the owned target process.
@@ -391,10 +407,18 @@ if(Qt6_FOUND)
     target_compile_definitions(HydraSeat PRIVATE HYDRA_HAS_QT=1)
 endif()
 
-# Reset Tool Target
-add_executable(reset_input src/reset_input.cpp)
+# P8-RESET-01 independently launchable emergency reset tool. It depends only on
+# recovery/watchdog core libraries and never on Qt or the main control UI.
+add_executable(hydra_reset src/reset_main.cpp)
+target_link_libraries(hydra_reset PRIVATE hydra_reset_actions)
+if(MSVC)
+    target_compile_options(hydra_reset PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_reset PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
 if(WIN32)
-    target_link_libraries(reset_input PRIVATE User32.lib)
+    # No GUI/User32 dependency is required.
 endif()
 
 # Phase 1 command-line hardware report (does not depend on Qt).
@@ -569,7 +593,8 @@ add_executable(hydra_gate_c_host
     include/hydra/workspace_manager.hpp
 )
 target_link_libraries(hydra_gate_c_host PRIVATE
-    hydra_gate_c_core hydra_gate_c_recovery hydra_hardware hydra_input_metrics)
+    hydra_gate_c_core hydra_gate_c_recovery hydra_reset_actions
+    hydra_hardware hydra_input_metrics)
 hydra_set_gate_c_output(hydra_gate_c_host)
 if(WIN32)
     target_link_libraries(hydra_gate_c_host PRIVATE ${WIN32_LIBS})
@@ -682,6 +707,30 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME CrashJournalTests COMMAND crash_journal_tests)
 
+# P8-RESET-01 codec/state/rollback/idempotency tests. Windows process tests run
+# the actual hydra_reset executable against exact owned process identities.
+add_executable(reset_actions_tests
+    tests/test_reset_actions.cpp
+)
+target_link_libraries(reset_actions_tests PRIVATE hydra_reset_actions)
+if(MSVC)
+    target_compile_options(reset_actions_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(reset_actions_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ResetActionsTests COMMAND reset_actions_tests)
+if(WIN32)
+    add_executable(reset_process_tests tests/test_reset_process.cpp)
+    target_link_libraries(reset_process_tests PRIVATE hydra_reset_actions)
+    add_dependencies(reset_process_tests hydra_reset)
+    if(MSVC)
+        target_compile_options(reset_process_tests PRIVATE /W4 /permissive-)
+    endif()
+    add_test(NAME ResetProcessTests COMMAND reset_process_tests)
+    set_tests_properties(ResetProcessTests PROPERTIES TIMEOUT 90)
+endif()
+
 # P3-REC-01 portable trusted-plan and durable recovery-journal lifecycle tests.
 add_executable(gate_c_recovery_tests
     tests/test_gate_c_recovery.cpp
@@ -701,9 +750,15 @@ if(WIN32)
     target_link_libraries(gate_c_watchdog_recovery_tests PRIVATE
         hydra_crash_journal)
     hydra_set_gate_c_output(gate_c_watchdog_recovery_tests)
+    add_custom_target(stage_gate_c_watchdog_reset
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:hydra_reset>
+            $<TARGET_FILE_DIR:gate_c_watchdog_recovery_tests>/hydra_reset.exe
+        DEPENDS hydra_reset
+        VERBATIM)
     add_dependencies(gate_c_watchdog_recovery_tests
         hydra_gate_c_host hydra_gate_c_target hydra_gate_c_api_probe
-        hydra_gate_c_shim hydra_watchdog)
+        hydra_gate_c_shim hydra_watchdog stage_gate_c_watchdog_reset)
     if(MSVC)
         target_compile_options(gate_c_watchdog_recovery_tests PRIVATE
             /W4 /permissive-)

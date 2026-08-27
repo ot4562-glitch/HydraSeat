@@ -3,7 +3,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -128,6 +130,55 @@ Process launch(const std::filesystem::path& executable,
     if (created == FALSE) return {};
     CloseHandle(process.hThread);
     return Process(process.hProcess, process.dwProcessId);
+}
+
+Process launchCaptured(const std::filesystem::path& executable,
+                       std::wstring arguments,
+                       const std::filesystem::path& outputPath) {
+    SECURITY_ATTRIBUTES attributes{};
+    attributes.nLength = sizeof(attributes);
+    attributes.bInheritHandle = TRUE;
+    const HANDLE output = CreateFileW(
+        outputPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &attributes,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (output == INVALID_HANDLE_VALUE) return {};
+    const HANDLE input = CreateFileW(
+        L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (input == INVALID_HANDLE_VALUE) {
+        CloseHandle(output);
+        return {};
+    }
+
+    std::wstring command = quote(executable.wstring());
+    if (!arguments.empty()) {
+        command.push_back(L' ');
+        command += arguments;
+    }
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\0');
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = input;
+    startup.hStdOutput = output;
+    startup.hStdError = output;
+    PROCESS_INFORMATION process{};
+    const BOOL created = CreateProcessW(
+        executable.c_str(), mutableCommand.data(), nullptr, nullptr, TRUE,
+        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+        nullptr, nullptr, &startup, &process);
+    CloseHandle(input);
+    CloseHandle(output);
+    if (created == FALSE) return {};
+    CloseHandle(process.hThread);
+    return Process(process.hProcess, process.dwProcessId);
+}
+
+std::string readText(const std::filesystem::path& path) {
+    std::ifstream stream(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(stream),
+                       std::istreambuf_iterator<char>());
 }
 
 std::filesystem::path uniqueRecoveryDir(std::string_view label) {
@@ -261,6 +312,69 @@ void testStaleJournalBlocksStartup() {
     cleanupDirectory(directory);
 }
 
+void testEmergencyResetStopsLiveGateCHost() {
+    const auto directory = uniqueRecoveryDir("live-reset");
+    cleanupDirectory(directory);
+    auto host = launch(sibling(L"hydra_gate_c_host.exe"),
+                       recoveryArgs("wait-host-kill", directory));
+    check(host.valid(), "live-reset Gate C host launches");
+
+    hydra::recovery::NativeCrashJournalStorage storage(directory);
+    hydra::recovery::CrashJournalStore store(storage);
+    std::vector<DWORD> children;
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds(15);
+    bool active = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto journal = store.loadCurrent();
+        active = journal.has_value() &&
+            journal->phase == hydra::recovery::CrashJournalPhase::Active;
+        children = directChildren(host.pid());
+        if (active && children.size() >= 3) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    check(active && children.size() >= 3,
+          "live-reset host reaches active state with watchdog and targets");
+    auto childHandles = openChildren(children);
+    check(childHandles.size() == children.size(),
+          "live-reset observes every exact guarded child handle");
+
+    std::wstring resetArguments = L"all --confirm --recovery-dir \"";
+    resetArguments += directory.wstring();
+    resetArguments += L"\" --json";
+    const auto resetOutput = directory / L"live-reset.jsonl";
+    auto reset = launchCaptured(sibling(L"hydra_reset.exe"), resetArguments,
+                                resetOutput);
+    check(reset.valid(), "independent hydra_reset launches while Gate C host is active");
+    DWORD resetExit = 0;
+    const bool resetWaited = reset.wait(20'000, &resetExit);
+    if (!resetWaited || resetExit != 0) {
+        std::cerr << "[RESET] " << readText(resetOutput) << '\n';
+    }
+    check(resetWaited && resetExit == 0,
+          std::string("hydra_reset recovers an active Gate C session without UI participation; waited=") +
+              (resetWaited ? "true" : "false") +
+              " exit=" + std::to_string(resetExit));
+    check(host.wait(5'000), "live Gate C owner exits during emergency reset");
+    for (HANDLE child : childHandles) {
+        check(WaitForSingleObject(child, 10'000) == WAIT_OBJECT_0,
+              "live emergency reset leaves no watchdog/target orphan");
+    }
+    closeHandles(childHandles);
+
+    const auto current = store.loadCurrent();
+    check(current.has_value() &&
+              current->phase == hydra::recovery::CrashJournalPhase::Clean &&
+              current->finalResult ==
+                  hydra::recovery::CrashJournalFinalResult::Clean,
+          "live emergency reset persists verified clean journal evidence");
+    check(!store.loadSafeMode().has_value(),
+          "live emergency reset leaves no safe-mode marker after verified cleanup");
+    check(!std::filesystem::exists(directory / L"reset-runtime.bin"),
+          "live emergency reset removes its exact runtime registration");
+    cleanupDirectory(directory);
+}
+
 void testHostDeathLeavesNoOrphanAndEntersSafeMode() {
     const auto directory = uniqueRecoveryDir("hostkill");
     cleanupDirectory(directory);
@@ -309,6 +423,37 @@ void testHostDeathLeavesNoOrphanAndEntersSafeMode() {
     DWORD blockedExit = 0;
     check(blocked.wait(10'000, &blockedExit) && blockedExit != 0,
           "post-crash safe mode blocks automatic reactivation");
+
+    std::wstring resetArguments = L"all --confirm --recovery-dir \"";
+    resetArguments += directory.wstring();
+    resetArguments += L"\" --json";
+    auto reset = launch(sibling(L"hydra_reset.exe"), resetArguments);
+    check(reset.valid(), "independent hydra_reset launches after Gate C host death");
+    DWORD resetExit = 0;
+    check(reset.wait(20'000, &resetExit) && resetExit == 0,
+          "hydra_reset verifies and closes the stale Gate C recovery state");
+    const auto resetCurrent = store.loadCurrent();
+    check(resetCurrent.has_value() &&
+              resetCurrent->phase == hydra::recovery::CrashJournalPhase::Clean &&
+              resetCurrent->finalResult ==
+                  hydra::recovery::CrashJournalFinalResult::Clean,
+          "hydra_reset replaces incomplete Gate C evidence with verified clean evidence");
+    check(!store.loadSafeMode().has_value(),
+          "hydra_reset clears the correlated post-crash safe-mode marker");
+    check(!std::filesystem::exists(directory / L"reset-runtime.bin"),
+          "hydra_reset removes the exact runtime reset registration after success");
+
+    auto resumed = launch(sibling(L"hydra_gate_c_host.exe"),
+                          recoveryArgs("clean", directory));
+    check(resumed.valid(), "Gate C relaunches after verified emergency reset");
+    DWORD resumedExit = 0;
+    check(resumed.wait(30'000, &resumedExit) && resumedExit == 0,
+          "Gate C clean activation succeeds after emergency reset");
+    const auto resumedCurrent = store.loadCurrent();
+    check(resumedCurrent.has_value() &&
+              resumedCurrent->phase == hydra::recovery::CrashJournalPhase::Clean &&
+              resumedCurrent->runtimeGeneration == 2,
+          "post-reset Gate C activation advances runtime generation exactly once");
     cleanupDirectory(directory);
 }
 
@@ -335,6 +480,7 @@ int wmain(int argc, wchar_t** argv) {
     testFaultScenarios();
     testUiDeathDoesNotOwnRecovery();
     testStaleJournalBlocksStartup();
+    testEmergencyResetStopsLiveGateCHost();
     testHostDeathLeavesNoOrphanAndEntersSafeMode();
 
     std::cout << "Gate C watchdog recovery process tests passed.\n";
