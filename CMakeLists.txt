@@ -187,6 +187,25 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P4-WIN-01 process-identity-backed top-level window inventory. WinEvent
+# callbacks only enqueue bounded hints; ownership/classification work stays on a
+# dedicated message-pump worker and never adopts windows outside Seat groups.
+add_library(hydra_window_tracking STATIC
+    src/window_tracker.cpp
+    include/hydra/window_identity.hpp
+    include/hydra/window_tracker.hpp
+)
+target_link_libraries(hydra_window_tracking PUBLIC hydra_process Threads::Threads)
+if(WIN32)
+    target_link_libraries(hydra_window_tracking PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_window_tracking PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_window_tracking PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 if(MSVC)
     target_compile_options(hydra_hardware PRIVATE /W4 /permissive-)
 endif()
@@ -768,6 +787,28 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 add_test(NAME ProcessGroupTests COMMAND process_group_tests)
+
+add_executable(hydra_window_test_app tests/window_test_app.cpp)
+if(MSVC)
+    target_compile_options(hydra_window_test_app PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_window_test_app PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+add_executable(window_tracker_tests tests/test_window_tracker.cpp)
+target_link_libraries(window_tracker_tests PRIVATE hydra_window_tracking)
+add_dependencies(window_tracker_tests hydra_window_test_app)
+if(WIN32)
+    target_link_libraries(window_tracker_tests PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(window_tracker_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(window_tracker_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME WindowTrackerTests COMMAND window_tracker_tests)
 
 # Pure Phase 1 identity checks: deterministic and independent of attached hardware.
 add_executable(hardware_identity_tests
