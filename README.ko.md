@@ -367,8 +367,10 @@ Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled prob
 
 현재 기본 packet:
 
+총 제작 진행도: **14%** (로드맵 packet `115개` 중 `16개`가 `CODE_COMPLETE` 이상, packet 개수 기준).
+
 ```text
-P8-RESET-01 — 비상 리셋 CLI (CODE_COMPLETE; reset-focused 테스트는 로컬 x64/x86에서 각각 3/3 PASS이고 x64 host→x64/x86 Gate C cross 회귀도 PASS. 현재 interactive 전체 suite는 기존 live-desktop cursor/focus assertion 1건 때문에 양쪽 모두 55/56이며, exact-head non-interactive fork CI와 실제 emergency shortcut/task 실행은 VALIDATED 전까지 PENDING; P3-D-02는 P3-HW-01 물리 승인과 VALIDATED된 P8-RESET-01 때문에 계속 BLOCKED)
+P8-RESET-01 — 비상 리셋 CLI (CODE_COMPLETE; 새로 실행한 로컬 x64/x86 전체 suite가 각각 56/56 PASS이고 기존 x64 host→x64/x86 Gate C cross 회귀도 PASS. 실제 Windows 예약 작업 실행은 결과 0, clean JSON 사후 조건, 잔류 reset 프로세스 0건으로 PASS. VALIDATED 전에 exact-head non-interactive fork CI가 여전히 필요하며, P3-D-02는 P3-HW-01 물리 승인과 VALIDATED된 P8-RESET-01 때문에 계속 BLOCKED)
 ```
 
 작업 시작 전:
