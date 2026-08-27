@@ -641,11 +641,18 @@ int run(const Options& options) {
                      forcedGuardCreationTime100ns, nativePass)) {
         return 29;
     }
-    return seat1ExpectedCount == 4 && seat2ExpectedCount == 4 &&
-                   seat1CrossCount == 0 && seat2CrossCount == 0 &&
-                   stateSeparated && forcedGuardPass && nativePass
-               ? EXIT_SUCCESS
-               : 30;
+    const bool passed = seat1ExpectedCount == 4 && seat2ExpectedCount == 4 &&
+        seat1CrossCount == 0 && seat2CrossCount == 0 && stateSeparated &&
+        forcedGuardPass && nativePass;
+    std::cout << "P3E_RESULT seat1_expected=" << seat1ExpectedCount
+              << " seat2_expected=" << seat2ExpectedCount
+              << " seat1_cross=" << seat1CrossCount
+              << " seat2_cross=" << seat2CrossCount
+              << " adapter_state_separated=" << (stateSeparated ? 1 : 0)
+              << " forced_guard_cleanup=" << (forcedGuardPass ? 1 : 0)
+              << " native_relaunch=" << (nativePass ? 1 : 0)
+              << " pass=" << (passed ? 1 : 0) << '\n';
+    return passed ? EXIT_SUCCESS : 30;
 }
 
 } // namespace
