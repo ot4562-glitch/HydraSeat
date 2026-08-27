@@ -45,10 +45,13 @@ For each target it:
 2. records the exact process creation identity;
 3. places the new process in a private `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object before injection or resume;
 4. verifies x64 process architecture;
-5. creates a PID-scoped fixed-size bridge configuration containing only Seat ID, exact API mask, Gate C session token, and bounded pipe name;
-6. loads the fixed HydraSeat bridge DLL into that owned suspended process;
-7. validates the existing Gate C `Hello` against token, Seat, PID, architecture, and same-PID bootstrap window;
-8. resumes the target only after the bridge is ready.
+5. starts it with `STARTUPINFOEX` and an explicit inherited-handle allowlist containing only the dedicated stdin/stdout/stderr handles;
+6. creates a PID-scoped fixed-size bridge configuration containing only Seat ID, exact API mask, Gate C session token, and bounded pipe name;
+7. loads the fixed HydraSeat adapter, shim, and bridge DLLs into that owned suspended process;
+8. validates the existing Gate C `Hello` against token, Seat, PID, architecture, and same-PID bootstrap window;
+9. resumes the target only after the bridge is ready.
+
+If failure occurs before normal Job-object teardown is proven, the harness retains the exact owned process handle and uses it as a final termination backstop before closing the handle. It never performs a process-name kill or PID-only cleanup.
 
 The packet does not expose arbitrary commands, arbitrary bridge DLL choice through an in-process protocol, or an existing-process attach surface.
 
@@ -62,10 +65,12 @@ This keeps both GLFW instances' own raw-mouse lifecycle active while the shim co
 
 ## Measured acceptance
 
-The declared deterministic trial injects four synthetic routed mouse events per Seat after both GLFW instances enter disabled-cursor/raw-mouse mode:
+After both GLFW instances enter disabled-cursor/raw-mouse mode, the deterministic trial first sends one distinct warm-up relative sample per Seat (`(+1,+1)` and `(-1,+1)`) that is explicitly excluded from measurement. GLFW may consume this first sample while establishing its virtual raw-cursor baseline. The measured window then injects exactly four synthetic routed mouse events per Seat:
 
 - Seat 1: `(dx=+11, dy=+3)` × 4
 - Seat 2: `(dx=-7, dy=+5)` × 4
+
+The warm-up does not lower the acceptance threshold: all four measured samples still must appear in the upstream GLFW receiver telemetry.
 
 The acceptance result is based on the upstream GLFW application's own cursor callback stdout, not only on HydraSeat sender-side counters. A pass requires:
 
@@ -74,14 +79,32 @@ The acceptance result is based on the upstream GLFW application's own cursor cal
 - Seat 1 cross-pattern count = 0;
 - Seat 2 cross-pattern count = 0;
 - receiver-verified events = 8;
-- independent adapter cursor/key snapshots for both Seats;
+- direct adapter A/B key cross-state snapshots: Seat 1 sees A-down/B-up while Seat 2 sees A-up/B-down;
 - clean ordinary shutdown of both targets;
 - a third owned target terminated by closing the Job Object handle, proving the forced recovery guard path;
 - no remaining `cursor.exe` / external-harness processes;
 - target SHA-256 unchanged before/after the run;
 - a clean native relaunch of the same external executable after HydraSeat teardown.
 
-Local real-process acceptance on 2026-08-27 passed all conditions with prepared target SHA-256 `84931e1874ecc5badb8d9bae713b75f701e79112923d90f7303c5d35d3f92d15`.
+Local real-process acceptance on 2026-08-27 passed all conditions with prepared target SHA-256 `84931e1874ecc5badb8d9bae713b75f701e79112923d90f7303c5d35d3f92d15`. Exact validated code head `12957f0` also passes fork PR #24 run `33038227992` on Windows x64, Win32/x86, Gate C cross-architecture, and the dedicated real GLFW job. The headless job uses Mesa `23.3.5` through `f3d-app/install-mesa-windows-action` pinned to immutable commit `1824e370ed7fb1795f5bc88fd1f6c81eb15d92bc`.
+
+## Compatibility matrix entry
+
+| Field | Validated value |
+| --- | --- |
+| Target | GLFW `tests/cursor.c` |
+| Version / provider | GLFW 3.5.1 upstream, commit `d9d6f0f1f967807ffade6598ea9a631ebaf37a56` |
+| License / provenance | zlib/libpng; source and binaries not vendored |
+| Windows / architecture | Windows x64 controlled external profile; x86 GLFW support is not claimed |
+| HydraSeat profile | `glfw-3.5.1-cursor-test` |
+| Backend | `hydra.controlled-external-shim` using Gate C adapter + profiled shim ABI v4 |
+| Required API mask | `0x0000b93a` |
+| Input evidence | synthetic Seat-routed events consumed by the unmodified upstream GLFW receiver |
+| Measured result | 4/4 expected callbacks per Seat, 0/0 cross-pattern callbacks, 8 receiver-verified events, direct A/B key cross-state separation |
+| Recovery result | clean shutdown, forced Job-object cleanup, no exact owned identity left, unchanged target SHA-256, native relaunch PASS |
+| Validation | PR #24 run `33038227992`, code head `12957f0`, 2026-08-27 |
+| Support level | `ValidatedControlledExternalApplication`; not a game, physical-zero-bleed, or production universal-support claim |
+| Known limits | no physical suppression/cloaking, no anti-cheat/DRM/protected process, no existing-process attach, no x86 GLFW claim |
 
 ## Reproduction
 

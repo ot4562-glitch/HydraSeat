@@ -109,7 +109,7 @@ Research:
 - [x] Durable crash journal/safe-mode marker and Gate C watchdog/crash rollback acceptance are `VALIDATED` (`P8-JOURNAL-01` and `P3-REC-01`). Repair head `bb8fd28` passes PR #23 run `32973197727` on Windows x64/x86 plus Gate C cross-architecture; human actual Sign out and actual Restart also pass with exact-identity cleanup, zero HydraSeat orphans, durable `RollbackVerified`/`CleanStop`, and a verified `LastBootUpTime` transition on Restart
 - [x] Read-only HidHide availability/capability probe (`P3-D-01`; fork PR #20 run `32915683414` validates final head `146b3e6` on native x64/x86 while Gate C cross-architecture remains green)
 - [ ] Guarded HidHide session-cloak experiment (`P3-D-02`; blocked by P3-HW-01 physical acceptance and P8-RESET-01; P3-REC-01 is validated)
-- [ ] Open-source application profile (`P3-E-01` CODE_COMPLETE; local real GLFW 3.5.1 x64 acceptance passes 8 receiver-verified events with 0 cross-pattern callbacks, forced Job cleanup, and native relaunch; exact-head Windows x64/x86/cross + real-GLFW CI pending)
+- [x] Open-source application profile (`P3-E-01` VALIDATED; exact code head `12957f0`, fork PR #24 run `33038227992` passes Windows x64/x86, Gate C cross-architecture, and pinned real GLFW 3.5.1 acceptance with 4/4 callbacks per Seat, 0 cross-pattern callbacks, 8 receiver-verified events, direct key cross-state separation, forced Job cleanup, and native relaunch)
 - [ ] First non-anti-cheat game profile
 - [ ] Two different target/game zero-bleed proof
 

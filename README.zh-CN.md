@@ -368,7 +368,7 @@ Gate C 仅运行 HydraSeat 自己的 controlled target。面向 controlled probe
 当前默认 packet：
 
 ```text
-P3-E-01 — 开源非受保护应用配置（CODE_COMPLETE；本地真实 GLFW 3.5.1 x64 验收已通过：8 个 receiver-verified 事件、0 个交叉模式回调、Job Object 强制清理和 native 重新启动；exact-head Windows x64/x86/cross 与真实 GLFW CI 仍为 PENDING）
+P8-RESET-01 — 紧急重置 CLI（READY；P3-E-01 已在 code head `12957f0` 通过 PR #24 run `33038227992` 的 Windows x64/x86、Gate C 跨架构以及 pinned GLFW 3.5.1 真实应用验收，现为 VALIDATED；P3-D-02 仍因 P3-HW-01 物理验收和 P8-RESET-01 而 BLOCKED）
 ```
 
 开始编码前阅读：
