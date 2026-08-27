@@ -3,9 +3,9 @@
 ## Current program state
 
 - Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-REC-01 — Gate C watchdog and crash recovery acceptance** (`CODE_COMPLETE`; repair head `bb8fd28` is green on Windows x64/x86 and Gate C cross-architecture CI, and the human actual-logoff re-test now passes with exact-identity cleanup plus durable `RollbackVerified`/`CleanStop`; actual shutdown/reboot acceptance remains pending)
+- Current default packet: **P3-E-01 — Open-source non-protected application profile** (`READY`; P3-REC-01 is now `VALIDATED`, while P3-D-02 remains blocked by P3-HW-01 physical acceptance and P8-RESET-01. P8-RESET-01 is also `READY` as a cross-phase prerequisite; neither READY packet is started by this closure task.)
 - Parent fork-main baseline for P8-WATCH-01 validation: `494426e882832b0ae6d94a75d038473ba96f104a` (P3-D-01 integrated; physical acceptance remains pending)
-- Current automated Windows CI evidence: fork PR #23 run `32973197727` validates session-end repair head `bb8fd28`: Windows x64 and Win32/x86 build/test jobs pass, Gate C x64-host-to-x64/x86 cross-architecture passes, and roadmap/current-packet validators remain green. Human actual-logoff re-test has separately passed; shutdown/reboot remains the final disruptive P3-REC acceptance case.
+- Current P3-REC evidence: fork PR #23 run `32973197727` validates session-end repair head `bb8fd28` on Windows x64, Win32/x86, and Gate C cross-architecture. Human actual Sign out and actual Restart both pass on the repaired binary with exact-identity cleanup, zero HydraSeat orphans, durable `RollbackVerified`/`CleanStop`, and the Restart re-test additionally proves a real boot transition (`LastBootUpTime` `2026-08-25T09:52:03.9523380+09:00` -> `2026-08-27T07:46:40.5000000+09:00`).
 - Manual physical acceptance: still pending for Gate A, Gate B, and Gate C
 - Upstream state: the integrated development line is carried by upstream PR #4
 
@@ -41,13 +41,13 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | P3-RAW-01 Raw Input registration/data probe | VALIDATED | P3-API-01 | Windows run `32800513365`: native x64/x86 28/28 CTest, retained observed registration traces, replacement/remove/destroyed-HWND evidence, and repeated process teardown passed |
 | P3-RAW-02 Raw Input virtualization shim | VALIDATED | P3-RAW-01, P3-API-02 | Windows run `32806163164`: native x64/x86 and x64-host-to-x64/x86 ordinary Raw Input API/two-process acceptance passed with zero cross-Seat/API/stale-token/queue-overflow counters |
 | P3-ARCH-01 x86 Gate C build and cross-architecture launcher selection | VALIDATED | P3-IPC-01, P3-STATE-01 | Windows run `32727711605`: x64/x86 full CTest and x64-host-to-x86/x64 controlled target/probe matrix passed |
-| P3-REC-01 Host/target/adapter crash and watchdog recovery | CODE_COMPLETE | P8-WATCH-01, P8-JOURNAL-01, P3-API-03 | Actual logoff against `8f0f4fd` exposed premature session-end approval by leaving the journal `active`. Repair head `bb8fd28` blocks `WM_QUERYENDSESSION` on bounded durable rollback completion and is green in PR #23 run `32973197727` on Windows x64/x86 plus Gate C cross-architecture. Human actual-logoff re-test on the repair passes: every exact HydraSeat identity is gone, PID reuse by an unrelated Chrome process is correctly distinguished by creation time, zero HydraSeat orphans remain, and the journal ends `RollbackVerified` -> `CleanStop`. Shutdown/reboot remains PENDING |
+| P3-REC-01 Host/target/adapter crash and watchdog recovery | VALIDATED | P8-WATCH-01, P8-JOURNAL-01, P3-API-03 | Repair head `bb8fd28` is green in PR #23 run `32973197727` on Windows x64/x86 plus Gate C cross-architecture. Human actual Sign out and actual Restart both pass: exact HydraSeat identities are gone, zero HydraSeat orphans remain, PID reuse is distinguished by creation time, journals end `RollbackVerified` -> `CleanStop`, and the Restart re-test proves `LastBootUpTime` advanced to `2026-08-27T07:46:40.5000000+09:00` |
 | P3-HW-01 Gate A/B/C physical acceptance runner | CODE_COMPLETE | P3-QUEUE-01 | Fork PR #19 run `32911603828` validates the tooling on x64/x86 plus Gate C cross-architecture; real two-keyboard/two-pointing-device Gate A/B/C evidence remains manual and PENDING |
 | P3-CTRL-01 XInput controlled adapter state | VALIDATED | P3-STATE-01 | Remediation head `b351afdd` validated by fork PR #15 run `32832036967`: native x64/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance |
 | P3-CTRL-02 DirectInput enumeration/visibility controlled adapter | VALIDATED | P3-CTRL-01, P3-ARCH-01 | Fork PR #16 run `32840474306`: native x64 and Win32/x86 full CTest passed with controlled DirectInput policy/probes plus read-only `DirectInputNativeObservationSelfTest`; Gate C cross-architecture regressions stayed green |
 | P3-D-01 HidHide read-only availability/capability probe | VALIDATED | P3-PLAN-01 | Fork PR #20 run `32915683414` validates head `146b3e6`: native x64/x86 build/CTest plus Gate C cross-architecture pass; exact-version tri-state probe remains read-only and P3-D-02 stays blocked |
-| P3-D-02 Guarded HidHide session-cloak lab | BLOCKED | P3-REC-01, P3-D-01 | Spare input/watchdog/timeout/crash rollback and physical evidence |
-| P3-E-01 Open-source non-protected application profile | BLOCKED | P3-RAW-02, P3-API-03 | Reproducible profile and measured no-cross-state result |
+| P3-D-02 Guarded HidHide session-cloak lab | BLOCKED | P3-D-01, P3-REC-01, P3-HW-01, P8-RESET-01 | P3-REC is validated, but physical P3-HW-01 acceptance and the emergency reset CLI still block guarded cloaking |
+| P3-E-01 Open-source non-protected application profile | READY | P3-API-03, P3-RAW-02, P3-MET-01, P3-REC-01 | All declared prerequisites are validated; next task may build the reproducible profile and measured no-cross-state result |
 | P3-E-02 First non-anti-cheat game profile | BLOCKED | P3-E-01, P3-D-02 or proven non-cloak suppression path | Explicit experimental compatibility entry |
 | P3-E-03 Two different game zero-bleed proof | BLOCKED | P3-E-02, P3-CTRL-01 | Measured keyboard/mouse/controller bleed and latency report |
 | P3-MET-01 Input latency and bleed measurement harness | VALIDATED | P3-QUEUE-01 | Fork PR #18 run `32857666855`: native x64 and Win32/x86 43/43 CTest pass metrics library/CLI/report plus instrumented Gate C host; receiver evidence remains explicit and physical zero-bleed/latency stays manual |
@@ -56,9 +56,9 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 
 | Packet | State | Reason |
 | --- | --- | --- |
-| P8-WATCH-01 Watchdog protocol and lease model | VALIDATED | Fork PR #21 run `32919928489` validates head `dceaab9`: native x64/x86 full CTest including `WatchdogProcessFaultTests` plus Gate C cross-architecture pass; actual Gate C recovery integration remains P3-REC-01 |
-| P8-RESET-01 Emergency reset CLI contract | BLOCKED | Depends on watchdog rollback registry/contracts |
-| P8-JOURNAL-01 Crash journal and safe-mode marker | VALIDATED | Fork PR #22 run `32947110442` validates exact implementation head `2b42d9a`: native x64/x86 full-project CTest plus Gate C cross-architecture pass; bounded durable journal/startup safe-mode contract validated, while Gate C recovery wiring remains P3-REC-01 |
+| P8-WATCH-01 Watchdog protocol and lease model | VALIDATED | Fork PR #21 run `32919928489` validates head `dceaab9`: native x64/x86 full CTest including `WatchdogProcessFaultTests` plus Gate C cross-architecture pass; its Gate C integration is now validated by P3-REC-01 |
+| P8-RESET-01 Emergency reset CLI contract | READY | P8-WATCH-01 and P8-JOURNAL-01 are validated; implementation has not started in this closure task |
+| P8-JOURNAL-01 Crash journal and safe-mode marker | VALIDATED | Fork PR #22 run `32947110442` validates exact implementation head `2b42d9a`: native x64/x86 full-project CTest plus Gate C cross-architecture pass; bounded durable journal/startup safe-mode contract is now integrated and validated by P3-REC-01 |
 | P4-RUN-01 Production host service/process skeleton | BLOCKED | Start after P3 controlled shim contract stabilizes |
 
 ## Manual gates
@@ -71,7 +71,7 @@ This file is an execution ledger, not a marketing status page. Agents update it 
 | Gate C polling API interposition | VALIDATED (CONTROLLED CI) | HydraSeat-owned x64/x86 probes call the three ordinary polling APIs through the opt-in shim; physical/game acceptance is still separate |
 | Gate C Raw Input API behavior baseline | VALIDATED (CONTROLLED CI) | Run `32800513365` retained native x64/x86 registration traces and validated replacement/remove/destroyed-HWND/process teardown; physical `WM_INPUT` and hot-plug remain P3-HW-01 |
 | Gate C Raw Input API virtualization | VALIDATED (CONTROLLED CI) | Run `32806163164` passed native x64/x86 plus x64-host-to-x64/x86 ordinary registration/data/buffer APIs, two-process zero-cross counters, rollback, and existing polling/cursor regressions; physical evidence remains P3-HW-01 |
-| Gate C watchdog/crash recovery | CODE_COMPLETE / LOGOFF PASS | Existing crash/process acceptance remains green. First actual logoff on `8f0f4fd` failed durable clean-stop and exposed premature `WM_QUERYENDSESSION` approval. Repair head `bb8fd28` makes the query wait boundedly for control-loop rollback and fails closed otherwise; PR #23 run `32973197727` passes Windows x64/x86 and Gate C cross-architecture. Human actual-logoff re-test now passes with exact-identity cleanup, zero HydraSeat orphans, safe PID-reuse discrimination, metrics output, and durable `RollbackVerified`/`CleanStop`. Actual shutdown/reboot remains PENDING |
+| Gate C watchdog/crash recovery | VALIDATED | Existing crash/process acceptance remains green. Repair head `bb8fd28` fixes the real-session ordering defect and PR #23 run `32973197727` passes Windows x64/x86 and Gate C cross-architecture. Human actual Sign out and actual Restart pass with exact-identity cleanup, zero HydraSeat orphans, safe PID-reuse discrimination, metrics/trace output, durable `RollbackVerified`/`CleanStop`, and a verified boot-time transition on Restart |
 | Gate D device cloaking | NOT IMPLEMENTED | Guarded session-cloak experiment with spare input and automatic rollback |
 | Gate E two-game zero bleed | NOT IMPLEMENTED | Two distinct profile entries and objective cross-Seat metrics |
 
@@ -324,24 +324,35 @@ Actual-logoff re-test PASS: human Sign out was re-run with repair binary SHA-256
 Known limits/manual gate: actual Windows logoff now passes on the repair. Actual shutdown/reboot plus post-reboot exact-identity/orphan/journal review remain required before `VALIDATED`. P3-D-02 and P8-RESET-01 remain outside this task and blocked/not started.
 Next action: arm human-controlled actual shutdown/reboot against the same repair, verify after reboot that every armed exact identity is gone, zero HydraSeat orphans remain, and the durable journal ends `RollbackVerified` + `CleanStop`. Keep `CODE_COMPLETE` until that final disruptive case passes; do not start P3-D-02 or P8-RESET-01.
 
+### 2026-08-27 — P3-REC-01 acceptance closure
+
+State: VALIDATED
+Implementation head: `bb8fd28ae02ee245f7243b1743fd3882576548d5`; final disruptive acceptance was armed from branch head `015858f8d5b0881dfd839c92fd65e9348fead7fa` using the same repaired x64 binary SHA-256 `1a0368b0bf7ea67c97e3c34a2d5b351329e49484ed35c9bd25a5792afc7c6bff`.
+Automated evidence: fork PR #23 run `32973197727` passes Windows x64, Win32/x86, Gate C x64-to-x64/x86 cross-architecture, roadmap/current-packet validators, and Raw Input trace checks for the repair implementation.
+Human actual-logoff evidence: repaired Sign out passes with every armed exact host/target/watchdog identity gone, zero HydraSeat orphans, safe PID-reuse discrimination (an old target PID was later reused by Chrome with a different creation time), trace/metrics present, and a 13-record clean journal ending reverse `ActionRolledBack`, `RollbackVerified`, `CleanStop`.
+Human actual-Restart evidence: an earlier shutdown-mode attempt was rejected by the strengthened verifier because `LastBootUpTime` did not change. The final Restart re-test records `bootTimeBeforeAction=2026-08-25T09:52:03.9523380+09:00` and `bootTimeAfterAction=2026-08-27T07:46:40.5000000+09:00` with `bootTransitionObserved=true`; host PID `5612`, targets `25988`/`1060`, and watchdog `23960` are all gone by exact creation identity, zero HydraSeat processes remain, and the journal is `phase=clean`, `safe_mode=absent`, ending `RollbackVerified` then `CleanStop`. Verdict: PASS.
+Manual gate result: P3-REC-01 manual Windows crash/session-end acceptance is complete. Physical Gate A/B/C acceptance belongs to P3-HW-01 and remains pending; it is not a P3-REC blocker.
+Downstream readiness: P3-E-01 is READY because all of its declared prerequisites are validated. P8-RESET-01 is also READY because P8-WATCH-01 and P8-JOURNAL-01 are validated. P3-D-02 remains BLOCKED by P3-HW-01 physical acceptance and P8-RESET-01. None of those packets has been started in this closure task.
+Phase-close rule: Phase 3 is not complete, so the dedicated whole-Phase-3 audit is not run yet.
+
 ## Next Codex task
 
 Use:
 
 ```text
-Finish only the remaining human/disruptive P3-REC-01 Windows acceptance gate.
+Implement only P3-E-01 — Open-source non-protected application profile.
 
-Repair head `bb8fd28ae02ee245f7243b1743fd3882576548d5` is CODE_COMPLETE and
-PR #23 run `32973197727` is green on Windows x64/x86 plus Gate C cross-architecture.
-The first actual logoff on superseded head `8f0f4fd` was a genuine FAIL: all exact
-guarded identities disappeared but the journal remained Active because the session
-query was approved before durable rollback. The repair now blocks WM_QUERYENDSESSION
-on bounded cleanup completion and vetoes the session end if cleanup is not proven.
-Re-run actual Windows logoff under explicit human control, inspect exact identities,
-orphan state, and durable RollbackVerified/CleanStop after sign-in, then separately
-arm actual shutdown/reboot and inspect the same postconditions after reboot. Keep
-P3-REC-01 CODE_COMPLETE until both disruptive cases pass. Do not start P3-D-02,
-P8-RESET-01, physical cloaking, or game profiles; keep P3-HW-01 CODE_COMPLETE and
-physical Gate A/B/C rows PENDING.
+P3-REC-01 is VALIDATED after automated Windows x64/x86/cross recovery coverage plus
+human actual Sign out and actual Restart acceptance. Preserve that recovery contract.
+P3-E-01 is READY because P3-API-03, P3-RAW-02, P3-MET-01, and P3-REC-01 are all
+validated. Keep the target open-source, inspectable, non-protected, and outside any
+anti-cheat/DRM bypass. Produce a reproducible compatibility profile and measured
+no-cross-state evidence without weakening existing Gate C rollback or fail-closed
+behavior. P8-RESET-01 is separately READY but is not part of the P3-E-01 task.
+P3-D-02 remains BLOCKED until P3-HW-01 physical acceptance and P8-RESET-01 are complete.
+Do not mark physical Gate A/B/C, cloaking, or game-profile acceptance complete without
+its declared evidence. Do not run the whole-Phase-3 close audit until every Phase 3
+packet and required manual gate is genuinely complete. P3-HW-01 remains CODE_COMPLETE
+with physical Gate A/B/C rows still PENDING.
 
 ```

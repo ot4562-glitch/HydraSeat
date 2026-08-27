@@ -139,7 +139,7 @@ A HydraSeat-owned controlled-process harness can register a harmless rollback pl
 
 ## P8-RESET-01 — Emergency reset CLI
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 

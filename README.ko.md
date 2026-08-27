@@ -368,7 +368,7 @@ Gate C는 HydraSeat 소유 controlled target만 실행합니다. Controlled prob
 현재 기본 packet:
 
 ```text
-P3-REC-01 — Gate C watchdog 및 크래시 복구 승인 (CODE_COMPLETE; fork PR #23 run `32957740991`에서 native x64/x86 53/53 및 Gate C cross-architecture matrix 통과; 실제 Windows 크래시/재시작 및 로그오프/종료 승인은 PENDING)
+P3-E-01 — 오픈소스 비보호 애플리케이션 프로필 (READY; P3-REC-01은 PR #23 복구 CI와 실제 Windows 로그아웃 및 실제 다시 시작 승인까지 통과해 VALIDATED; P3-D-02는 P3-HW-01 물리 승인과 P8-RESET-01 때문에 계속 BLOCKED)
 ```
 
 작업 시작 전:

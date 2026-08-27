@@ -880,7 +880,7 @@ The planner can distinguish unavailable, installed-unverified, and verified-supp
 
 ## P3-REC-01 — Gate C watchdog and crash recovery acceptance
 
-**State:** IN_PROGRESS
+**State:** VALIDATED
 
 **Goal**
 
@@ -934,7 +934,7 @@ Automated process tests and manual Windows crash acceptance both pass.
 - Local native Windows x64 acceptance on committed head `0c24fb04df145c94946dfd4bb4cc250d1fb7723b` now reruns the complete MSVC Release CTest suite at 53/53 PASS, including `GateCWatchdogRecoveryTests`. A separate ignored real-process acceptance matrix executes repeated clean recovery (generation `1 -> 2`), lease stall, target death, watchdog death/restart, pipe disconnect, adapter failure, shim-owner abnormal exit, UI-surrogate loss, controlled logoff/shutdown handler paths, and stale-journal refusal; every safe scenario finishes with zero `hydra_gate_c_target` / `hydra_watchdog` orphans and preserves an unrelated exact-identity sentinel process.
 - An additional external host-death acceptance captures exact `PID + creation time` for the real x64 host, watchdog, two controlled targets, and an unrelated sentinel before mutation. It terminates only the revalidated exact host identity, leaves watchdog cleanup unassisted, proves both targets and the watchdog disappear without PID reuse while the sentinel survives unchanged, then proves a real restart exits `127` before launching children and records `safe_mode_reason=incomplete-session`. The crash journal intentionally remains `active` after host death rather than being falsely rewritten as clean evidence.
 - Real acceptance exposed two Windows lifecycle defects in sequence. First, interactive Gate C uses `user32.dll`, so console-control logoff/shutdown notifications alone are not a trustworthy real-session boundary; head `8f0f4fd` added a fail-closed hidden top-level session-end monitor. Human Sign out against that head removed the host, both controlled targets, and watchdog with no PID reuse/orphans, but the durable journal remained `active` with only the 8 activation records and no `RollbackStarted`/`CleanStop`, proving the query returned TRUE before the ordinary control loop finished rollback. Repair head `bb8fd28ae02ee245f7243b1743fd3882576548d5` moves the monitor to a dedicated message thread, keeps `WM_QUERYENDSESSION` blocked while the control loop performs fast exact-process rollback, returns TRUE only after verified durable cleanup, and returns FALSE on timeout or failed/unproven cleanup. Local x64 53/53 passes, and PR #23 run `32973197727` passes Windows x64, Win32/x86, and Gate C cross-architecture.
-- Real human Windows acceptance remains pending. Actual Windows logoff was performed once on superseded head `8f0f4fd` and correctly recorded as FAIL because durable rollback did not complete; it must be re-run on repair head `bb8fd28`. Actual shutdown/reboot and the final human-observed desktop-session review also remain pending. With the repair exact-SHA CI green the packet is `CODE_COMPLETE`, not `VALIDATED`.
+- Real human Windows acceptance is complete. Human Sign out was re-run on the repaired binary and passed with every armed exact HydraSeat identity gone, zero HydraSeat orphans, safe PID-reuse discrimination, and a durable `RollbackStarted` -> reverse `ActionRolledBack` -> `RollbackVerified` -> `CleanStop` journal. The first attempted shutdown/reboot follow-up was deliberately rejected as insufficient when `LastBootUpTime` did not change; the local verifier was strengthened to require a real boot transition for shutdown-mode acceptance. The final human Restart re-test armed host PID `5612`, target PIDs `25988`/`1060`, and watchdog PID `23960` with exact creation times, then proved `LastBootUpTime` changed from `2026-08-25T09:52:03.9523380+09:00` to `2026-08-27T07:46:40.5000000+09:00`, every exact identity was gone with zero HydraSeat orphans, and the journal ended `phase=clean`, `safe_mode=absent`, `RollbackVerified`, `CleanStop`. P3-REC-01 is therefore `VALIDATED`.
 
 **Suggested commit**
 
@@ -1001,7 +1001,7 @@ Required with spare recovery input and visible countdown.
 
 ## P3-E-01 — Open-source non-protected application profile
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 

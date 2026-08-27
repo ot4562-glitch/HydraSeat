@@ -455,7 +455,7 @@ Future implementation is split into bounded work packets so Codex can write code
 Current default packet:
 
 ```text
-P3-REC-01 — Gate C watchdog and crash recovery acceptance (CODE_COMPLETE; fork PR #23 run `32957740991` passed native x64/x86 53/53 and the Gate C cross-architecture matrix; real Windows crash/restart and logoff/shutdown acceptance remain PENDING)
+P3-E-01 — Open-source non-protected application profile (READY; P3-REC-01 is VALIDATED after PR #23 recovery CI plus human actual Sign out and actual Restart acceptance; P3-D-02 remains BLOCKED by physical P3-HW-01 acceptance and P8-RESET-01)
 ```
 
 Start every coding task by reading:
