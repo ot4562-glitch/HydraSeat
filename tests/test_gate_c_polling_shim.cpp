@@ -20,6 +20,8 @@ static_assert(sizeof(HydraGateCShimConfigV1) ==
               HYDRA_GATE_C_SHIM_CONFIG_V1_BYTES);
 static_assert(sizeof(HydraGateCShimConfigV2) ==
               HYDRA_GATE_C_SHIM_CONFIG_V2_BYTES);
+static_assert(sizeof(HydraGateCShimConfigV3) ==
+              HYDRA_GATE_C_SHIM_CONFIG_V3_BYTES);
 static_assert(sizeof(HydraGateCShimStatusV1) ==
               HYDRA_GATE_C_SHIM_STATUS_V1_BYTES);
 
@@ -194,6 +196,74 @@ void testFailureRollback() {
           "incomplete install rollback can be retried to exact restoration");
 }
 
+void testProfiledSubsetTransactions() {
+    using hydra::gatec::CursorFocusIatSlot;
+    using hydra::gatec::CursorFocusImport;
+    using hydra::gatec::PollingIatSlot;
+    using hydra::gatec::PollingImport;
+    using hydra::gatec::RawInputIatSlot;
+    using hydra::gatec::RawInputImport;
+
+    std::uintptr_t keyState = 101;
+    const std::array<PollingIatSlot, 1> polling{
+        PollingIatSlot{PollingImport::GetKeyState, &keyState, 101, 201}};
+    FakeWriter writer;
+    hydra::gatec::PollingIatPatchSet pollingPatches;
+    const auto pollingMask =
+        hydra::gatec::pollingImportBit(PollingImport::GetKeyState);
+    auto report = pollingPatches.installProfiled(
+        polling, pollingMask, fakeWrite, &writer);
+    check(report && report.discoveredMask ==
+              hydra::gatec::pollingImportBit(PollingImport::GetKeyState) &&
+              keyState == 201,
+          "profiled polling transaction patches only the declared import");
+    writer = {};
+    report = pollingPatches.uninstall(fakeWrite, &writer);
+    check(report && keyState == 101,
+          "profiled polling transaction restores its exact subset");
+
+    std::array<std::uintptr_t, 2> cursorValues{301, 302};
+    const std::array<CursorFocusIatSlot, 2> cursor{
+        CursorFocusIatSlot{CursorFocusImport::ClipCursor,
+                           &cursorValues[0], 301, 401},
+        CursorFocusIatSlot{CursorFocusImport::ReleaseCapture,
+                           &cursorValues[1], 302, 402}};
+    hydra::gatec::CursorFocusIatPatchSet cursorPatches;
+    writer = {};
+    const auto cursorMask =
+        hydra::gatec::cursorFocusImportBit(CursorFocusImport::ClipCursor) |
+        hydra::gatec::cursorFocusImportBit(CursorFocusImport::ReleaseCapture);
+    report = cursorPatches.installProfiled(
+        cursor, cursorMask, fakeWrite, &writer);
+    check(report && cursorValues ==
+              std::array<std::uintptr_t, 2>{401, 402},
+          "profiled cursor transaction accepts a strict allowlisted subset");
+    writer = {};
+    check(cursorPatches.uninstall(fakeWrite, &writer) &&
+              cursorValues == std::array<std::uintptr_t, 2>{301, 302},
+          "profiled cursor subset restores exactly");
+
+    std::array<std::uintptr_t, 2> rawValues{501, 502};
+    const std::array<RawInputIatSlot, 2> raw{
+        RawInputIatSlot{RawInputImport::RegisterRawInputDevices,
+                        &rawValues[0], 501, 601},
+        RawInputIatSlot{RawInputImport::GetRawInputData,
+                        &rawValues[1], 502, 602}};
+    hydra::gatec::RawInputIatPatchSet rawPatches;
+    writer = {};
+    const auto rawMask =
+        hydra::gatec::rawInputImportBit(RawInputImport::RegisterRawInputDevices) |
+        hydra::gatec::rawInputImportBit(RawInputImport::GetRawInputData);
+    report = rawPatches.installProfiled(
+        raw, rawMask, fakeWrite, &writer);
+    check(report && rawValues == std::array<std::uintptr_t, 2>{601, 602},
+          "profiled Raw Input transaction accepts the declared subset");
+    writer = {};
+    check(rawPatches.uninstall(fakeWrite, &writer) &&
+              rawValues == std::array<std::uintptr_t, 2>{501, 502},
+          "profiled Raw Input subset restores exactly");
+}
+
 #ifdef _WIN32
 
 HydraGateCAdapterInputEventV1 keyEvent(std::uint32_t vkey) {
@@ -330,6 +400,7 @@ int main() {
     testTransactionLifecycle();
     testMalformedAndAmbiguousSets();
     testFailureRollback();
+    testProfiledSubsetTransactions();
 #ifdef _WIN32
     testRealPollingSemantics();
 #endif

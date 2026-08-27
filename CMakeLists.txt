@@ -59,6 +59,7 @@ endif()
 
 # Find Qt6 components if available
 find_package(Qt6 COMPONENTS Core Widgets QUIET)
+find_package(Threads REQUIRED)
 
 if(Qt6_FOUND)
     set(CMAKE_AUTOMOC ON)
@@ -120,8 +121,211 @@ add_library(hydra_hardware STATIC
 if(WIN32)
     target_link_libraries(hydra_hardware PRIVATE User32.lib Cfgmgr32.lib Setupapi.lib Xinput.lib)
 endif()
+
+# P4-RUN-01 authoritative, headless production runtime state machine. The
+# library is UI-independent and all mutable backends are injected explicitly.
+add_library(hydra_runtime STATIC
+    src/runtime_state.cpp
+    src/runtime_host.cpp
+    include/hydra/runtime_state.hpp
+    include/hydra/runtime_host.hpp
+)
+target_link_libraries(hydra_runtime PUBLIC Threads::Threads)
+if(MSVC)
+    target_compile_options(hydra_runtime PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_runtime PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-IPC-01 portable fixed-width host protocol codec. Transport/authentication
+# lives in a separate Windows-aware component so codec tests remain portable.
+add_library(hydra_host_protocol STATIC
+    src/host_protocol.cpp
+    include/hydra/host_protocol.hpp
+)
+target_link_libraries(hydra_host_protocol PUBLIC hydra_runtime)
+if(MSVC)
+    target_compile_options(hydra_host_protocol PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_host_protocol PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+add_library(hydra_host_transport STATIC
+    src/host_transport.cpp
+    include/hydra/host_transport.hpp
+)
+target_link_libraries(hydra_host_transport PUBLIC hydra_host_protocol)
+if(WIN32)
+    target_link_libraries(hydra_host_transport PRIVATE Advapi32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_host_transport PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_host_transport PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-PROC-01 Seat-owned process trees. Windows Job Objects provide exact
+# descendant containment and completion notifications; weaker capabilities are
+# explicit and never grant ownership over unrelated processes.
+add_library(hydra_process STATIC
+    src/process_group.cpp
+    src/process_launcher.cpp
+    include/hydra/process_group.hpp
+    include/hydra/process_launcher.hpp
+)
+target_link_libraries(hydra_process PUBLIC hydra_runtime Threads::Threads)
+if(WIN32)
+    target_link_libraries(hydra_process PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_process PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_process PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-WIN-01 process-identity-backed top-level window inventory. WinEvent
+# callbacks only enqueue bounded hints; ownership/classification work stays on a
+# dedicated message-pump worker and never adopts windows outside Seat groups.
+add_library(hydra_window_tracking STATIC
+    src/window_tracker.cpp
+    include/hydra/window_identity.hpp
+    include/hydra/window_tracker.hpp
+)
+target_link_libraries(hydra_window_tracking PUBLIC hydra_process Threads::Threads)
+if(WIN32)
+    target_link_libraries(hydra_window_tracking PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_window_tracking PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_window_tracking PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-DIS-01 read-only DisplayConfig + DXGI topology inventory. Stable target
+# identity never relies on enumeration order and disconnected targets are kept.
+add_library(hydra_display_topology STATIC
+    src/display_topology.cpp
+    include/hydra/display_identity.hpp
+    include/hydra/display_topology.hpp
+)
+if(WIN32)
+    target_link_libraries(hydra_display_topology PRIVATE User32.lib Dxgi.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_display_topology PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_display_topology PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-DIS-02 stable Seat display groups and reversible coordinate transforms.
+add_library(hydra_seat_display_layout STATIC
+    src/seat_display_layout.cpp
+    include/hydra/seat_display_layout.hpp
+)
+target_link_libraries(hydra_seat_display_layout PUBLIC hydra_display_topology hydra_runtime)
+if(MSVC)
+    target_compile_options(hydra_seat_display_layout PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_seat_display_layout PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-WIN-02 typed placement planning and ownership-validated Win32 mutation.
+# The policy surface is portable; the engine applies only to currently owned
+# windows and captures rollback state before every mutation.
+add_library(hydra_window_placement STATIC
+    src/window_policy.cpp
+    src/window_placement.cpp
+    include/hydra/window_policy.hpp
+    include/hydra/window_placement.hpp
+)
+target_link_libraries(hydra_window_placement PUBLIC hydra_window_tracking hydra_seat_display_layout)
+if(WIN32)
+    target_link_libraries(hydra_window_placement PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_window_placement PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_window_placement PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-POL-01 serialized desired-vs-observed Seat runtime policy coordinator.
+add_library(hydra_seat_runtime_policy STATIC
+    src/seat_runtime_policy.cpp
+    include/hydra/seat_runtime_policy.hpp
+)
+target_link_libraries(hydra_seat_runtime_policy PUBLIC hydra_window_placement)
+if(MSVC)
+    target_compile_options(hydra_seat_runtime_policy PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_seat_runtime_policy PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-DIS-03 deterministic display hot-plug degradation and recovery planning.
+add_library(hydra_display_recovery STATIC
+    src/display_recovery.cpp
+    include/hydra/display_recovery.hpp
+)
+target_link_libraries(hydra_display_recovery PUBLIC hydra_seat_display_layout hydra_seat_runtime_policy)
+if(MSVC)
+    target_compile_options(hydra_display_recovery PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_display_recovery PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 if(MSVC)
     target_compile_options(hydra_hardware PRIVATE /W4 /permissive-)
+endif()
+
+# P4-CTRL-01 Management Seat placement and global-control permission model.
+add_library(hydra_management_seat STATIC
+    src/management_seat.cpp
+    include/hydra/management_seat.hpp
+)
+target_link_libraries(hydra_management_seat PUBLIC hydra_seat_display_layout)
+if(WIN32)
+    target_link_libraries(hydra_management_seat PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_management_seat PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_management_seat PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-CTRL-01 authoritative host/config-backed control-surface presentation model.
+add_library(hydra_control_surface STATIC
+    src/control_surface_model.cpp
+    include/hydra/control_surface_model.hpp
+)
+target_link_libraries(hydra_control_surface PUBLIC hydra_management_seat hydra_runtime)
+if(MSVC)
+    target_compile_options(hydra_control_surface PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_control_surface PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P4-CTRL-02 verified Stop/Reconfigure/Save+Start control-surface state model.
+add_library(hydra_session_control STATIC
+    src/session_control_transition.cpp
+    include/hydra/session_control_transition.hpp
+)
+target_link_libraries(hydra_session_control PUBLIC hydra_management_seat hydra_host_transport)
+if(MSVC)
+    target_compile_options(hydra_session_control PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_session_control PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
 # P3-CTRL-01 bounded, process-local normalized XInput state. This component
@@ -220,6 +424,38 @@ if(MSVC)
     target_compile_options(hydra_crash_journal PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_crash_journal PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P8-RESET-01 bounded runtime reset registration and verified emergency-reset
+# execution. The crash journal remains evidence-only; reset authority is the
+# journal-correlated exact watchdog manifest plus exact runtime-owner identity.
+add_library(hydra_reset_actions STATIC
+    src/reset_actions.cpp
+    include/hydra/reset_actions.hpp
+)
+target_link_libraries(hydra_reset_actions PUBLIC
+    hydra_crash_journal hydra_watchdog_core)
+if(MSVC)
+    target_compile_options(hydra_reset_actions PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_reset_actions PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P3-REC-01 Gate C recovery contract. The trusted rollback manifest contains
+# only exact controlled-process termination identities; process-local shim and
+# adapter state disappears with the owned target process.
+add_library(hydra_gate_c_recovery STATIC
+    src/gate_c_recovery.cpp
+    include/hydra/gate_c_recovery.hpp
+)
+target_link_libraries(hydra_gate_c_recovery PUBLIC
+    hydra_crash_journal hydra_watchdog_core)
+if(MSVC)
+    target_compile_options(hydra_gate_c_recovery PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_gate_c_recovery PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
@@ -328,12 +564,71 @@ if(MSVC)
     target_compile_options(hydra_gate_c_shim PRIVATE /W4 /permissive-)
 endif()
 
+# P3-E-01 narrow bridge for a newly created, suspended, non-protected external
+# acceptance target. It is not an attach/general injection surface and reuses
+# the existing Gate C adapter, profiled shim, transport, and rollback contract.
+if(WIN32)
+    add_library(hydra_gate_c_external_bridge SHARED
+        src/gate_c_external_bridge.cpp
+        include/hydra/gate_c_external_profile.hpp
+    )
+    target_link_libraries(hydra_gate_c_external_bridge PRIVATE
+        hydra_gate_c_core hydra_gate_c_adapter hydra_gate_c_shim User32.lib
+    )
+    set_target_properties(hydra_gate_c_external_bridge PROPERTIES
+        OUTPUT_NAME hydra_gate_c_external_bridge
+    )
+    hydra_set_gate_c_output(hydra_gate_c_external_bridge)
+    if(MSVC)
+        target_compile_options(hydra_gate_c_external_bridge PRIVATE /W4 /permissive-)
+    endif()
+
+    add_executable(hydra_gate_c_external_harness
+        src/gate_c_external_harness.cpp
+        include/hydra/gate_c_external_profile.hpp
+    )
+    target_link_libraries(hydra_gate_c_external_harness PRIVATE
+        hydra_gate_c_core User32.lib
+    )
+    hydra_set_gate_c_output(hydra_gate_c_external_harness)
+    if(MSVC)
+        target_compile_options(hydra_gate_c_external_harness PRIVATE /W4 /permissive-)
+    endif()
+    add_test(NAME GateCExternalHarnessHelp
+        COMMAND hydra_gate_c_external_harness --help)
+endif()
+
 # Core Executable target (Windows GUI subsystem)
 add_executable(HydraSeat WIN32 src/main.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
-target_link_libraries(HydraSeat PRIVATE hydra_hardware)
+target_link_libraries(HydraSeat PRIVATE
+    hydra_hardware hydra_host_transport hydra_control_surface hydra_session_control)
 
 if(WIN32)
     target_link_libraries(HydraSeat PRIVATE ${WIN32_LIBS})
+endif()
+
+# P4-RUN-01 headless per-user runtime authority. It deliberately has no Qt or
+# GUI dependency; P4-IPC-01 will add the long-lived local control transport.
+add_executable(hydra_host
+    src/host_main.cpp
+    src/workspace_manager.cpp
+    include/hydra/workspace_manager.hpp
+)
+target_link_libraries(hydra_host PRIVATE hydra_runtime hydra_host_transport)
+if(MSVC)
+    target_compile_options(hydra_host PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_host PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+add_executable(hydra_hostctl src/hostctl_main.cpp)
+target_link_libraries(hydra_hostctl PRIVATE hydra_host_transport)
+if(MSVC)
+    target_compile_options(hydra_hostctl PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_hostctl PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
 if(Qt6_FOUND)
@@ -341,10 +636,18 @@ if(Qt6_FOUND)
     target_compile_definitions(HydraSeat PRIVATE HYDRA_HAS_QT=1)
 endif()
 
-# Reset Tool Target
-add_executable(reset_input src/reset_input.cpp)
+# P8-RESET-01 independently launchable emergency reset tool. It depends only on
+# recovery/watchdog core libraries and never on Qt or the main control UI.
+add_executable(hydra_reset src/reset_main.cpp)
+target_link_libraries(hydra_reset PRIVATE hydra_reset_actions)
+if(MSVC)
+    target_compile_options(hydra_reset PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_reset PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
 if(WIN32)
-    target_link_libraries(reset_input PRIVATE User32.lib)
+    # No GUI/User32 dependency is required.
 endif()
 
 # Phase 1 command-line hardware report (does not depend on Qt).
@@ -519,10 +822,17 @@ add_executable(hydra_gate_c_host
     include/hydra/workspace_manager.hpp
 )
 target_link_libraries(hydra_gate_c_host PRIVATE
-    hydra_gate_c_core hydra_hardware hydra_input_metrics)
+    hydra_gate_c_core hydra_gate_c_recovery hydra_reset_actions
+    hydra_hardware hydra_input_metrics)
 hydra_set_gate_c_output(hydra_gate_c_host)
 if(WIN32)
     target_link_libraries(hydra_gate_c_host PRIVATE ${WIN32_LIBS})
+    add_dependencies(hydra_gate_c_host hydra_watchdog)
+    add_custom_command(TARGET hydra_gate_c_host POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:hydra_watchdog>
+            $<TARGET_FILE_DIR:hydra_gate_c_host>/hydra_watchdog.exe
+        VERBATIM)
 endif()
 if(MSVC)
     target_compile_options(hydra_gate_c_host PRIVATE /W4 /permissive-)
@@ -535,7 +845,8 @@ if(WIN32)
     find_program(HYDRA_POWERSHELL_EXECUTABLE NAMES powershell.exe powershell)
 endif()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
-target_link_libraries(hydra_tests PRIVATE hydra_hardware)
+target_link_libraries(hydra_tests PRIVATE
+    hydra_hardware hydra_host_transport hydra_control_surface hydra_session_control)
 if(WIN32)
     target_link_libraries(hydra_tests PRIVATE ${WIN32_LIBS})
 endif()
@@ -543,6 +854,170 @@ if(Qt6_FOUND)
     target_link_libraries(hydra_tests PRIVATE Qt6::Core Qt6::Widgets)
 endif()
 add_test(NAME EngineUnitTests COMMAND hydra_tests)
+
+# P4-RUN-01 pure runtime transition/rollback/concurrency tests and controlled
+# headless process self-test. No hardware or persistent system state is touched.
+add_executable(runtime_host_tests tests/test_runtime_host.cpp)
+target_link_libraries(runtime_host_tests PRIVATE hydra_runtime Threads::Threads)
+if(MSVC)
+    target_compile_options(runtime_host_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(runtime_host_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME RuntimeHostTests COMMAND runtime_host_tests)
+add_test(NAME RuntimeHostProcessSelfTest COMMAND hydra_host --self-test)
+
+add_executable(host_protocol_tests tests/test_host_protocol.cpp)
+target_link_libraries(host_protocol_tests PRIVATE hydra_host_protocol)
+if(MSVC)
+    target_compile_options(host_protocol_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(host_protocol_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME HostProtocolTests COMMAND host_protocol_tests)
+
+add_executable(host_ipc_process_tests tests/test_host_process.cpp)
+target_link_libraries(host_ipc_process_tests PRIVATE hydra_host_transport)
+add_dependencies(host_ipc_process_tests hydra_host hydra_hostctl)
+if(MSVC)
+    target_compile_options(host_ipc_process_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(host_ipc_process_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME HostIpcProcessTests COMMAND host_ipc_process_tests)
+
+add_executable(hydra_process_tree_child tests/process_tree_child.cpp)
+if(MSVC)
+    target_compile_options(hydra_process_tree_child PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_process_tree_child PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+add_executable(process_group_tests tests/test_process_group.cpp)
+target_link_libraries(process_group_tests PRIVATE hydra_process)
+add_dependencies(process_group_tests hydra_process_tree_child)
+if(MSVC)
+    target_compile_options(process_group_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(process_group_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ProcessGroupTests COMMAND process_group_tests)
+
+add_executable(hydra_window_test_app tests/window_test_app.cpp)
+if(MSVC)
+    target_compile_options(hydra_window_test_app PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_window_test_app PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+add_executable(window_tracker_tests tests/test_window_tracker.cpp)
+target_link_libraries(window_tracker_tests PRIVATE hydra_window_tracking)
+add_dependencies(window_tracker_tests hydra_window_test_app)
+if(WIN32)
+    target_link_libraries(window_tracker_tests PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(window_tracker_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(window_tracker_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME WindowTrackerTests COMMAND window_tracker_tests)
+
+add_executable(hydra_display_diag src/display_diag_main.cpp)
+target_link_libraries(hydra_display_diag PRIVATE hydra_display_topology)
+if(MSVC)
+    target_compile_options(hydra_display_diag PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_display_diag PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+add_executable(display_topology_tests tests/test_display_topology.cpp)
+target_link_libraries(display_topology_tests PRIVATE hydra_display_topology)
+if(MSVC)
+    target_compile_options(display_topology_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(display_topology_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME DisplayTopologyTests COMMAND display_topology_tests)
+
+add_executable(seat_display_layout_tests tests/test_seat_display_layout.cpp)
+target_link_libraries(seat_display_layout_tests PRIVATE hydra_seat_display_layout)
+if(MSVC)
+    target_compile_options(seat_display_layout_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(seat_display_layout_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SeatDisplayLayoutTests COMMAND seat_display_layout_tests)
+
+add_executable(window_policy_tests tests/test_window_policy.cpp)
+target_link_libraries(window_policy_tests PRIVATE hydra_window_placement)
+if(MSVC)
+    target_compile_options(window_policy_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(window_policy_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME WindowPolicyTests COMMAND window_policy_tests)
+
+add_executable(seat_runtime_policy_tests tests/test_seat_runtime_policy.cpp)
+target_link_libraries(seat_runtime_policy_tests PRIVATE hydra_seat_runtime_policy)
+if(MSVC)
+    target_compile_options(seat_runtime_policy_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(seat_runtime_policy_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SeatRuntimePolicyTests COMMAND seat_runtime_policy_tests)
+
+add_executable(display_recovery_tests tests/test_display_recovery.cpp)
+target_link_libraries(display_recovery_tests PRIVATE hydra_display_recovery)
+if(MSVC)
+    target_compile_options(display_recovery_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(display_recovery_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME DisplayRecoveryTests COMMAND display_recovery_tests)
+
+add_executable(management_seat_tests tests/test_management_seat.cpp)
+target_link_libraries(management_seat_tests PRIVATE hydra_management_seat)
+if(MSVC)
+    target_compile_options(management_seat_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(management_seat_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ManagementSeatTests COMMAND management_seat_tests)
+
+add_executable(session_control_transition_tests tests/test_session_control_transition.cpp)
+target_link_libraries(session_control_transition_tests PRIVATE hydra_session_control)
+if(MSVC)
+    target_compile_options(session_control_transition_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(session_control_transition_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SessionControlTransitionTests COMMAND session_control_transition_tests)
+
+add_executable(control_surface_model_tests tests/test_control_surface_model.cpp)
+target_link_libraries(control_surface_model_tests PRIVATE hydra_control_surface)
+if(MSVC)
+    target_compile_options(control_surface_model_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(control_surface_model_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ControlSurfaceModelTests COMMAND control_surface_model_tests)
 
 # Pure Phase 1 identity checks: deterministic and independent of attached hardware.
 add_executable(hardware_identity_tests
@@ -625,6 +1100,67 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 add_test(NAME CrashJournalTests COMMAND crash_journal_tests)
+
+# P8-RESET-01 codec/state/rollback/idempotency tests. Windows process tests run
+# the actual hydra_reset executable against exact owned process identities.
+add_executable(reset_actions_tests
+    tests/test_reset_actions.cpp
+)
+target_link_libraries(reset_actions_tests PRIVATE hydra_reset_actions)
+if(MSVC)
+    target_compile_options(reset_actions_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(reset_actions_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ResetActionsTests COMMAND reset_actions_tests)
+if(WIN32)
+    add_executable(reset_process_tests tests/test_reset_process.cpp)
+    target_link_libraries(reset_process_tests PRIVATE hydra_reset_actions)
+    add_dependencies(reset_process_tests hydra_reset)
+    if(MSVC)
+        target_compile_options(reset_process_tests PRIVATE /W4 /permissive-)
+    endif()
+    add_test(NAME ResetProcessTests COMMAND reset_process_tests)
+    set_tests_properties(ResetProcessTests PROPERTIES TIMEOUT 90)
+endif()
+
+# P3-REC-01 portable trusted-plan and durable recovery-journal lifecycle tests.
+add_executable(gate_c_recovery_tests
+    tests/test_gate_c_recovery.cpp
+)
+target_link_libraries(gate_c_recovery_tests PRIVATE hydra_gate_c_recovery)
+if(MSVC)
+    target_compile_options(gate_c_recovery_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(gate_c_recovery_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME GateCRecoveryCoreTests COMMAND gate_c_recovery_tests)
+if(WIN32)
+    add_executable(gate_c_watchdog_recovery_tests
+        tests/test_gate_c_watchdog_recovery.cpp
+    )
+    target_link_libraries(gate_c_watchdog_recovery_tests PRIVATE
+        hydra_crash_journal)
+    hydra_set_gate_c_output(gate_c_watchdog_recovery_tests)
+    add_custom_target(stage_gate_c_watchdog_reset
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:hydra_reset>
+            $<TARGET_FILE_DIR:gate_c_watchdog_recovery_tests>/hydra_reset.exe
+        DEPENDS hydra_reset
+        VERBATIM)
+    add_dependencies(gate_c_watchdog_recovery_tests
+        hydra_gate_c_host hydra_gate_c_target hydra_gate_c_api_probe
+        hydra_gate_c_shim hydra_watchdog stage_gate_c_watchdog_reset)
+    if(MSVC)
+        target_compile_options(gate_c_watchdog_recovery_tests PRIVATE
+            /W4 /permissive-)
+    endif()
+    add_test(NAME GateCWatchdogRecoveryTests
+             COMMAND gate_c_watchdog_recovery_tests)
+    set_tests_properties(GateCWatchdogRecoveryTests PROPERTIES TIMEOUT 180)
+endif()
 
 # Pure Gate A/B observation and explicit Seat-routing tests.
 add_executable(input_observation_tests

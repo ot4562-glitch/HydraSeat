@@ -45,6 +45,10 @@ public:
 
     HydraGateCAdapterHandle get() const noexcept { return m_handle; }
     explicit operator bool() const noexcept { return m_handle != nullptr; }
+    void reset() noexcept {
+        hydra_gate_c_adapter_destroy(m_handle);
+        m_handle = nullptr;
+    }
 
 private:
     HydraGateCAdapterHandle m_handle{nullptr};
@@ -131,6 +135,7 @@ struct TargetOptions {
     bool tokenSet{false};
     bool headless{false};
     bool selfTest{false};
+    bool testAdapterFailureAfterHandshake{false};
     bool showHelp{false};
 };
 
@@ -259,6 +264,8 @@ TargetOptions parseOptions(int argc, wchar_t** argv, bool& valid) {
             options.headless = true;
         } else if (argument == L"--self-test") {
             options.selfTest = true;
+        } else if (argument == L"--test-adapter-failure-after-handshake") {
+            options.testAdapterFailureAfterHandshake = true;
         } else if (argument == L"--help" || argument == L"-h") {
             options.showHelp = true;
         } else {
@@ -294,6 +301,19 @@ public:
                 m_hwnd.store(nullptr);
             }
             return 21;
+        }
+        if (m_options.testAdapterFailureAfterHandshake) {
+            m_adapter.reset();
+            HydraGateCAdapterSnapshotV1 snapshot{};
+            snapshot.struct_size = sizeof(snapshot);
+            const auto result = hydra_gate_c_adapter_get_snapshot(
+                m_adapter.get(), 0x41u, &snapshot);
+            if (const HWND window = m_hwnd.load(); window != nullptr) {
+                DestroyWindow(window);
+                m_hwnd.store(nullptr);
+            }
+            m_channel.close();
+            return result == HYDRA_GATE_C_ADAPTER_INVALID_ARGUMENT ? 82 : 83;
         }
 
         if (m_options.headless) {

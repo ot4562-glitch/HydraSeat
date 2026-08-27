@@ -2,513 +2,545 @@
 
 **English** | [한국어](README.ko.md) | [简体中文](README.zh-CN.md)
 
-An experimental Windows local gaming multiseat framework. The repository license is not yet formally declared; see the clean-room policy before reusing code.
+> **One capable Windows gaming PC. Two local players. Separate monitors, input, controllers, and audio — without a VM, Remote Desktop, or game streaming.**
 
-[![License: not yet declared](https://img.shields.io/badge/license-not%20yet%20declared-lightgrey.svg)](docs/CLEAN_ROOM_POLICY.md)
-[![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus)](https://isocpp.org/)
-[![Qt 6](https://img.shields.io/badge/Qt-6.8-41CD52?logo=qt)](https://www.qt.io/)
+HydraSeat is an experimental Windows local gaming multiseat project being developed for homes where one gaming PC has performance left over, but buying and maintaining a second full desktop just so two people can play at the same time is expensive or inconvenient.
+
+The v1 goal is intentionally narrow:
+
+> **Let two people use the spare headroom of one sufficiently capable Windows gaming PC as two local gaming stations.**
+
+HydraSeat is being developed in public toward an open-source distribution model. **The repository license and contribution terms are not yet formally declared**, so the current repository must not yet be represented as legally open source. See [Clean-room and licensing policy](docs/CLEAN_ROOM_POLICY.md).
 
 ---
 
-## 🎯 Project Goal
+## Why this project exists
 
-HydraSeat aims to make **one physical Windows PC feel like several independent local gaming PCs** without virtual machines, Remote Desktop, or game streaming.
+Gaming PCs keep getting faster, but many games do not continuously consume every CPU core, every gigabyte of memory, and the full capability of a modern GPU. In many households that leaves useful performance unused while a second person still needs another complete PC to play locally at the same time.
 
-The core abstraction is a **Seat**. A Seat is not limited to one monitor. It is a logical local-PC environment composed from an arbitrary group of physical devices:
+HydraSeat explores a different tradeoff:
 
 ```text
-Physical Windows PC
-├─ LG Monitor
-├─ Samsung Monitor
-├─ BenQ Monitor
-├─ Keyboard A / Mouse A
-├─ Keyboard B / Mouse B
-├─ Controller A / Controller B
-├─ Headset A
-└─ Speakers B
-
-HydraSeat
-├─ Seat 1 — "Player 1 PC"
-│  ├─ LG Monitor       (Primary)
-│  ├─ Samsung Monitor  (Secondary)
-│  ├─ Keyboard A
-│  ├─ Mouse A
+One Windows gaming PC
+│
+├─ Seat 1
+│  ├─ Monitor A
+│  ├─ Keyboard / Mouse A
 │  ├─ Controller A
-│  ├─ Headset A
-│  └─ Games / apps owned by Seat 1
+│  └─ Audio A
 │
-└─ Seat 2 — "Player 2 PC"
-   ├─ BenQ Monitor     (Primary)
-   ├─ Keyboard B
-   ├─ Mouse B
+└─ Seat 2
+   ├─ Monitor B
+   ├─ Keyboard / Mouse B
    ├─ Controller B
-   ├─ Speakers B
-   └─ Games / apps owned by Seat 2
+   └─ Audio B
 ```
 
-The intended user experience is not "three monitors attached to one PC". It is **"a dual-monitor PC and a single-monitor PC sharing the same hardware underneath."**
+The target users are couples, siblings, roommates, families, and friends who already own one strong PC and would rather share its unused performance than buy a second desktop.
 
-Windows normally exposes global concepts such as foreground focus, cursor state, keyboard state, and a merged desktop. HydraSeat's long-term job is to virtualize or mediate the parts that matter to local gaming so each Seat behaves as independently as practical.
-
-### Product north star: one capable PC, multiple local players
-
-HydraSeat is intended to become a practical household/shared-PC product, not remain only a research harness. When a PC has enough CPU, GPU, memory, and display/input capacity, a family or group of friends should be able to use that one Windows gaming PC as two or more local gaming stations at the same time.
-
-Primary product scenarios are:
-
-- two people playing different games concurrently on separate Seats;
-- two people running separate instances of the same multiplayer title **only when** that title, launcher, account/license rules, single-instance behavior, and an explicit HydraSeat compatibility profile allow it;
-- one person gaming while another Seat runs a different game or ordinary application;
-- switching back to ordinary one-PC Windows without a reboot or developer-only recovery steps.
-
-HydraSeat does **not** bypass DRM, anti-cheat, account limits, launcher restrictions, protected processes, or game single-instance protections. Same-title multiseat is therefore a compatibility-specific capability, not a universal promise.
-
-Product success also means guided device/Seat setup, measured low overhead, exact compatibility evidence, safe install/update/uninstall/recovery, and formats that let a future community contribute profiles, compatibility results, diagnostics, and extensions. The long-term distribution goal is a broadly usable open-source project, but the repository license and contribution terms are **not yet formally declared**, so the current repository must not be described as open source until that legal gate is resolved.
-
-### Management Seat and background operation
-
-HydraSeat is planned as a background runtime plus an on-demand control console, not as one permanently visible configuration window.
-
-By default, **Seat 1 is the Management Seat**. When the split-PC session is active, opening `HydraSeat.exe` places the management console on Seat 1's primary display (LG in the example above). Closing that window does **not** stop the split session; `hydra_host.exe` and `hydra_watchdog.exe` continue in the background. Reopening the controller returns it to the Management Seat display. Other Seat shells are read-mostly for whole-machine controls unless the profile explicitly grants more authority.
-
-The normal control surface is intentionally small and obvious:
-
-```text
-HydraSeat — Management Seat
-├─ Current state: Normal Windows / Starting / Split Active / Degraded / Recovery Required
-├─ Seat 1: LG + Samsung | Keyboard A | Mouse A | Controller A | Headset
-├─ Seat 2: BenQ         | Keyboard B | Mouse B | Controller B | Speakers
-│
-├─ [ Start split session ]
-├─ [ Stop / Return to Windows ]
-├─ [ Reconfigure monitors and input ]
-├─ [ Identify / test devices ]
-├─ [ Startup mode ]  Manual | Background Idle | Auto-Activate Validated Session
-├─ [ Diagnostics ]
-└─ [ Recovery / Reset ]
-```
-
-`Stop / Return to Windows` is not just a UI close button. It is a verified host rollback transaction: Seat-specific input/device/window/display/audio/controller/shell state is removed or restored, all monitors and ordinary keyboard/mouse behavior return to one normal Windows desktop, and only then does the runtime report `Stopped`/`Idle`.
-
-`Reconfigure` uses the safe path by default:
-
-```text
-Active split session
-  -> Stop / Return to Windows and verify rollback
-  -> open configuration on the Management Seat display
-  -> identify/test/reassign monitors, keyboards, mice, controllers, and audio
-  -> validate + save a new plan
-  -> Start Now, or remain in normal Windows mode
-```
-
-Three startup modes are planned:
-
-- **Manual** — HydraSeat does nothing until the user opens it and presses Start.
-- **Background Idle** — host/watchdog start silently at logon, but the PC remains normal until the Management Seat opens the controller and presses Start.
-- **Auto-Activate Validated Session** — after logon, HydraSeat may automatically restore one explicitly selected, previously validated Seat layout only if crash-journal, safe-mode, hardware/topology, capability, privilege, watchdog, and rollback preflight all pass. Otherwise it stays safely idle instead of partially splitting the PC.
-
-This gives both intended usage styles: an always-available appliance-like split-PC setup after boot, or a program the user launches only when multiseat gaming is needed.
-
-### Language support
-
-The canonical UI language is English (`en-US`). The planned initial release UI/UX locales are English, Korean (`ko-KR`), and Simplified Chinese (`zh-CN`). User-visible strings will use stable localization IDs with English fallback, while source-code comments, protocols, schema keys, CLI switches, diagnostic codes, and other machine/developer identifiers remain English. See [Localization Policy](docs/LOCALIZATION.md).
-
-The README is available in [English](README.md), [Korean](README.ko.md), and [Simplified Chinese](README.zh-CN.md). README translation availability does not mean the runtime UI localization packet is already implemented; that work is tracked as `P7-I18N-01`.
+HydraSeat does **not** promise that every PC can run two games well. The machine still needs enough CPU, GPU, memory, storage, display outputs, and peripherals for the workloads selected by the users.
 
 ---
 
-## 🪑 Seat Model
+## v1: exactly two Seats
 
-A future Seat is expected to own a collection of resources rather than a single display/input tuple:
+HydraSeat v1 targets **two local gaming Seats**.
 
-```text
-Seat
-├─ Displays[]
-│  └─ PrimaryDisplay
-├─ Keyboards[]
-├─ Mice[]
-├─ Controllers[]
-├─ AudioOutputs[]
-├─ AudioInputs[]
-├─ Seat-local cursor domain
-├─ Seat-local display coordinate space
-├─ Process group
-├─ Window placement policy
-├─ Input isolation policy
-└─ Desktop / launcher profile
-```
+The internal code may keep generic collections where that makes engineering sense, but the v1 UI, installer, test matrix, product promises, and compatibility evidence are designed for at most two active Seats.
 
-This allows configurations such as:
-
-```text
-Seat 1 = LG + Samsung + Keyboard A + Mouse A + DualSense + Headset
-Seat 2 = BenQ + Keyboard B + Mouse B + Xbox Controller + Speakers
-Seat 3 = Living-room TV + Controller C
-```
-
-A monitor group therefore belongs to a Seat as a unit. Applications owned by that Seat should remain inside that Seat's display topology unless the user explicitly moves or reassigns them.
+Supporting three or four local stations would multiply monitors, keyboards, mice, controllers, audio endpoints, physical setup complexity, and validation combinations while serving a much smaller household use case. HydraSeat therefore prioritizes making two Seats genuinely usable before considering a larger count.
 
 ---
 
-## 🖥️ Seat-Local Desktop Experience
+## The product model
 
-HydraSeat is intended to provide a lightweight **Seat Shell** rather than trying to create full virtual machines or independent Windows installations.
+HydraSeat deliberately separates **Seat**, **Player**, **Game**, **Two-player setup**, and **Runtime Session**.
 
-Each Seat can eventually have its own:
+### 🪑 Seat = the physical station
 
-- desktop/launcher surface;
-- taskbar-like application switcher;
-- wallpaper and profile;
-- visible application/process group;
-- primary and secondary monitors;
-- mouse cursor restricted to that Seat's monitors;
-- audio output/input devices;
-- game launcher/profile settings.
-
-For example, Windows may physically arrange three monitors in one global coordinate space:
-
-```text
-LG               Samsung                 BenQ
-0..2559          2560..5119              5120..7039
-```
-
-HydraSeat can expose a logical Seat-local view instead:
+A Seat is like a seat in a PC cafe. It describes hardware, not a person or a game.
 
 ```text
 Seat 1
-LG       -> local (0, 0), primary
-Samsung  -> local (2560, 0)
+├─ Display(s)
+├─ Keyboard       optional until required
+├─ Mouse          optional until required
+├─ Controller(s)  optional
+└─ Audio           optional
+```
 
+Seat settings may be incomplete. The first-run wizard can be skipped, individual device categories can be left unset, and the user can finish setup later. HydraSeat checks the requirements of the selected game at launch instead of requiring every possible device up front.
+
+### 👤 Player = the person
+
+A Player is a lightweight profile independent from the Seat.
+
+A Player may remember:
+
+- a display name and optional local avatar;
+- recent games;
+- recent Seat preference;
+- per-game instance/data-directory preferences;
+- references to already authenticated launcher/provider accounts where supported.
+
+Players can swap Seats without losing those associations.
+
+HydraSeat should not become a general password vault. Whenever practical, login credentials and authentication tokens remain owned by the original game launcher/provider. HydraSeat stores only the minimum reference needed to select an already authenticated identity.
+
+### 🎮 Game = an installed title
+
+HydraSeat aims to discover installed games automatically from supported launchers and local installation metadata. Power users can still add an unknown game or executable manually.
+
+The UI should use icons already available from the local installation, shortcut, or provider metadata where possible rather than bundling a large third-party artwork library.
+
+### 🔁 Two-player setup = same-game multi-instance recipe
+
+If Seat 1 and Seat 2 run different games, no special same-game profile needs to be visible to the user.
+
+If both Seats select the **same game**, HydraSeat looks for or creates a two-player setup describing the lawful separation required by that title, for example:
+
+- separate instance/config/data directories;
+- launch arguments and working directories;
+- provider-specific launch choices;
+- account references where the provider supports them;
+- start order;
+- window matching and placement;
+- input/controller/audio compatibility requirements;
+- known limitations.
+
+HydraSeat should attempt to create this setup automatically, while also providing a guided manual editor for games automation does not yet understand.
+
+> **HydraSeat automates multi-instance gaming where the game and provider permit it. It does not defeat restrictions to create multi-instance support.**
+
+### ▶ Runtime Session = what is happening now
+
+```text
+Seat 1 + Mario + Minecraft instance A
+Seat 2 + Luigi + Minecraft instance B
+```
+
+The Seat remains hardware. The Player remains the person. The two-player setup remains reusable game knowledge. The runtime mapping exists only while the current gaming session is active.
+
+See the canonical [HydraSeat v1 Product Specification](docs/PRODUCT_V1.md).
+
+---
+
+## Game-first UX
+
+HydraSeat should feel like a lightweight game launcher, not a Windows administration console.
+
+The normal flow is:
+
+```text
+Open HydraSeat
+    ↓
+Choose a game
+    ↓
+Play on Seat 1 / Seat 2 / Both
+    ↓
+Choose Player(s)
+    ↓
+Play
+```
+
+Click/tap selection is the primary interaction. Dragging a game icon onto a Seat card may be supported as a convenience shortcut.
+
+Low-level terms such as Raw Input, device interface paths, compatibility backends, IAT interposition, plan hashes, and recovery manifests belong in Diagnostics or Expert settings, not in the normal path.
+
+A possible normal home screen is intentionally simple:
+
+```text
+HydraSeat
+──────────────────────────────────────
+
+Games
+[Minecraft] [Terraria] [Stardew] [...]
+
+Seat 1                         Seat 2
+Mario                          Luigi
+Minecraft                      Terraria
+Ready                          Ready
+
+                 ▶ PLAY
+```
+
+When the same game is selected for both Seats:
+
+```text
+Seat 1                         Seat 2
+Mario                          Luigi
+Minecraft ═══════════════════ Minecraft
+
+        Two-player setup ready
+
+                 ▶ PLAY
+```
+
+---
+
+## Optional first-run Seat wizard
+
+On first launch HydraSeat may offer:
+
+```text
+Welcome
+  → identify displays
+  → assign Seat 1 input
+  → assign Seat 2 input
+  → optional controllers
+  → optional audio
+  → test
+  → save
+```
+
+The user can choose **Set later** or skip the wizard entirely.
+
+A missing keyboard does not automatically make a Seat invalid if the selected game only needs a controller. Requirements are evaluated per game during preflight.
+
+---
+
+## Independent Seat lifecycle
+
+The two players do not have to start and stop at exactly the same time.
+
+If Luigi closes Terraria while Mario continues Minecraft:
+
+```text
+Seat 1                         Seat 2
+Mario                          Luigi
+Minecraft                      Idle
+Playing                        Choose another game
+```
+
+Seat 2 can launch another game or end playing without interrupting Seat 1.
+
+While at least one Seat remains active, an idle/ended Seat stays on a minimal HydraSeat waiting or game-selection screen instead of being returned to an unrestricted ordinary Windows desktop. When both Seats finish, or the Management UI explicitly requests it, HydraSeat performs verified rollback and restores normal one-PC Windows behavior.
+
+---
+
+## Minimal Seat Launcher — not a second desktop
+
+HydraSeat v1 is **game-only**.
+
+It manages the selected game, its required launcher, helpers, child processes, windows, input/controller/audio routing, and recovery. It does not try to provide a complete independent Windows desktop for each player.
+
+A v1 idle Seat may show only:
+
+```text
 Seat 2
-BenQ     -> local (0, 0), primary
+Luigi
+
+Minecraft
+Terraria
+Stardew Valley
+More Games...
+
+End Playing
 ```
 
-This is important for games that assume their primary monitor begins at `(0, 0)` or that fullscreen always means the system-wide primary display.
+Once the game is running, the Seat UI should disappear or stay non-intrusive.
+
+The following are intentionally deferred beyond the v1 product contract:
+
+- independent Seat taskbars;
+- per-Seat wallpaper/desktop zones;
+- general arbitrary apps such as Chrome/Office/Discord as independently managed Seat apps;
+- per-Seat clipboard virtualization;
+- a full Windows shell replacement.
+
+This keeps the one-developer project focused on the actual goal: **two people gaming locally on one PC**.
 
 ---
 
-## ⌨️ Input Isolation Goal
+## Input and runtime approach
 
-Hardware detection alone is not enough. Raw Input can tell HydraSeat **which physical device generated an event**, but Windows and games may still observe global keyboard, mouse, cursor, or foreground state.
+Windows normally exposes global concepts such as foreground focus, cursor position, keyboard state, and merged input. Games also use different APIs and behavior patterns.
 
-The target behavior is:
+HydraSeat therefore treats input isolation as a compatibility problem rather than a simple event-forwarding problem. Depending on the title, current research/implementation includes or evaluates:
+
+- Win32 Raw Input device identity and routing;
+- HID / SetupAPI / ConfigMgr stable device identity;
+- controlled process-local input virtualization for declared APIs;
+- XInput and DirectInput compatibility policies;
+- window/process ownership;
+- optional device visibility/isolation backends such as HidHide where appropriate;
+- watchdog, crash journal, reset, and rollback paths.
+
+HydraSeat does **not** hide, bypass, disable, or evade anti-cheat, DRM, protected-process, account, launcher, or deliberate single-instance restrictions.
+
+---
+
+## Protected games: warn, do not pretend
+
+A protected game may still be useful to test because future versions, provider changes, or a cleaner compatibility path may make a configuration work. HydraSeat therefore does not need to permanently hard-block every protected title.
+
+Instead, known protected titles should show a strong warning before any experimental HydraSeat launch:
+
+> This game uses an anti-cheat, DRM, or protection system. HydraSeat has not established that this configuration is safe or compatible. The game or protection system may block the software, refuse to launch, disconnect, or take other action under its own policy. HydraSeat does not bypass or disable protection.
+
+The user may explicitly opt into an advanced experiment.
+
+**A successful launch does not prove anti-cheat safety.** Protected-title results remain clearly marked as experimental and must never be presented as an anti-cheat safety certification.
+
+---
+
+## Compatibility is evidence, not a badge
+
+HydraSeat does not need an official `HydraSeat Certified` label for games.
+
+A more honest model is to show what real users observed:
 
 ```text
-Keyboard A + Mouse A -> Seat 1 applications only
-Keyboard B + Mouse B -> Seat 2 applications only
+Community results
+87% succeeded (45 reports)
+39 success / 6 failure
 
-Seat 1 input must not leak into Seat 2 games.
-Seat 2 input must not steal control from Seat 1 games.
+Launch              98%
+Two instances       91%
+Input isolation     89%
+Audio routing       96%
+Clean shutdown      99%
 ```
 
-Phase 3 therefore treats input isolation as a compatibility problem, not merely an event-forwarding problem. Depending on the target game, HydraSeat may need a combination of:
+Evidence can be grouped by game version, HydraSeat version, provider, Windows version, and relevant compatibility path so materially different environments are not mixed into a misleading percentage.
 
-- Win32 Raw Input device routing;
-- HID / SetupAPI physical-device identity;
-- per-process input compatibility hooks;
-- virtualized keyboard/mouse/cursor state;
-- controlled foreground/focus behavior;
-- optional device visibility/isolation backends such as HidHide where appropriate.
+States visible to users can remain simple:
 
-Public implementations such as ProtoInput, Universal Split Screen, Nucleus Co-op, HidHide, and official Microsoft Windows API documentation are useful reference material. HydraSeat should reuse code only when licenses are compatible and otherwise perform independent clean-room implementations based on documented APIs and observable behavior.
+- **Community results available** — show success/failure evidence and sample size;
+- **Untested** — no useful evidence yet; local testing is available;
+- **Protected / Experimental** — protection is known; explicit risk acknowledgement is required.
+
+Percentages are observations, not guarantees.
 
 ---
 
-## 🎮 Process and Game Ownership
+## Local-first compatibility testing
 
-Applications launched through HydraSeat should belong to a Seat, not merely to a monitor.
+HydraSeat should make testing easy enough that the community can expand compatibility without one maintainer owning every game.
+
+A local compatibility run may record bounded evidence such as:
+
+- game/provider/version;
+- HydraSeat version;
+- process/instance launch result;
+- expected instance count;
+- Seat/process/window ownership;
+- receiver-verified input and measured cross-Seat bleed;
+- audio route result;
+- clean exit and rollback;
+- relevant Windows and backend information.
+
+Results are stored **locally by default**.
+
+Community submission is explicit opt-in and should show the user the redacted JSON before upload. Default submissions must avoid credentials, passwords, tokens, raw typed text, Player names, personal paths, and unnecessary stable device identifiers.
+
+---
+
+## Offline first
+
+Core HydraSeat operation should not require a HydraSeat account or an Internet connection.
+
+Offline:
+
+- configure Seats;
+- create Players;
+- discover locally installed games from available local metadata;
+- use the local game library;
+- create automatic/manual two-player setups;
+- run local compatibility tests;
+- launch saved games/setups;
+- diagnose and recover.
+
+Optional online features:
+
+- compatibility/profile catalog updates;
+- opt-in community result upload;
+- HydraSeat software update checks.
+
+Compatibility/profile data can initially be distributed as versioned JSON/catalog artifacts instead of requiring a custom always-on backend service.
+
+---
+
+## Update policy
+
+Compatibility data and the HydraSeat program are updated separately.
+
+**Compatibility/profile updates** can be lightweight and frequent because they improve game knowledge without replacing the core executable. Users can disable automatic refresh and keep using the local cache.
+
+**Program/runtime/driver updates** require clear user approval. A working installed version should not become unusable merely because a newer build exists.
+
+Downloaded artifacts must be version/hash/trust checked before use.
+
+---
+
+## Least privilege
+
+HydraSeat should use normal user privileges whenever Windows allows the required operation.
+
+UAC/administrator access should be requested only for narrowly defined tasks that actually require elevation, such as installation, optional driver/service setup, or specific system-level recovery/configuration actions.
+
+The ordinary game-selection and Play flow should not require running the main UI as administrator.
+
+---
+
+## Installer is mandatory for a usable release
+
+A user should not need Visual Studio, MSVC, Qt, CMake, or a developer shell just to try HydraSeat.
+
+A v1 Windows installer/uninstaller is part of the product and must provide:
+
+- prerequisite and architecture checks;
+- required runtime installation;
+- optional elevated components only when selected/required;
+- first-run Seat setup;
+- repair/uninstall;
+- safe update/rollback;
+- useful diagnostics when setup fails.
+
+Uninstall must remove HydraSeat-owned persistent state and leave ordinary Windows usable.
+
+---
+
+## Current engineering status
+
+HydraSeat is **not yet a finished end-user product**.
+
+Current work has already built substantial research and engineering infrastructure, including:
+
+- Phase 0 research and clean-room policy;
+- stable Windows hardware identity/detection;
+- two-Seat hardware composition/configuration foundations;
+- controlled Raw Input, polling/cursor/focus, XInput, and DirectInput compatibility experiments;
+- input metrics and physical acceptance tooling;
+- watchdog, crash journal, and emergency reset foundations;
+- an open-source application compatibility test path;
+- early Phase 4 background runtime / IPC / process / window / display foundations.
+
+Important real-world gates remain pending, especially physical two-input acceptance and real game validation. Synthetic or HydraSeat-owned controlled tests are not presented as generic game support.
+
+See:
+
+- [Implementation status](docs/implementation/STATUS.md)
+- [Development roadmap](docs/ROADMAP.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [v1 product specification](docs/PRODUCT_V1.md)
+- [Compatibility evidence](docs/COMPATIBILITY_MATRIX.md)
+
+---
+
+## Roadmap direction
+
+The roadmap is now optimized for a one-developer, two-Seat gaming product rather than a general Windows multiseat desktop platform.
+
+High-level order:
 
 ```text
-Seat 1 Process Group
-├─ minecraft.exe
-├─ discord.exe
-└─ chrome.exe
-
-Seat 2 Process Group
-├─ fconline.exe
-├─ launcher.exe
-└─ browser.exe
+Phase 3  Input isolation + physical evidence
+   ↓
+Phase 4  Background runtime + independent Seat lifecycle + display/window ownership
+   ↓
+Phase 5  Real two-Seat gaming MVP
+   ↓
+Phase 6  Game discovery + Player profiles + automatic/manual same-game setups
+   ↓
+Phase 7  Minimal idle Seat Launcher UX
+   ↓
+Phase 8  Installer + reliability + least privilege + offline updates/catalog sync
+   ↓
+Phase 9  Community compatibility/profile ecosystem
+   ↓
+Phase 10 Release/legal/security/performance hardening
 ```
 
-A Seat-aware window manager can then keep those windows on the correct monitor group and restore their positions when applications create new windows, switch fullscreen modes, or restart.
-
-Windows Job Objects and related process-management APIs are candidates for grouping, lifecycle tracking, child-process ownership, crash cleanup, and optional resource policies.
+The complete packet-level roadmap is in [`docs/implementation/`](docs/implementation/README.md).
 
 ---
 
-## 🔊 Audio Isolation
+## v1 release success
 
-A convincing local-PC experience also requires audio routing:
+A real v1 release requires the complete user journey, including:
 
-```text
-Seat 1 games/apps -> Headset A
-Seat 1 voice chat  -> Microphone A
+- clean install/uninstall;
+- exactly two v1 Seats;
+- real two-display/two-input physical validation;
+- objective input isolation evidence for tested configurations;
+- two different real games running at the same time;
+- at least one lawful real same-title/two-instance demonstration;
+- Player profiles and game-first selection;
+- automatic game discovery plus manual fallback;
+- automatic and manual two-player setup creation;
+- one Seat exiting/changing games without stopping the other;
+- idle Seat Launcher behavior;
+- verified return to ordinary Windows when both players finish;
+- watchdog/crash/emergency recovery;
+- local-first compatibility JSON and optional community sharing;
+- offline operation with locally available data;
+- a user-approved core update path;
+- resolved project license/contribution terms before calling the release open source.
 
-Seat 2 games/apps -> Speakers B
-Seat 2 voice chat  -> Microphone B
-```
-
-Per-application audio endpoint routing is therefore part of the long-term Seat model, even though it is not required for the earliest input-routing prototype.
-
----
-
-## 🧭 Design Principles
-
-HydraSeat development should follow these principles:
-
-1. **No VM requirement** — games execute directly on the host Windows installation.
-2. **Seat, not monitor, is the unit of ownership** — one Seat may own one or many displays.
-3. **Physical-device identity must remain deterministic** — identical USB/HID products must still be distinguishable.
-4. **Zero cross-seat input bleed is the target** — merely observing Raw Input is not sufficient.
-5. **Games should believe they are locally active** — compatibility work may be required for foreground, cursor, keyboard-state and Raw Input APIs.
-6. **Do not fake implementation status** — features that are still research/prototype work stay documented as such.
-7. **Prefer official Windows APIs and compatible open source** — use clean-room reimplementation when source licenses or proprietary software prevent reuse.
-8. **Gaming first** — HydraSeat is not intended to become an enterprise VDI or generic office multiseat platform.
+The goal is **not** to claim official support for a huge catalog on day one. Compatibility should grow from transparent evidence and reusable community knowledge.
 
 ---
 
-## 🚫 Non-Goals
+## Explicit v1 non-goals
 
-HydraSeat is focused **strictly on local PC gaming**. It will **NOT** be:
+HydraSeat v1 does not promise:
 
-- ❌ School computer lab software
-- ❌ Office multiseat enterprise software
-- ❌ Remote desktop software
-- ❌ Cloud gaming service
-- ❌ Enterprise VM manager
-- ❌ A hypervisor or replacement Windows kernel/session manager
-
----
-
-## 🏗️ Architecture
-
-The planned architecture is layered so hardware detection, Seat composition, compatibility work, and game launching can evolve independently.
-
-```text
-                       HydraSeat Host
-                             │
-          ┌──────────────────┼──────────────────┐
-          │                  │                  │
-   HardwareDetector      SeatManager      Compatibility Layer
-          │                  │                  │
-    ┌─────┼─────┐            │          Raw Input / Focus /
-    │     │     │            │          Cursor / Game hooks
- Input Display Audio         │
-                             │
-                   ┌─────────┴─────────┐
-                   │                   │
-                 Seat 1              Seat 2
-                   │                   │
-          Displays / Inputs     Displays / Inputs
-          Audio / Shell         Audio / Shell
-                   │                   │
-             Process Group        Process Group
-                   │                   │
-             Games / Apps          Games / Apps
-```
-
-Current/planned technology areas include:
-
-- **GUI / Seat Shell**: Qt 6 / Win32
-- **Input Detection**: Win32 Raw Input API, Windows HID API, SetupAPI / ConfigMgr
-- **Input Compatibility**: Raw Input routing, process hooks where required, optional HID visibility backends
-- **Controllers**: XInput plus HID/DirectInput-compatible discovery
-- **Display Detection/Routing**: `EnumDisplayMonitors`, `EnumDisplayDevices`, DXGI, Windows Display Configuration API (`QueryDisplayConfig`)
-- **Virtual Displays**: Windows IddCx / IDD and compatible adapters in later phases
-- **Process Management**: Windows process APIs and Job Objects
-- **Audio Routing**: Windows Core Audio per-application endpoint control
-- **Game Launcher**: Steam, Epic, EA, GOG, and generic executable profiles
+- more than two active Seats;
+- virtual machines or independent Windows installations;
+- one Windows logon session per Seat;
+- a general-purpose independent desktop per Seat;
+- universal same-game multi-instance support;
+- anti-cheat/DRM/account/launcher/single-instance bypass;
+- anti-cheat safety certification;
+- cloud accounts or mandatory telemetry;
+- compatibility with every game.
 
 ---
 
-## 📍 Current Development Status
+## Related systems and clean-room boundary
 
-The roadmap is intentionally incremental.
+HydraSeat studies public behavior and documentation from related systems such as ASTER, ProtoInput, Nucleus Co-op, Universal Split Screen, HidHide, devreorder, Duo, and official Microsoft Windows APIs.
 
-- **Phase 0 — Research & Foundation:** complete, including related-system and clean-room research.
-- **Phase 1 — Hardware Detection:** complete and validated with Windows/MSVC CI.
-- **Phase 2 — Seat Composition / Assignment UI:** complete in the current Win32 prototype, including multi-display Seats, primary-display selection, exclusive device ownership, and validated JSON profiles.
-- **Phase 3 — Input Compatibility / Isolation:** current. The capability planner, Gate A/B input observation, and the Gate C controlled-process protocol/adapter foundation are implemented. Physical acceptance, actual Windows API interposition, device cloaking, and verified zero-bleed game enforcement are **not** complete yet.
-- **Later phases:** background runtime and display/window ownership, two-game MVP, launcher/profile manager, Seat shell, watchdog/installer/update productization, compatibility SDK, and release hardening through Phase 10.
+Research references do not automatically become HydraSeat code. Proprietary systems are behavior/documentation references only, and third-party source reuse must follow license compatibility and the repository's [clean-room policy](docs/CLEAN_ROOM_POLICY.md).
 
-The most important technical milestone is not simply launching two windows. It is proving that two people can concurrently use different games/apps on different Seat display groups **without either user's keyboard/mouse input or foreground behavior interfering with the other Seat.**
+Reference checkouts under `C:\HydraSeat\references` are research inputs only and are not build inputs.
 
 ---
 
-## 🧪 Phase 3 Planning Tool
+## Development and verification
 
-`hydra_plan` analyzes a compatibility-profile template against an assumed backend environment. It is **diagnostic only**: it does not inject a process, install a driver, hide a device, or activate input suppression.
+Developer builds currently use C++20, CMake, MSVC on Windows, and optional Qt 6 UI work.
 
-```text
-hydra_plan --list
-hydra_plan observation-harness
-hydra_plan raw-input-game
-hydra_plan polled-keyboard-mouse-game --protoinput --hidhide --allow-injection --admin --recovery-ready
-```
+The repository intentionally distinguishes:
 
-The output identifies:
+- **automated controlled evidence**;
+- **real-process evidence**;
+- **physical/manual evidence**;
+- **community compatibility evidence**.
 
-- selected backend descriptors and the exact capabilities assigned to each;
-- unavailable or policy-rejected backends;
-- covered and missing requirements;
-- injection, driver, administrator, recovery, and anti-cheat constraints;
-- an honest result: `Supported`, `SupportedWithWarnings`, `ObservationOnly`, or `Unsupported`.
+A successful synthetic test is never promoted into a generic physical/game claim.
 
-Even when ProtoInput and HidHide are marked available, the built-in planner still reports zero-bleed profiles as unsupported until a backend has **actually demonstrated verified physical input suppression**. HidHide is modeled only as physical-device cloaking at this stage.
-
-### Gate A/B Input Lab
-
-`hydra_input_lab` is the first executable Phase 3 feasibility harness. It opens two HydraSeat-owned Seat windows, observes Raw Input from stable physical device identities, tracks key/button and hot-plug state, and routes exclusive Seat-owned input to exactly one diagnostic target window.
-
-```powershell
-.\build\Release\hydra_input_lab.exe --no-profile
-.\build\Release\hydra_input_lab.exe --profile workspace_config.json
-.\build\Release\hydra_input_lab.exe --profile workspace_config.json --trace phase3-input-lab.jsonl
-.\build\Release\hydra_input_lab.exe --self-test
-```
-
-The lab is deliberately limited:
-
-- it does not inject a game process;
-- it does not install or control HidHide;
-- it does not suppress normal Windows input;
-- it does not virtualize polling, cursor, capture, or foreground state;
-- shared input devices are treated as ambiguous and fail closed;
-- every JSONL route record states that native OS input remains unsuppressed.
-
-Implementation is complete, but the physical acceptance checklist still needs to be run with the user's actual two-keyboard/two-mouse setup. See [Phase 3 Gate A/B testing](docs/PHASE3_GATE_A_B_TESTING.md).
-
-### Gate C Controlled Process Lab
-
-Gate C adds a versioned host/target protocol and a separate process-local adapter DLL. It launches only HydraSeat-owned controlled targets; it does not inject into a game.
-
-```powershell
-.\build\Release\hydra_gate_c_host.exe `
-  --self-test `
-  --target .\build\Release\hydra_gate_c_target.exe
-
-.\build\Release\hydra_gate_c_host.exe `
-  --profile workspace_config.json `
-  --trace hydra_gate_c_host.jsonl
-```
-
-Or use the **Gate C Process Lab** button in the main UI.
-
-Implemented Gate C state:
-
-- versioned little-endian protocol with bounded frames and monotonic sequences;
-- local named pipes with timeout handling, remote-client rejection and full session-token validation;
-- Seat/PID/architecture handshake;
-- cryptographic Windows session-token generation through `BCryptGenRandom`;
-- process-local `hydra_gate_c_adapter.dll` with a versioned C ABI;
-- `GetAsyncKeyState`-style one-shot edges;
-- `GetKeyState` / `GetKeyboardState`-style high bits;
-- mouse button and wheel state;
-- virtual cursor, clip, foreground and capture state;
-- bounded per-process virtual Raw Input registrations, immutable synthetic
-  keyboard/mouse packets, generation-checked opaque `HRAWINPUT` tokens, and
-  an eight-byte-aligned queue;
-- two separate controlled target processes with different Seat states;
-- bounded per-target writer queues so a slow target cannot block Raw Input indefinitely;
-- Windows CI verification that A/B keys, mouse state, cursor state and virtual foreground do not cross between the two controlled processes.
-
-Important boundary:
-
-- controlled targets call the adapter API directly;
-- HydraSeat-owned probes may opt into a startup-loaded, process-local IAT shim
-  for polling plus cursor/clip/logical-focus/capture APIs; both surfaces are
-  Windows-validated in controlled x64/x86 CI;
-- the same shim has an explicit, separate Raw Input capability for only
-  `RegisterRawInputDevices`, `GetRegisteredRawInputDevices`,
-  `GetRawInputData`, and `GetRawInputBuffer`; it is Windows-validated on native
-  x64/x86 and the x64-host-to-x64/x86 controlled matrix;
-- adapter ABI v4 has bounded four-slot normalized XInput-style state,
-  logical-slot/source mapping, capabilities, battery, disconnect/reconnect
-  generations, and source-only vibration routing. The generation/snapshot
-  remediation is `VALIDATED`: fork PR #15 run `32832036967` passed native x64
-  and Win32/x86 36/36 plus x64-host-to-x64/x86 zero-cross controller acceptance
-  for remediation head `b351afdd`; historical run `32816241577` is pre-fix only;
-- the standalone Raw Input behavior probe and bounded trace/parser are
-  Windows-validated on x64/x86 run `32800513365`;
-- no detour, remote injection, driver control, physical suppression, or
-  third-party/commercial-process patch is installed;
-- Gate C is not complete until the Raw Input, recovery, physical, and later
-  compatibility gates pass.
-
-See [Phase 3 Gate C controlled-process testing](docs/PHASE3_GATE_C_TESTING.md).
-
-Research and implementation specifications:
-
-- [Related systems and source/license matrix](docs/RELATED_SYSTEMS_RESEARCH.md)
-- [Phase 3 input-isolation architecture](docs/PHASE3_INPUT_ISOLATION_DESIGN.md)
-- [Clean-room and third-party source policy](docs/CLEAN_ROOM_POLICY.md)
-- [Gate A/B physical input-lab procedure](docs/PHASE3_GATE_A_B_TESTING.md)
-- [Gate C controlled-process protocol and acceptance](docs/PHASE3_GATE_C_TESTING.md)
-
-
----
-
-## 🧱 Codex Implementation Roadmap
-
-Future implementation is split into bounded work packets so Codex can write code without re-inventing the architecture or falsely completing physical/game gates.
-
-Current default packet:
-
-```text
-P3-REC-01 — Gate C watchdog and crash recovery acceptance (READY)
-```
-
-Start every coding task by reading:
-
-1. [Agent rules](.agents/AGENTS.md)
-2. [Non-negotiable decisions](docs/implementation/DECISIONS.md)
-3. [Master implementation roadmap](docs/implementation/README.md)
-4. [Current packet status](docs/implementation/STATUS.md)
-5. The active [Phase 3–10 packet specification](docs/implementation/README.md#4-phase-model)
-6. [Codex implementation playbook](docs/implementation/CODEX_PLAYBOOK.md)
-
-A packet defines its prerequisites, exact files/types, implementation order, invariants, automated tests, manual acceptance, rollback behavior, non-goals, and objective completion gate. Manual hardware/game/install/reboot checks remain pending until a human records real evidence.
-
-Inspect or generate the current Codex task, then validate before and after every packet:
+Start with:
 
 ```text
 python tools/show_implementation_packet.py --current
-python tools/show_implementation_packet.py --current --prompt
-python tools/show_implementation_packet.py --ready
 python tools/validate_implementation_roadmap.py
-git diff --check
 ```
 
-The `--prompt` command is the preferred way to hand a task to Codex because it validates the roadmap and emits the exact packet, prerequisites, scope restrictions, tests, status update, and manual-gate rules.
-
-The original product requirements and the exact packets/evidence that prove them are mapped in [Product Requirement Traceability](docs/implementation/TRACEABILITY.md).
+Repository agents must read [`.agents/AGENTS.md`](.agents/AGENTS.md) before implementation work.
 
 ---
 
-## 🛠️ Build Prerequisites
+## License and contributions
 
-- **OS**: Windows 10 / Windows 11 (64-bit)
-- **Compiler**: Visual Studio 2022 (MSVC with C++20 support)
-- **Build System**: CMake 3.20+
-- **Framework**: Qt 6.x (Widgets / Core)
-- **Windows SDK**: Windows 10/11 SDK (Win32 Raw Input, DXGI, SetupAPI)
+The intended end state is a broadly reusable open-source project, but the repository does not yet have formally declared project license and contribution terms.
 
----
+Until that gate is resolved:
 
-## 🚀 Roadmap
+- do not describe the current repository as legally open source;
+- do not assume source reuse rights;
+- follow [`docs/CLEAN_ROOM_POLICY.md`](docs/CLEAN_ROOM_POLICY.md);
+- treat the license/contribution decision as a required release task, not paperwork to ignore.
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the Phase 0–10 summary.
-
-See [docs/implementation/README.md](docs/implementation/README.md) for the packet-level master plan, [docs/implementation/STATUS.md](docs/implementation/STATUS.md) for the current task, and [docs/implementation/CODEX_PLAYBOOK.md](docs/implementation/CODEX_PLAYBOOK.md) for the Codex workflow.
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for internal component designs.
-
-See [docs/PHASE0_RESEARCH.md](docs/PHASE0_RESEARCH.md) for the early technology evaluation.
-
-See [docs/RELATED_SYSTEMS_RESEARCH.md](docs/RELATED_SYSTEMS_RESEARCH.md) and [docs/PHASE3_INPUT_ISOLATION_DESIGN.md](docs/PHASE3_INPUT_ISOLATION_DESIGN.md) for the current compatibility research and Phase 3 design.
-
-See [docs/CLEAN_ROOM_POLICY.md](docs/CLEAN_ROOM_POLICY.md) before using external source or binaries.
-
-See [docs/PHASE3_GATE_A_B_TESTING.md](docs/PHASE3_GATE_A_B_TESTING.md) before claiming Gate A/B physical acceptance.
-
-See [docs/PHASE3_GATE_C_TESTING.md](docs/PHASE3_GATE_C_TESTING.md) before claiming Gate C API or physical acceptance.
+Once the legal gate is resolved, HydraSeat's profile, compatibility, documentation, and contribution workflows should be designed to make lawful community participation easy.

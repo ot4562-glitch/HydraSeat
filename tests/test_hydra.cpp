@@ -81,6 +81,9 @@ void testWorkspaceManager() {
     const auto seat1 = mgr.createSeat(L"민성");
     const auto seat2 = mgr.createSeat(L"Player 2");
     check(seat1 == 1 && seat2 == 2, "seat IDs are deterministic");
+    check(mgr.managementSeatId() == 1, "Management Seat defaults deterministically to Seat 1");
+    check(!mgr.setManagementSeatId(99), "Management Seat cannot reference an unknown Seat");
+    check(mgr.setManagementSeatId(seat2), "Management Seat can be explicitly moved to Seat 2");
 
     check(mgr.assignDisplay(seat1, L"Display:LG", true), "first display assignment succeeds");
     check(mgr.assignDisplay(seat1, L"Display:Samsung"), "second display can belong to one seat");
@@ -110,6 +113,8 @@ void testWorkspaceManager() {
     hydra::WorkspaceManager loaded;
     check(loaded.loadFromFile(roundTripPath), "saved seat profile loads successfully");
     check(loaded.getAllSeats() == mgr.getAllSeats(), "save/load preserves all seat configuration");
+    check(loaded.managementSeatId() == seat2,
+          "save/load preserves the explicit Management Seat");
     check(loaded.isDeviceShareable(hydra::SeatDeviceType::Keyboard, L"Keyboard:Shared"),
           "save/load preserves shareable-device policy");
     check(loaded.createSeat(L"After Load") == 3, "next seat ID advances after load");
@@ -125,6 +130,8 @@ void testWorkspaceManager() {
     check(mgr.unassignKeyboard(seat1, L"Keyboard:A"), "device can be unassigned");
     check(mgr.assignKeyboard(seat2, L"Keyboard:A"), "unassignment releases exclusive ownership");
     check(mgr.removeSeat(seat2), "seat removal succeeds");
+    check(mgr.managementSeatId() == seat1,
+          "removing the Management Seat deterministically transfers control to the lowest remaining Seat");
     check(!mgr.findKeyboardOwner(L"Keyboard:A"), "removing a seat releases its device ownership");
 
     std::remove(roundTripPath.c_str());

@@ -693,6 +693,37 @@ BackendDescriptor controlledXInputAdapterBackend(bool available) {
     return result;
 }
 
+BackendDescriptor controlledExternalShimBackend(bool available) {
+    const Capability capabilities =
+        Capability::RawInputRegistrationInterposition |
+        Capability::RawInputDataVirtualization |
+        Capability::KeyboardAsyncStateVirtualization |
+        Capability::CursorPositionVirtualization |
+        Capability::CursorClipVirtualization |
+        Capability::CaptureVirtualization |
+        Capability::ForegroundQueryVirtualization |
+        Capability::FocusMessageSynthesis |
+        Capability::ProcessLifecycleTracking;
+    auto result = makeDescriptor(
+        "hydra.controlled-external-shim",
+        L"HydraSeat controlled external-process shim",
+        capabilities,
+        available ? BackendAvailability::Available
+                  : BackendAvailability::Unavailable,
+        BackendRisk::High,
+        95);
+    result.requiresProcessInjection = true;
+    result.antiCheatSensitive = true;
+    result.reversible = true;
+    result.sessionScoped = true;
+    result.requiresRecoveryGuard = true;
+    if (!available) {
+        result.unavailableReason =
+            L"P3-E external bridge/harness evidence is not enabled for this target.";
+    }
+    return result;
+}
+
 std::vector<BackendDescriptor> builtInIsolationBackends(
     const BackendEnvironment& environment) {
     return {
@@ -704,6 +735,8 @@ std::vector<BackendDescriptor> builtInIsolationBackends(
             environment.directInputAdapterAvailable),
         controlledXInputAdapterBackend(
             environment.controlledXInputAdapterAvailable),
+        controlledExternalShimBackend(
+            environment.controlledExternalShimAvailable),
     };
 }
 
@@ -792,6 +825,25 @@ std::vector<GameCompatibilityProfile> compatibilityProfileTemplates() {
         "hydra.raw-input-host",
     };
 
+    GameCompatibilityProfile glfwCursor;
+    glfwCursor.id = "glfw-3.5.1-cursor-test";
+    glfwCursor.name = L"GLFW 3.5.1 Cursor Test";
+    glfwCursor.requiredCapabilities =
+        Capability::RawInputRegistrationInterposition |
+        Capability::RawInputDataVirtualization |
+        Capability::KeyboardAsyncStateVirtualization |
+        Capability::CursorPositionVirtualization |
+        Capability::CursorClipVirtualization |
+        Capability::CaptureVirtualization |
+        Capability::ForegroundQueryVirtualization |
+        Capability::FocusMessageSynthesis |
+        Capability::ProcessLifecycleTracking;
+    glfwCursor.injectionPolicy = InjectionPolicy::Required;
+    glfwCursor.driverPolicy = DriverPolicy::Forbidden;
+    glfwCursor.antiCheatPolicy = AntiCheatPolicy::DenyInvasiveBackends;
+    glfwCursor.recoveryPolicy = RecoveryPolicy::Required;
+    glfwCursor.preferredBackends = {"hydra.controlled-external-shim"};
+
     GameCompatibilityProfile protectedObservation = observation;
     protectedObservation.id = "protected-game-observation-only";
     protectedObservation.name = L"Protected game observation only";
@@ -807,6 +859,7 @@ std::vector<GameCompatibilityProfile> compatibilityProfileTemplates() {
         focus,
         xinput,
         direct,
+        glfwCursor,
         protectedObservation,
     };
 }
@@ -820,6 +873,7 @@ std::vector<std::string_view> isolationProfileTemplateNames() {
         "focus-cursor-game",
         "xinput-controller-game",
         "directinput-controller-game",
+        "glfw-3.5.1-cursor-test",
         "protected-game-observation-only",
     };
 }

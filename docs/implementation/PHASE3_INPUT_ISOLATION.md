@@ -6,6 +6,8 @@ Complete the input path from physical Seat-owned devices to documented target-pr
 
 Phase 3 does not mean universal game support. It ends when HydraSeat can truthfully support a small compatibility matrix and explain exactly which APIs/backends are required.
 
+Product note: the current v1 contract is exactly two active gaming Seats. Phase 3 intentionally closes on non-protected physical/game evidence; the later D-045 protected-title path is only an explicitly warned experiment and never weakens this phase's no-bypass/fail-closed requirements.
+
 ## Existing validated baseline
 
 Already implemented and retained as regression coverage:
@@ -880,7 +882,7 @@ The planner can distinguish unavailable, installed-unverified, and verified-supp
 
 ## P3-REC-01 — Gate C watchdog and crash recovery acceptance
 
-**State:** READY
+**State:** VALIDATED
 
 **Goal**
 
@@ -921,6 +923,20 @@ Prove that host, target, shim, and adapter failure cannot leave a controlled ses
 **Done when**
 
 Automated process tests and manual Windows crash acceptance both pass.
+
+**P3-REC-01 implementation note (2026-08-26)**
+
+- Gate C now stages controlled targets with `CREATE_SUSPENDED`, validates their architecture and exact `PID + creation time`, then arms the already-validated P8 watchdog and persists `ActionPrepared` journal boundaries before any target thread resumes. Production and ordinary recovery-test leases are longer than the synchronous handshake budget; only the explicit `lease-stall` fault uses a deliberately short lease.
+- The watchdog rollback manifest is intentionally narrow: one `TerminateOwnedProcess` action per exact controlled target, with duplicate action IDs, ordinals, or exact process identities rejected. Journal bytes remain evidence only and cannot introduce rollback commands. Process-local adapter/IAT/shim state is therefore removed by exact owned-process exit rather than by a new remote-unpatch command.
+- The host renews the watchdog lease only from its control loop, never from Raw Input callbacks. Clean stop persists `RollbackStarted`, tears targets down in reverse order, verifies they are gone, re-arms the same trusted manifest if the watchdog itself died, uses watchdog `Disarm` as an idempotent postcondition backstop, then persists `RollbackVerified` and `CleanStop`. Any unresolved process/watchdog/journal cleanup is recorded as `RecoveryRequired` when possible.
+- Recovery self-test modes cover clean/repeated cycles, lease stall, target kill, watchdog kill/restart, pipe disconnect, adapter loss, abrupt shim-owning process exit, UI-surrogate death, logoff/shutdown notification handling, stale-journal startup blocking, and an external host-kill path. The logoff/shutdown cases exercise the same hidden top-level session-end window used by the interactive host with `WM_QUERYENDSESSION` / `WM_ENDSESSION`. The window lives on a dedicated message thread: the query sets only the atomic stop request, remains blocked while the ordinary control loop performs exact-process rollback and durable `CleanStop`, and returns TRUE only after a bounded cleanup-complete signal; timeout or unproven cleanup returns FALSE. The self-test explicitly proves the query cannot complete before rollback is signaled. The Windows `GateCWatchdogRecoveryTests` process test additionally kills the real Gate C host and waits on exact watchdog/target handles to prove no guarded child/helper remains.
+- Existing `GateCPollingShimTests` remain the coupled shim-initialization evidence: partial IAT install failure restores all already-patched pointers, protection/rollback failure is surfaced, incomplete rollback remains retryable, and repeated uninstall is idempotent. Gate C still owns no global cursor/clip/device mutation in this packet.
+- Local portable validation currently passes 34/34 CTest, including the new recovery core plus existing watchdog/journal/Gate C regressions. Focused GCC 15 strict recovery tests pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror`. The pre-existing Linux-only whole-build blocker remains `reset_input.cpp` including `windows.h`; `make -k` builds the remaining portable targets successfully.
+- Fork PR #23 run `32957740991` validates implementation/CI head `3d2ec9e33bcf016d38086bb75b97c819f643eda8`: native Windows/MSVC x64 and Win32/x86 each pass the complete 53/53 CTest suite, including `GateCWatchdogRecoveryTests`, and the x64-host-to-x64/x86 Gate C cross-architecture matrix passes. The later documentation-closure commit on the same branch changes evidence/status text only; it does not replace the exact implementation head validated by this run.
+- Local native Windows x64 acceptance on committed head `0c24fb04df145c94946dfd4bb4cc250d1fb7723b` now reruns the complete MSVC Release CTest suite at 53/53 PASS, including `GateCWatchdogRecoveryTests`. A separate ignored real-process acceptance matrix executes repeated clean recovery (generation `1 -> 2`), lease stall, target death, watchdog death/restart, pipe disconnect, adapter failure, shim-owner abnormal exit, UI-surrogate loss, controlled logoff/shutdown handler paths, and stale-journal refusal; every safe scenario finishes with zero `hydra_gate_c_target` / `hydra_watchdog` orphans and preserves an unrelated exact-identity sentinel process.
+- An additional external host-death acceptance captures exact `PID + creation time` for the real x64 host, watchdog, two controlled targets, and an unrelated sentinel before mutation. It terminates only the revalidated exact host identity, leaves watchdog cleanup unassisted, proves both targets and the watchdog disappear without PID reuse while the sentinel survives unchanged, then proves a real restart exits `127` before launching children and records `safe_mode_reason=incomplete-session`. The crash journal intentionally remains `active` after host death rather than being falsely rewritten as clean evidence.
+- Real acceptance exposed two Windows lifecycle defects in sequence. First, interactive Gate C uses `user32.dll`, so console-control logoff/shutdown notifications alone are not a trustworthy real-session boundary; head `8f0f4fd` added a fail-closed hidden top-level session-end monitor. Human Sign out against that head removed the host, both controlled targets, and watchdog with no PID reuse/orphans, but the durable journal remained `active` with only the 8 activation records and no `RollbackStarted`/`CleanStop`, proving the query returned TRUE before the ordinary control loop finished rollback. Repair head `bb8fd28ae02ee245f7243b1743fd3882576548d5` moves the monitor to a dedicated message thread, keeps `WM_QUERYENDSESSION` blocked while the control loop performs fast exact-process rollback, returns TRUE only after verified durable cleanup, and returns FALSE on timeout or failed/unproven cleanup. Local x64 53/53 passes, and PR #23 run `32973197727` passes Windows x64, Win32/x86, and Gate C cross-architecture.
+- Real human Windows acceptance is complete. Human Sign out was re-run on the repaired binary and passed with every armed exact HydraSeat identity gone, zero HydraSeat orphans, safe PID-reuse discrimination, and a durable `RollbackStarted` -> reverse `ActionRolledBack` -> `RollbackVerified` -> `CleanStop` journal. The first attempted shutdown/reboot follow-up was deliberately rejected as insufficient when `LastBootUpTime` did not change; the local verifier was strengthened to require a real boot transition for shutdown-mode acceptance. The final human Restart re-test armed host PID `5612`, target PIDs `25988`/`1060`, and watchdog PID `23960` with exact creation times, then proved `LastBootUpTime` changed from `2026-08-25T09:52:03.9523380+09:00` to `2026-08-27T07:46:40.5000000+09:00`, every exact identity was gone with zero HydraSeat orphans, and the journal ended `phase=clean`, `safe_mode=absent`, `RollbackVerified`, `CleanStop`. P3-REC-01 is therefore `VALIDATED`.
 
 **Suggested commit**
 
@@ -987,7 +1003,7 @@ Required with spare recovery input and visible countdown.
 
 ## P3-E-01 — Open-source non-protected application profile
 
-**State:** BLOCKED
+**State:** VALIDATED
 
 **Goal**
 
@@ -1018,6 +1034,16 @@ Validate the full controlled compatibility stack against an inspectable applicat
 **Done when**
 
 Two instances/processes use different Seat devices with zero measured cross-state for the declared duration and rollback returns the application to native behavior.
+
+**P3-E-01 implementation note (2026-08-27)**
+
+- The first real external profile is upstream GLFW 3.5.1 `tests/cursor.c`, exact commit `d9d6f0f1f967807ffade6598ea9a631ebaf37a56` under the zlib/libpng license. GLFW source/binaries are never vendored; `tools/prepare_p3_e_01_glfw.ps1` accepts an already-provided clean checkout, verifies the exact commit, builds the x64 target, measures its PE imports, and pins the resulting target SHA-256 in ignored evidence.
+- The measured Win32 subset is `GetKeyState`, `GetCursorPos`, `SetCursorPos`, `ClipCursor`, `GetActiveWindow`, `SetCapture`, `ReleaseCapture`, `RegisterRawInputDevices`, and `GetRawInputData`, encoded as shim mask `0x0000b93a`. Shim ABI v4 adds `HydraGateCShimConfigV3.required_api_mask` and a separate `installProfiled()` IAT transaction. Existing V1/V2 entry points keep their strict full-group import contract; the profiled path cannot silently weaken legacy fail-closed behavior.
+- `hydra_gate_c_external_harness.exe` can act only on processes it creates suspended itself. Each new target is placed in a private `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object before bridge loading/resume, exact process identity and x64 architecture are verified, and `STARTUPINFOEX` limits inherited handles to explicit stdin/stdout/stderr only. The PID-scoped fixed bridge mapping contains only Seat ID, fixed API mask, Gate C token, and bounded pipe name. No attach-to-existing-process command is exposed, and the owned-target destructor uses its exact process handle as a final termination backstop for failures before Job assignment or verified teardown.
+- Real GLFW execution exposed an application lifecycle dependency: GLFW unregisters raw mouse input after native focus loss. The profile therefore synthesizes process-local `WM_ACTIVATE` / `WM_SETFOCUS` for each owned GLFW window while retaining existing virtual foreground/active/focus queries. It does not call `SetForegroundWindow` or mutate global desktop focus/cursor/clip state.
+- Real-process acceptance against the reproducibly prepared x64 target SHA-256 `84931e1874ecc5badb8d9bae713b75f701e79112923d90f7303c5d35d3f92d15` passes locally and in hosted CI. GLFW may consume the first relative sample while establishing its disabled/raw cursor baseline, so one distinct warm-up sample per Seat is deliberately outside the measured window; all four subsequent declared samples per Seat are still required. Each independent GLFW process reports exactly four expected raw-motion callbacks through its own upstream stdout telemetry, both report zero callbacks matching the other Seat pattern, receiver-verified event count is 8, and direct A/B key snapshots prove process-local cross-state separation without relying on a racy exact cursor coordinate. A third target is successfully killed through Job-object guard closure, target bytes remain unchanged, no exact owned process identity remains, and an unmodified native relaunch succeeds after rollback.
+- Exact validated code head `12957f0` passes fork PR #24 run `33038227992`: native Windows x64 full CTest, Win32/x86 full CTest, Gate C x64-to-x64/x86 cross-architecture, and the dedicated pinned GLFW 3.5.1 real-application job are all green. Focused stable local x64 planner/shim/external-harness checks pass 6/6 and fresh x86 bridge/harness builds pass. A final interactive-desktop full local CTest produced 49/54 because five pre-existing API-probe cases compare live global cursor/foreground state; no HydraSeat/GLFW processes remained, so that local desktop-sensitive result is retained truthfully while exact-head non-interactive CI is the authoritative full-suite evidence. The per-app Mesa action is pinned to immutable commit `1824e370ed7fb1795f5bc88fd1f6c81eb15d92bc` with Mesa `23.3.5`.
+- P3-E-01 does not satisfy P3-HW-01 physical Gate A/B/C, physical input suppression, HidHide cloaking, P3-E-02 game compatibility, anti-cheat/DRM/protected-process support, or any x86 GLFW compatibility claim. Those remain separate gates.
 
 **Suggested commit**
 

@@ -132,11 +132,27 @@ std::optional<RawInputImport> rawInputFunction(
 IatPatchReport PollingIatPatchSet::install(
     std::span<const PollingIatSlot> slots, IatSlotWriter writer,
     void* writerContext) {
+    return installProfiled(slots, kPollingImportMask, writer, writerContext);
+}
+
+IatPatchReport PollingIatPatchSet::installProfiled(
+    std::span<const PollingIatSlot> slots, std::uint32_t requiredMask,
+    IatSlotWriter writer, void* writerContext) {
+    if (requiredMask == 0 || (requiredMask & ~kPollingImportMask) != 0) {
+        return failure(IatPatchStatus::InvalidImage,
+                       "polling profiled mask is invalid");
+    }
     if (m_installed) {
         IatPatchReport report;
         report.status = IatPatchStatus::AlreadyInstalled;
-        report.discoveredMask = kPollingImportMask;
-        report.patchedMask = kPollingImportMask;
+        for (const auto& record : m_records) {
+            report.discoveredMask |= pollingImportBit(record.function);
+            report.patchedMask |= pollingImportBit(record.function);
+        }
+        if (report.discoveredMask != requiredMask) {
+            report.status = IatPatchStatus::PatchFailure;
+            report.error = "polling shim is already installed with a different profile mask";
+        }
         return report;
     }
     if (writer == nullptr) {
@@ -165,13 +181,14 @@ IatPatchReport PollingIatPatchSet::install(
         ordered[index] = &slot;
         discoveredMask |= bit;
     }
-    if (discoveredMask != kPollingImportMask) {
+    if (discoveredMask != requiredMask) {
         auto report = failure(IatPatchStatus::MissingImport,
-                              "one or more polling imports are missing");
+                              "one or more required polling imports are missing");
         report.discoveredMask = discoveredMask;
         return report;
     }
     for (const auto* slot : ordered) {
+        if (slot == nullptr) continue;
         if (slot->original == slot->replacement ||
             *slot->address == slot->replacement) {
             auto report = failure(IatPatchStatus::AlreadyPatched,
@@ -188,13 +205,14 @@ IatPatchReport PollingIatPatchSet::install(
     }
 
     std::vector<PollingIatSlot> applied;
-    applied.reserve(kPollingImportCount);
+    applied.reserve(slots.size());
     std::vector<PollingIatSlot> rollbackRemaining;
-    rollbackRemaining.reserve(kPollingImportCount);
+    rollbackRemaining.reserve(slots.size());
     IatPatchReport report;
     report.status = IatPatchStatus::Success;
     report.discoveredMask = discoveredMask;
     for (const auto* slot : ordered) {
+        if (slot == nullptr) continue;
         const auto write = writer(slot->address, slot->original,
                                   slot->replacement, writerContext);
         if (write.success) {
@@ -303,11 +321,27 @@ IatPatchReport PollingIatPatchSet::uninstall(
 IatPatchReport CursorFocusIatPatchSet::install(
     std::span<const CursorFocusIatSlot> slots, IatSlotWriter writer,
     void* writerContext) {
+    return installProfiled(slots, kCursorFocusImportMask, writer, writerContext);
+}
+
+IatPatchReport CursorFocusIatPatchSet::installProfiled(
+    std::span<const CursorFocusIatSlot> slots, std::uint32_t requiredMask,
+    IatSlotWriter writer, void* writerContext) {
+    if (requiredMask == 0 || (requiredMask & ~kCursorFocusImportMask) != 0) {
+        return failure(IatPatchStatus::InvalidImage,
+                       "cursor/focus profiled mask is invalid");
+    }
     if (m_installed) {
         IatPatchReport report;
         report.status = IatPatchStatus::AlreadyInstalled;
-        report.discoveredMask = kCursorFocusImportMask;
-        report.patchedMask = kCursorFocusImportMask;
+        for (const auto& record : m_records) {
+            report.discoveredMask |= cursorFocusImportBit(record.function);
+            report.patchedMask |= cursorFocusImportBit(record.function);
+        }
+        if (report.discoveredMask != requiredMask) {
+            report.status = IatPatchStatus::PatchFailure;
+            report.error = "cursor/focus shim is already installed with a different profile mask";
+        }
         return report;
     }
     if (writer == nullptr) {
@@ -336,13 +370,14 @@ IatPatchReport CursorFocusIatPatchSet::install(
         ordered[index] = &slot;
         discoveredMask |= bit;
     }
-    if (discoveredMask != kCursorFocusImportMask) {
+    if (discoveredMask != requiredMask) {
         auto report = failure(IatPatchStatus::MissingImport,
-                              "one or more cursor/focus imports are missing");
+                              "one or more required cursor/focus imports are missing");
         report.discoveredMask = discoveredMask;
         return report;
     }
     for (const auto* slot : ordered) {
+        if (slot == nullptr) continue;
         if (slot->original == slot->replacement ||
             *slot->address == slot->replacement) {
             auto report = failure(IatPatchStatus::AlreadyPatched,
@@ -359,13 +394,14 @@ IatPatchReport CursorFocusIatPatchSet::install(
     }
 
     std::vector<CursorFocusIatSlot> applied;
-    applied.reserve(kCursorFocusImportCount);
+    applied.reserve(slots.size());
     std::vector<CursorFocusIatSlot> rollbackRemaining;
-    rollbackRemaining.reserve(kCursorFocusImportCount);
+    rollbackRemaining.reserve(slots.size());
     IatPatchReport report;
     report.status = IatPatchStatus::Success;
     report.discoveredMask = discoveredMask;
     for (const auto* slot : ordered) {
+        if (slot == nullptr) continue;
         const auto write = writer(slot->address, slot->original,
                                   slot->replacement, writerContext);
         if (write.success) {
@@ -474,11 +510,27 @@ IatPatchReport CursorFocusIatPatchSet::uninstall(
 IatPatchReport RawInputIatPatchSet::install(
     std::span<const RawInputIatSlot> slots, IatSlotWriter writer,
     void* writerContext) {
+    return installProfiled(slots, kRawInputImportMask, writer, writerContext);
+}
+
+IatPatchReport RawInputIatPatchSet::installProfiled(
+    std::span<const RawInputIatSlot> slots, std::uint32_t requiredMask,
+    IatSlotWriter writer, void* writerContext) {
+    if (requiredMask == 0 || (requiredMask & ~kRawInputImportMask) != 0) {
+        return failure(IatPatchStatus::InvalidImage,
+                       "Raw Input profiled mask is invalid");
+    }
     if (m_installed) {
         IatPatchReport report;
         report.status = IatPatchStatus::AlreadyInstalled;
-        report.discoveredMask = kRawInputImportMask;
-        report.patchedMask = kRawInputImportMask;
+        for (const auto& record : m_records) {
+            report.discoveredMask |= rawInputImportBit(record.function);
+            report.patchedMask |= rawInputImportBit(record.function);
+        }
+        if (report.discoveredMask != requiredMask) {
+            report.status = IatPatchStatus::PatchFailure;
+            report.error = "Raw Input shim is already installed with a different profile mask";
+        }
         return report;
     }
     if (writer == nullptr) {
@@ -506,13 +558,14 @@ IatPatchReport RawInputIatPatchSet::install(
         ordered[index] = &slot;
         discoveredMask |= bit;
     }
-    if (discoveredMask != kRawInputImportMask) {
+    if (discoveredMask != requiredMask) {
         auto report = failure(IatPatchStatus::MissingImport,
-                              "one or more Raw Input imports are missing");
+                              "one or more required Raw Input imports are missing");
         report.discoveredMask = discoveredMask;
         return report;
     }
     for (const auto* slot : ordered) {
+        if (slot == nullptr) continue;
         if (slot->original == slot->replacement ||
             *slot->address == slot->replacement) {
             auto report = failure(IatPatchStatus::AlreadyPatched,
@@ -529,13 +582,14 @@ IatPatchReport RawInputIatPatchSet::install(
     }
 
     std::vector<RawInputIatSlot> applied;
-    applied.reserve(kRawInputImportCount);
+    applied.reserve(slots.size());
     std::vector<RawInputIatSlot> rollbackRemaining;
-    rollbackRemaining.reserve(kRawInputImportCount);
+    rollbackRemaining.reserve(slots.size());
     IatPatchReport report;
     report.status = IatPatchStatus::Success;
     report.discoveredMask = discoveredMask;
     for (const auto* slot : ordered) {
+        if (slot == nullptr) continue;
         const auto write = writer(slot->address, slot->original,
                                   slot->replacement, writerContext);
         if (write.success) {
@@ -706,7 +760,19 @@ IatWriteResult writeProcessIatSlot(
 IatPatchReport discoverCurrentProcessPollingImports(
     const std::array<std::uintptr_t, kPollingImportCount>& replacements,
     std::vector<PollingIatSlot>& slots) {
+    return discoverCurrentProcessPollingImports(
+        replacements, kPollingImportMask, slots);
+}
+
+IatPatchReport discoverCurrentProcessPollingImports(
+    const std::array<std::uintptr_t, kPollingImportCount>& replacements,
+    std::uint32_t requiredMask,
+    std::vector<PollingIatSlot>& slots) {
     slots.clear();
+    if (requiredMask == 0 || (requiredMask & ~kPollingImportMask) != 0) {
+        return failure(IatPatchStatus::InvalidImage,
+                       "polling required mask is invalid");
+    }
 #ifdef _WIN32
     const HMODULE module = GetModuleHandleW(nullptr);
     if (module == nullptr) {
@@ -826,6 +892,7 @@ IatPatchReport discoverCurrentProcessPollingImports(
             const auto function = pollingFunction(functionName);
             if (!function) continue;
             const auto bit = pollingImportBit(*function);
+            if ((requiredMask & bit) == 0) continue;
             if ((discoveredMask & bit) != 0) {
                 auto report = failure(
                     IatPatchStatus::DuplicateImport,
@@ -854,9 +921,9 @@ IatPatchReport discoverCurrentProcessPollingImports(
         return failure(IatPatchStatus::InvalidImage,
                        "import descriptor table is unterminated");
     }
-    if (discoveredMask != kPollingImportMask) {
+    if (discoveredMask != requiredMask) {
         auto report = failure(IatPatchStatus::MissingImport,
-                              "one or more polling imports are missing");
+                              "one or more required polling imports are missing");
         report.discoveredMask = discoveredMask;
         return report;
     }
@@ -866,6 +933,7 @@ IatPatchReport discoverCurrentProcessPollingImports(
     return report;
 #else
     (void)replacements;
+    (void)requiredMask;
     return failure(IatPatchStatus::UnsupportedPlatform,
                    "Win32 IAT discovery is Windows-only");
 #endif
@@ -874,7 +942,19 @@ IatPatchReport discoverCurrentProcessPollingImports(
 IatPatchReport discoverCurrentProcessCursorFocusImports(
     const std::array<std::uintptr_t, kCursorFocusImportCount>& replacements,
     std::vector<CursorFocusIatSlot>& slots) {
+    return discoverCurrentProcessCursorFocusImports(
+        replacements, kCursorFocusImportMask, slots);
+}
+
+IatPatchReport discoverCurrentProcessCursorFocusImports(
+    const std::array<std::uintptr_t, kCursorFocusImportCount>& replacements,
+    std::uint32_t requiredMask,
+    std::vector<CursorFocusIatSlot>& slots) {
     slots.clear();
+    if (requiredMask == 0 || (requiredMask & ~kCursorFocusImportMask) != 0) {
+        return failure(IatPatchStatus::InvalidImage,
+                       "cursor/focus required mask is invalid");
+    }
 #ifdef _WIN32
     const HMODULE module = GetModuleHandleW(nullptr);
     if (module == nullptr) {
@@ -991,6 +1071,7 @@ IatPatchReport discoverCurrentProcessCursorFocusImports(
             const auto function = cursorFocusFunction(functionName);
             if (!function) continue;
             const auto bit = cursorFocusImportBit(*function);
+            if ((requiredMask & bit) == 0) continue;
             if ((discoveredMask & bit) != 0) {
                 auto report = failure(
                     IatPatchStatus::DuplicateImport,
@@ -1019,9 +1100,9 @@ IatPatchReport discoverCurrentProcessCursorFocusImports(
         return failure(IatPatchStatus::InvalidImage,
                        "import descriptor table is unterminated");
     }
-    if (discoveredMask != kCursorFocusImportMask) {
+    if (discoveredMask != requiredMask) {
         auto report = failure(IatPatchStatus::MissingImport,
-                              "one or more cursor/focus imports are missing");
+                              "one or more required cursor/focus imports are missing");
         report.discoveredMask = discoveredMask;
         return report;
     }
@@ -1031,6 +1112,7 @@ IatPatchReport discoverCurrentProcessCursorFocusImports(
     return report;
 #else
     (void)replacements;
+    (void)requiredMask;
     return failure(IatPatchStatus::UnsupportedPlatform,
                    "Win32 IAT discovery is Windows-only");
 #endif
@@ -1039,7 +1121,19 @@ IatPatchReport discoverCurrentProcessCursorFocusImports(
 IatPatchReport discoverCurrentProcessRawInputImports(
     const std::array<std::uintptr_t, kRawInputImportCount>& replacements,
     std::vector<RawInputIatSlot>& slots) {
+    return discoverCurrentProcessRawInputImports(
+        replacements, kRawInputImportMask, slots);
+}
+
+IatPatchReport discoverCurrentProcessRawInputImports(
+    const std::array<std::uintptr_t, kRawInputImportCount>& replacements,
+    std::uint32_t requiredMask,
+    std::vector<RawInputIatSlot>& slots) {
     slots.clear();
+    if (requiredMask == 0 || (requiredMask & ~kRawInputImportMask) != 0) {
+        return failure(IatPatchStatus::InvalidImage,
+                       "Raw Input required mask is invalid");
+    }
 #ifdef _WIN32
     const HMODULE module = GetModuleHandleW(nullptr);
     if (module == nullptr) {
@@ -1156,6 +1250,7 @@ IatPatchReport discoverCurrentProcessRawInputImports(
             const auto function = rawInputFunction(functionName);
             if (!function) continue;
             const auto bit = rawInputImportBit(*function);
+            if ((requiredMask & bit) == 0) continue;
             if ((discoveredMask & bit) != 0) {
                 auto report = failure(
                     IatPatchStatus::DuplicateImport,
@@ -1184,9 +1279,9 @@ IatPatchReport discoverCurrentProcessRawInputImports(
         return failure(IatPatchStatus::InvalidImage,
                        "import descriptor table is unterminated");
     }
-    if (discoveredMask != kRawInputImportMask) {
+    if (discoveredMask != requiredMask) {
         auto report = failure(IatPatchStatus::MissingImport,
-                              "one or more Raw Input imports are missing");
+                              "one or more required Raw Input imports are missing");
         report.discoveredMask = discoveredMask;
         return report;
     }
@@ -1196,6 +1291,7 @@ IatPatchReport discoverCurrentProcessRawInputImports(
     return report;
 #else
     (void)replacements;
+    (void)requiredMask;
     return failure(IatPatchStatus::UnsupportedPlatform,
                    "Win32 IAT discovery is Windows-only");
 #endif

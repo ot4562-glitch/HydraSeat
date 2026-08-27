@@ -35,6 +35,34 @@ static std::wstring_view stableIdCategory(DWORD rawDevType) {
     return {};
 }
 
+static std::string utf8FromWide(std::wstring_view value) {
+    if (value.empty()) return {};
+    const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                                              value.data(), static_cast<int>(value.size()),
+                                              nullptr, 0, nullptr, nullptr);
+    if (required <= 0) return {};
+    std::string result(static_cast<std::size_t>(required), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                            value.data(), static_cast<int>(value.size()),
+                            result.data(), required, nullptr, nullptr) != required) {
+        return {};
+    }
+    return result;
+}
+
+static const wchar_t* runtimeModeText(control::RuntimeDisplayMode mode) noexcept {
+    switch (mode) {
+    case control::RuntimeDisplayMode::Unknown: return L"Unknown";
+    case control::RuntimeDisplayMode::BackgroundIdle: return L"Idle / normal Windows";
+    case control::RuntimeDisplayMode::SplitActive: return L"Split session Active";
+    case control::RuntimeDisplayMode::Degraded: return L"Split session Degraded";
+    case control::RuntimeDisplayMode::Transitioning: return L"Transitioning";
+    case control::RuntimeDisplayMode::RecoveryRequired: return L"Recovery required";
+    case control::RuntimeDisplayMode::HostExitRequested: return L"Background host exiting";
+    }
+    return L"Unknown";
+}
+
 // Check if a raw input device type is compatible with a tile's device category
 static bool isTypeCompatible(DWORD rawDevType, gui::DeviceCategory tileCat) {
     if (rawDevType == RIM_TYPEKEYBOARD) {
@@ -60,14 +88,24 @@ static Win32App* g_appInstance = nullptr;
 #define ID_BTN_LOAD_PROF  1006
 #define ID_BTN_ISOLATION  1007
 #define ID_BTN_GATE_C     1008
+#define ID_BTN_START_SESSION 1009
+#define ID_BTN_STOP_SESSION 1010
+#define ID_BTN_RECONFIGURE 1011
 
 #define TIMER_FLASH_RESET 2001
+#define TIMER_HOST_REFRESH 2002
+constexpr UINT WM_HYDRA_ACTIVATE_CONTROL = WM_APP + 17;
 
 Win32App::Win32App() {
     g_appInstance = this;
 }
 
 Win32App::~Win32App() {
+    m_hostClient.close();
+    if (m_singleInstanceMutex != nullptr) {
+        CloseHandle(m_singleInstanceMutex);
+        m_singleInstanceMutex = nullptr;
+    }
     if (g_appInstance == this) {
         g_appInstance = nullptr;
     }
@@ -277,6 +315,10 @@ LRESULT CALLBACK Win32App::DeviceTileProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
 }
 
 void Win32App::dropTileAtScreenPos(VisualDeviceTile* tile, POINT screenPt) {
+    if (!configurationEditingAllowed()) {
+        MessageBeep(MB_ICONWARNING);
+        return;
+    }
     if (!tile || !m_hwnd) return;
 
     POINT clientPt = screenPt;
@@ -312,6 +354,20 @@ void Win32App::dropTileAtScreenPos(VisualDeviceTile* tile, POINT screenPt) {
 }
 
 bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
+    m_singleInstanceMutex = CreateMutexW(nullptr, FALSE, L"Local\\HydraSeat.ControlConsole.v2");
+    if (m_singleInstanceMutex == nullptr) return false;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        HWND existing = nullptr;
+        for (int attempt = 0; attempt < 50 && existing == nullptr; ++attempt) {
+            existing = FindWindowW(L"HydraSeatMainWindowClass", nullptr);
+            if (existing == nullptr) Sleep(20);
+        }
+        if (existing != nullptr) {
+            PostMessageW(existing, WM_HYDRA_ACTIVATE_CONTROL, 0, 0);
+            m_duplicateLaunch = true;
+            return true;
+        }
+    }
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
     icex.dwICC = ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES;
@@ -339,7 +395,7 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
     m_hwnd = CreateWindowExW(
         0, L"HydraSeatMainWindowClass",
         L"HydraSeat - Seat Composition Control Center",
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 980, 750,
         NULL, NULL, hInstance, NULL
     );
@@ -366,7 +422,10 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
     });
     refreshHardware();
 
+    (void)initializeControlSurface();
+
     SetTimer(m_hwnd, TIMER_FLASH_RESET, 50, NULL);
+    SetTimer(m_hwnd, TIMER_HOST_REFRESH, 1000, NULL);
 
     ShowWindow(m_hwnd, nCmdShow);
     UpdateWindow(m_hwnd);
@@ -475,7 +534,7 @@ void Win32App::setupUI() {
     // Status Label
     m_deviceStatusLabel = CreateWindowExW(0, L"STATIC", L"Detecting connected hardware...",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, 50, 920, 22, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
+        20, 82, 920, 22, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
     HFONT hFontNormal = CreateFontW(15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
@@ -485,18 +544,39 @@ void Win32App::setupUI() {
     SendMessageW(m_loadProfileBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
     SendMessageW(m_refreshBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
 
+    m_runtimeStatusLabel = CreateWindowExW(
+        0, L"STATIC", L"Runtime: host state unknown",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        20, 52, 410, 24, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
+    m_startSessionBtn = CreateWindowExW(
+        0, L"BUTTON", L"Start",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        450, 50, 100, 28, m_hwnd, (HMENU)ID_BTN_START_SESSION, GetModuleHandle(NULL), NULL);
+    m_stopSessionBtn = CreateWindowExW(
+        0, L"BUTTON", L"Stop / Return to Windows",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        560, 50, 190, 28, m_hwnd, (HMENU)ID_BTN_STOP_SESSION, GetModuleHandle(NULL), NULL);
+    m_reconfigureBtn = CreateWindowExW(
+        0, L"BUTTON", L"Reconfigure",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        760, 50, 120, 28, m_hwnd, (HMENU)ID_BTN_RECONFIGURE, GetModuleHandle(NULL), NULL);
+    SendMessageW(m_runtimeStatusLabel, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
+    SendMessageW(m_startSessionBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
+    SendMessageW(m_stopSessionBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
+    SendMessageW(m_reconfigureBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
+
     // 3 PARTITIONS (ASTER DRAG-AND-DROP LAYOUT):
     m_poolGroup = CreateWindowExW(0, L"BUTTON", L"System Hardware Pool (Drag tile to assign)",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        20, 80, 290, 540, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
+        20, 110, 290, 510, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
     m_p1Group = CreateWindowExW(0, L"BUTTON", L"Player 1 Seat",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        330, 80, 290, 540, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
+        330, 110, 290, 510, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
     m_p2Group = CreateWindowExW(0, L"BUTTON", L"Player 2 Seat",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        640, 80, 290, 540, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
+        640, 110, 290, 510, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
     HFONT hFontBold = CreateFontW(15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
@@ -529,10 +609,10 @@ void Win32App::setupUI() {
 void Win32App::layoutDeviceTiles() {
     auto layoutPartition = [this](PartitionOwner owner, int startX) {
         int dispX = startX + 15;
-        int dispY = 110;
+        int dispY = 140;
 
         int inputX = startX + 15;
-        int inputY = 205;
+        int inputY = 235;
 
         for (auto& tilePtr : m_deviceTiles) {
             if (!tilePtr || !tilePtr->hwndControl || tilePtr->owner != owner) continue;
@@ -579,6 +659,26 @@ void Win32App::refreshHardware() {
                               std::to_wstring(m_keyboards.size()) + L" Keyboards | " +
                               std::to_wstring(m_mice.size()) + L" Mice | " +
                               std::to_wstring(m_controllers.size()) + L" Gamepads";
+
+    // Runtime authority is external to the UI. A failed read means "unknown",
+    // never "stopped"; reopening/refreshing the UI starts from a full host snapshot.
+    hydra::hostipc::HostControlClient hostClient;
+    std::string hostError;
+    if (hostClient.connect(hydra::hostipc::ClientRole::ReadOnly, 150u, &hostError)) {
+        const auto snapshot = hostClient.getSnapshot(250u, &hostError);
+        if (snapshot) {
+            const auto hostPhase = hydra::runtime::hostLifecyclePhaseName(snapshot->hostPhase);
+            const auto sessionPhase = hydra::runtime::seatSessionPhaseName(snapshot->sessionPhase);
+            statusText += L" | Runtime Host: ";
+            statusText.append(hostPhase.begin(), hostPhase.end());
+            statusText += L" / ";
+            statusText.append(sessionPhase.begin(), sessionPhase.end());
+        } else {
+            statusText += L" | Runtime Host: state unknown";
+        }
+    } else {
+        statusText += L" | Runtime Host: unavailable (state unknown)";
+    }
 
     SetWindowTextW(m_deviceStatusLabel, statusText.c_str());
 
@@ -785,9 +885,19 @@ void Win32App::refreshHardware() {
 }
 
 void Win32App::saveWorkspaceProfile() {
+    if (!configurationEditingAllowed()) {
+        MessageBoxW(m_hwnd,
+            L"Configuration changes are disabled until the background host is connected and the session is verified Idle. Use Reconfigure first for an active session.",
+            L"HydraSeat Runtime", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    const SeatId previousManagementSeat = m_workspaceManager.managementSeatId();
     m_workspaceManager = WorkspaceManager{};
     const SeatId seat1 = m_workspaceManager.createSeat(L"Player 1");
     const SeatId seat2 = m_workspaceManager.createSeat(L"Player 2");
+    if (previousManagementSeat == seat2) {
+        (void)m_workspaceManager.setManagementSeatId(seat2);
+    }
 
     const auto assignTile = [this](SeatId seatId, const VisualDeviceTile& tile) {
         const std::wstring& stableId = tile.deviceId.empty() ? tile.devicePath : tile.deviceId;
@@ -837,7 +947,50 @@ void Win32App::saveWorkspaceProfile() {
     }
 }
 
+void Win32App::applyWorkspaceProfileToTiles() {
+    for (auto& tile : m_deviceTiles) {
+        if (!tile) continue;
+        tile->owner = PartitionOwner::Pool;
+        tile->isPrimaryDisplay = false;
+    }
+
+    const auto containsId = [](const std::vector<std::wstring>& ids, const std::wstring& id) {
+        return std::find(ids.begin(), ids.end(), id) != ids.end();
+    };
+
+    for (const auto& seat : m_workspaceManager.getAllSeats()) {
+        const PartitionOwner owner = seat.seatId == 1 ? PartitionOwner::Player1
+                                      : seat.seatId == 2 ? PartitionOwner::Player2
+                                                         : PartitionOwner::Pool;
+        if (owner == PartitionOwner::Pool) continue;
+        for (auto& tile : m_deviceTiles) {
+            if (!tile) continue;
+            const std::wstring& stableId = tile->deviceId.empty() ? tile->devicePath : tile->deviceId;
+            bool assigned = false;
+            switch (tile->type) {
+            case DeviceCategory::Display: assigned = containsId(seat.displayIds, stableId); break;
+            case DeviceCategory::Keyboard: assigned = containsId(seat.keyboardIds, stableId); break;
+            case DeviceCategory::Mouse:
+            case DeviceCategory::Touchpad: assigned = containsId(seat.mouseIds, stableId); break;
+            case DeviceCategory::Gamepad: assigned = containsId(seat.controllerIds, stableId); break;
+            }
+            if (assigned) {
+                tile->owner = owner;
+                tile->isPrimaryDisplay = tile->type == DeviceCategory::Display &&
+                    seat.primaryDisplayId && *seat.primaryDisplayId == stableId;
+            }
+        }
+    }
+    layoutDeviceTiles();
+}
+
 void Win32App::loadWorkspaceProfile() {
+    if (!configurationEditingAllowed()) {
+        MessageBoxW(m_hwnd,
+            L"Loading/editing configuration is disabled until the runtime is verified Idle. Use Reconfigure first for an active session.",
+            L"HydraSeat Runtime", MB_OK | MB_ICONWARNING);
+        return;
+    }
     if (!m_workspaceManager.loadFromFile("workspace_config.json")) {
         MessageBoxW(m_hwnd, L"Could not load workspace_config.json.",
                     L"HydraSeat Seat Manager", MB_OK | MB_ICONWARNING);
@@ -882,6 +1035,244 @@ void Win32App::loadWorkspaceProfile() {
     MessageBoxW(m_hwnd,
         L"Seat profile loaded successfully. Multiple displays per Seat and primary-display selection were restored.",
         L"HydraSeat Seat Manager", MB_OK | MB_ICONINFORMATION);
+}
+
+bool Win32App::configurationEditingAllowed() const noexcept {
+    const auto& state = m_controlSurfaceModel.state();
+    return state.hostConnected && state.runtimeStateKnown && state.sessionPhase &&
+           *state.sessionPhase == runtime::SeatSessionPhase::Idle;
+}
+
+bool Win32App::initializeControlSurface() {
+    if (m_workspaceManager.loadFromFile("workspace_config.json")) {
+        applyWorkspaceProfileToTiles();
+        std::string modelError;
+        (void)m_controlSurfaceModel.setValidatedConfiguration(
+            m_workspaceManager.managementSeatId(), m_workspaceManager.getAllSeats(),
+            control::StartupMode::Manual, &modelError);
+    }
+
+    const SeatId requestedSeat = m_workspaceManager.getAllSeats().empty()
+        ? 1u : m_workspaceManager.managementSeatId();
+    m_controlSurfaceModel.setControlContext(requestedSeat, true, false);
+
+    std::string error;
+    if (m_hostClient.connectForSeat(hostipc::ClientRole::Control, requestedSeat, 750u, &error)) {
+        m_controlSurfaceModel.setControlContext(requestedSeat, true, true);
+    } else {
+        m_hostClient.close();
+        if (!m_hostClient.connect(hostipc::ClientRole::ReadOnly, 750u, &error)) {
+            m_controlSurfaceModel.markHostDisconnected(error);
+            m_sessionControlTransition.markHostDisconnected(error);
+            updateControlSurfaceUi();
+            applyManagementSeatPlacement();
+            return true;
+        }
+    }
+
+    const auto snapshot = m_hostClient.getSnapshot(1000u, &error);
+    if (!snapshot) {
+        m_hostClient.close();
+        m_controlSurfaceModel.markHostDisconnected(error);
+        m_sessionControlTransition.markHostDisconnected(error);
+    } else {
+        m_controlSurfaceModel.observeHostSnapshot(*snapshot);
+        m_sessionControlTransition.observeSnapshot(*snapshot);
+    }
+    updateControlSurfaceUi();
+    applyManagementSeatPlacement();
+    return true;
+}
+
+void Win32App::refreshControlSurface() {
+    if (!m_hostClient.connected()) {
+        const SeatId requestedSeat = m_workspaceManager.getAllSeats().empty()
+            ? 1u : m_workspaceManager.managementSeatId();
+        std::string connectError;
+        if (m_hostClient.connectForSeat(
+                hostipc::ClientRole::Control, requestedSeat, 250u, &connectError)) {
+            m_controlSurfaceModel.setControlContext(requestedSeat, true, true);
+        } else {
+            m_hostClient.close();
+            m_controlSurfaceModel.setControlContext(requestedSeat, true, false);
+            m_controlSurfaceModel.markHostDisconnected(connectError);
+            m_sessionControlTransition.markHostDisconnected(connectError);
+            updateControlSurfaceUi();
+            return;
+        }
+    }
+
+    std::string error;
+    const auto snapshot = m_hostClient.getSnapshot(500u, &error);
+    if (!snapshot) {
+        m_hostClient.close();
+        m_controlSurfaceModel.markHostDisconnected(error);
+        m_sessionControlTransition.markHostDisconnected(error);
+    } else {
+        m_controlSurfaceModel.observeHostSnapshot(*snapshot);
+        m_sessionControlTransition.observeSnapshot(*snapshot);
+    }
+    updateControlSurfaceUi();
+}
+
+void Win32App::updateControlSurfaceUi() {
+    const auto& state = m_controlSurfaceModel.state();
+    if (m_runtimeStatusLabel != nullptr) {
+        std::wstring label = L"Runtime: ";
+        label += runtimeModeText(state.runtimeMode);
+        label += L" | Management Seat ";
+        label += std::to_wstring(state.managementSeatId);
+        if (!state.hostConnected) label += L" | disconnected";
+        SetWindowTextW(m_runtimeStatusLabel, label.c_str());
+    }
+    if (m_startSessionBtn != nullptr) {
+        EnableWindow(m_startSessionBtn, state.actions.start ? TRUE : FALSE);
+    }
+    if (m_stopSessionBtn != nullptr) {
+        EnableWindow(m_stopSessionBtn,
+                     state.actions.stopAndReturnToWindows ? TRUE : FALSE);
+    }
+    if (m_reconfigureBtn != nullptr) {
+        EnableWindow(m_reconfigureBtn, state.actions.reconfigure ? TRUE : FALSE);
+    }
+    const BOOL editing = configurationEditingAllowed() ? TRUE : FALSE;
+    if (m_saveProfileBtn != nullptr) EnableWindow(m_saveProfileBtn, editing);
+    if (m_loadProfileBtn != nullptr) EnableWindow(m_loadProfileBtn, editing);
+}
+
+void Win32App::applyManagementSeatPlacement() {
+    if (m_hwnd == nullptr) return;
+    display::DisplayTopologyInventory inventory;
+    const auto topology = inventory.refresh();
+    if (!topology.querySucceeded) return;
+
+    std::vector<SeatConfig> configs;
+    const auto& state = m_controlSurfaceModel.state();
+    if (!state.seats.empty()) {
+        configs.reserve(state.seats.size());
+        for (const auto& seat : state.seats) configs.push_back(seat.config);
+    } else {
+        configs = m_workspaceManager.getAllSeats();
+    }
+
+    std::vector<display::SeatDisplayRequest> requests;
+    for (const auto& seat : configs) {
+        if (seat.displayIds.empty()) continue;
+        display::SeatDisplayRequest request;
+        request.seatId = seat.seatId;
+        request.missingOutputPolicy = display::MissingOutputPolicy::Degrade;
+        for (const auto& outputId : seat.displayIds) {
+            const auto stable = utf8FromWide(outputId);
+            if (!stable.empty()) request.outputs.push_back({stable, true, false});
+        }
+        if (seat.primaryDisplayId) request.primaryOutputId = utf8FromWide(*seat.primaryDisplayId);
+        if (!request.outputs.empty()) requests.push_back(std::move(request));
+    }
+    const auto layouts = display::buildSeatDisplayLayouts(topology, requests);
+    control::ManagementSeatConfig placementConfig;
+    placementConfig.managementSeatId = state.managementSeatId;
+    placementConfig.preferredWidth = 980;
+    placementConfig.preferredHeight = 750;
+    const auto placement = control::resolveControlSurfacePlacement(
+        placementConfig, layouts.groups, topology);
+    if (!placement.valid) return;
+    SetWindowPos(m_hwnd, nullptr, placement.windowRect.left, placement.windowRect.top,
+                 placement.windowRect.width(), placement.windowRect.height(),
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+bool Win32App::applyCurrentProfileToHost(bool showErrors) {
+    if (!m_hostClient.connected() || m_hostClient.role() != hostipc::ClientRole::Control) {
+        if (showErrors) {
+            MessageBoxW(m_hwnd, L"The background host control channel is not available.",
+                        L"HydraSeat Runtime", MB_OK | MB_ICONWARNING);
+        }
+        return false;
+    }
+    hostipc::ProfilePayload payload;
+    payload.managementSeatId = m_workspaceManager.managementSeatId();
+    payload.seats = m_workspaceManager.getAllSeats();
+    std::string error;
+    const auto applied = m_hostClient.applyProfile(payload, 2000u, &error);
+    if (!applied || !applied->succeeded()) {
+        if (showErrors) {
+            const std::wstring message = L"The edited profile was not accepted by the background host. The active runtime was not changed.";
+            MessageBoxW(m_hwnd, message.c_str(), L"HydraSeat Reconfigure",
+                        MB_OK | MB_ICONERROR);
+        }
+        refreshControlSurface();
+        return false;
+    }
+    std::string modelError;
+    (void)m_controlSurfaceModel.setValidatedConfiguration(
+        payload.managementSeatId, payload.seats, control::StartupMode::Manual, &modelError);
+    m_controlSurfaceModel.setControlContext(payload.managementSeatId, true, true);
+    m_controlSurfaceModel.observeHostSnapshot(applied->snapshot);
+    m_sessionControlTransition.observeSnapshot(applied->snapshot);
+    updateControlSurfaceUi();
+    applyManagementSeatPlacement();
+    return true;
+}
+
+void Win32App::startSession() {
+    const auto& state = m_controlSurfaceModel.state();
+    if (!state.actions.start || !m_hostClient.connected()) return;
+    std::string error;
+    std::optional<runtime::RuntimeCommandResult> current;
+    if (state.sessionPhase && *state.sessionPhase == runtime::SeatSessionPhase::Idle) {
+        current = m_hostClient.command(hostipc::MessageType::PlanSession, 2000u, &error);
+        if (!current || !current->succeeded()) {
+            MessageBoxW(m_hwnd, L"Session planning/preflight failed. No split session was started.",
+                        L"HydraSeat Start", MB_OK | MB_ICONERROR);
+            refreshControlSurface();
+            return;
+        }
+        m_controlSurfaceModel.observeHostSnapshot(current->snapshot);
+        m_sessionControlTransition.observeSnapshot(current->snapshot);
+    }
+    current = m_hostClient.command(hostipc::MessageType::StartSession, 3000u, &error);
+    if (!current || !current->succeeded()) {
+        MessageBoxW(m_hwnd, L"Session start failed or required recovery. Check runtime diagnostics.",
+                    L"HydraSeat Start", MB_OK | MB_ICONERROR);
+        refreshControlSurface();
+        return;
+    }
+    m_controlSurfaceModel.observeHostSnapshot(current->snapshot);
+    m_sessionControlTransition.observeSnapshot(current->snapshot);
+    updateControlSurfaceUi();
+}
+
+void Win32App::stopSessionAndReturnToWindows() {
+    if (!m_controlSurfaceModel.state().actions.stopAndReturnToWindows ||
+        !m_hostClient.connected()) return;
+    std::string error;
+    const auto result = m_hostClient.command(
+        hostipc::MessageType::StopAndReturnToWindows, 5000u, &error);
+    if (!result || !m_sessionControlTransition.observeCommandResult(
+                       control::SessionControlIntent::StopAndReturnToWindows, *result)) {
+        MessageBoxW(m_hwnd,
+            L"Return to Windows did not verify every rollback postcondition. Recovery may be required.",
+            L"HydraSeat Stop", MB_OK | MB_ICONERROR);
+    }
+    if (result) m_controlSurfaceModel.observeHostSnapshot(result->snapshot);
+    updateControlSurfaceUi();
+}
+
+void Win32App::beginReconfigure() {
+    if (!m_controlSurfaceModel.state().actions.reconfigure ||
+        !m_hostClient.connected()) return;
+    std::string error;
+    const auto result = m_hostClient.command(
+        hostipc::MessageType::BeginReconfigure, 5000u, &error);
+    if (!result || !m_sessionControlTransition.observeCommandResult(
+                       control::SessionControlIntent::Reconfigure, *result)) {
+        MessageBoxW(m_hwnd,
+            L"Reconfigure could not reach verified normal-Windows state. Configuration editing remains blocked.",
+            L"HydraSeat Reconfigure", MB_OK | MB_ICONERROR);
+    }
+    if (result) m_controlSurfaceModel.observeHostSnapshot(result->snapshot);
+    updateControlSurfaceUi();
+    applyManagementSeatPlacement();
 }
 
 void Win32App::toggleIsolationMode() {
@@ -1034,6 +1425,12 @@ void Win32App::launchGateCControlledLab() {
 }
 
 LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg == WM_HYDRA_ACTIVATE_CONTROL && g_appInstance) {
+        g_appInstance->applyManagementSeatPlacement();
+        ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+        return 0;
+    }
     if (uMsg == WM_INPUT && g_appInstance) {
         g_appInstance->m_inputRouter.handleRawInput(reinterpret_cast<HRAWINPUT>(lParam));
         return DefWindowProcW(hwnd, uMsg, wParam, lParam);
@@ -1061,6 +1458,9 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
             }
         }
         return 0;
+    } else if (uMsg == WM_TIMER && wParam == TIMER_HOST_REFRESH && g_appInstance) {
+        g_appInstance->refreshControlSurface();
+        return 0;
     } else if (uMsg == WM_COMMAND) {
         int wmId = LOWORD(wParam);
         if (wmId == ID_BTN_REFRESH && g_appInstance) {
@@ -1075,9 +1475,17 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
             g_appInstance->launchMultiseat();
         } else if (wmId == ID_BTN_GATE_C && g_appInstance) {
             g_appInstance->launchGateCControlledLab();
+        } else if (wmId == ID_BTN_START_SESSION && g_appInstance) {
+            g_appInstance->startSession();
+        } else if (wmId == ID_BTN_STOP_SESSION && g_appInstance) {
+            g_appInstance->stopSessionAndReturnToWindows();
+        } else if (wmId == ID_BTN_RECONFIGURE && g_appInstance) {
+            g_appInstance->beginReconfigure();
         }
     } else if (uMsg == WM_DESTROY) {
         KillTimer(hwnd, TIMER_FLASH_RESET);
+        KillTimer(hwnd, TIMER_HOST_REFRESH);
+        if (g_appInstance) g_appInstance->m_hostClient.close();
         PostQuitMessage(0);
         return 0;
     }
@@ -1085,6 +1493,7 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
 }
 
 int Win32App::run() {
+    if (m_duplicateLaunch) return 0;
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);

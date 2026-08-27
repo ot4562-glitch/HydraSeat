@@ -2,13 +2,19 @@
 
 ## 1. Project identity
 
-HydraSeat is an experimental Windows local gaming multiseat framework written primarily in C++20. The repository license is not yet formally declared; long-term public open-source distribution is a product goal, not the current legal status. Do not describe the current repository as open source or copy third-party source until the tracked license and contribution terms are resolved.
+HydraSeat is an experimental Windows local gaming multiseat project written primarily in C++20. It is being developed in public toward an open-source distribution model, but the repository license and contribution terms are not yet formally declared. Do not describe the current repository as legally open source or copy third-party source until that tracked legal gate is resolved.
 
 The product goal is:
 
-> Make one physical Windows PC feel like multiple local gaming PCs. Each Seat may own one or more displays, keyboard/mouse/controller devices, audio endpoints, processes, windows, virtual cursor/focus state, profiles, and an optional Seat shell. Ordinary local-monitor use must not require a VM, RDP, or streaming.
+> Let two people share the unused CPU/GPU/memory/I/O headroom of one sufficiently capable Windows gaming PC as two local gaming Seats, reducing the need to buy and maintain a second complete desktop solely for simultaneous local gaming.
 
-The primary human use case is a household or group of friends sharing the unused headroom of one capable gaming PC: different games may run concurrently on separate Seats, and separate instances of the same title are in scope only when the title/launcher/account/license/single-instance policy and an explicit compatibility profile permit it. Product work must optimize for a non-developer being able to configure Seats, start a split session, understand compatibility limits, and safely return to ordinary Windows.
+The primary human use case is a household or group of friends sharing the unused headroom of one capable gaming PC. HydraSeat v1 supports at most two active Seats, is game-only, and must optimize for a non-developer being able to optionally configure Seats, choose a game and Player for Seat 1/Seat 2/Both, play, let either Seat stop/change games independently, understand compatibility evidence, and safely return to ordinary Windows.
+
+Keep these concepts separate: `Seat` = physical station hardware, `Player` = lightweight person profile, `Game` = installed/discovered title, `TwoPlayerSetup` = optional same-game/two-instance recipe, and runtime state = temporary Seat + Player + Game bindings. A Seat does not permanently own a person, game, account, save, process, or window.
+
+Normal UX is a lightweight game launcher. Full per-Seat taskbars, wallpaper, clipboard virtualization, arbitrary general-purpose apps, and a replacement Windows shell are deferred beyond v1; an idle Seat gets only a minimal Seat Launcher when needed. Core operation is offline-first and least-privilege, community compatibility sharing is explicit opt-in, compatibility is reported as transparent success/failure evidence rather than an official certification badge, and executable/runtime/driver updates require user approval.
+
+Same-game multi-instance support is in scope only when the game/provider already permit it. HydraSeat should automate repeatable setup where safe and also provide a guided manual setup path. Protected titles may be offered only as explicitly warned experiments and must never be presented as anti-cheat safety evidence.
 
 A **Seat**, not a monitor or game window, is the primary ownership unit.
 
@@ -18,13 +24,14 @@ Before changing code or documentation, read and obey in this order:
 
 1. the user's current explicit instruction;
 2. this file;
-3. `docs/implementation/DECISIONS.md`;
-4. `docs/implementation/README.md`;
-5. `docs/implementation/STATUS.md`;
-6. the active packet in the relevant `docs/implementation/PHASE*.md` file;
-7. `docs/ARCHITECTURE.md` and specialized design/testing documents;
-8. existing code and tests;
-9. older comments, issue text, and historical notes.
+3. `docs/PRODUCT_V1.md`;
+4. `docs/implementation/DECISIONS.md`;
+5. `docs/implementation/README.md`;
+6. `docs/implementation/STATUS.md`;
+7. the active packet in the relevant `docs/implementation/PHASE*.md` file;
+8. `docs/ARCHITECTURE.md` and specialized design/testing documents;
+9. existing code and tests;
+10. older comments, issue text, and historical notes.
 
 When lower-precedence material conflicts with a higher-precedence decision, follow the higher-precedence source and update stale documentation in the packet scope.
 
@@ -82,9 +89,20 @@ Packet states:
 
 Read the full decisions in `docs/implementation/DECISIONS.md`. At minimum:
 
+- v1 supports at most two active Seats; do not expand product scope to N-Seat before v1;
+- Seat hardware, Player identity, Game identity, Two-player setup, and Runtime Session are separate concepts;
+- Seat setup may be incomplete and skipped/deferred; selected-game preflight determines which devices are actually required;
+- normal UX is game-first and hides low-level implementation details outside Diagnostics/Expert mode;
+- per-Seat game lifecycle is independent: one Seat may stop/change games while the other continues;
+- v1 uses only a minimal idle Seat Launcher, not a general desktop shell/taskbar/clipboard/app environment;
+- same-game setup has automatic and guided manual paths but never bypasses game/provider restrictions;
+- compatibility is local-first evidence with optional redacted community sharing, not a maintainer certification badge;
+- protected-game attempts require explicit risk acknowledgement and never imply anti-cheat safety;
+- core operation is offline-first; compatibility-data refresh is optional; program/runtime/driver updates require user approval;
+- normal operation uses least privilege and v1 requires a real Windows installer/uninstaller;
 - Seat-first and multi-monitor-first architecture;
 - default path is one Windows interactive session, not VM/RDP/streaming;
-- configuration UI, background host, watchdog, reset CLI, optional adapters, and Seat shell are separate responsibilities;
+- game-first Management UI, background host, watchdog, reset CLI, optional adapters, and minimal Seat Launcher are separate responsibilities;
 - the background host is authoritative for active runtime state;
 - exactly one Management Seat owns the visible whole-machine control plane by default; Seat 1 is the default and the console opens on its primary display with a visible fallback;
 - closing/restarting the control UI never stops an active Seat session; normal controls are `Start`, `Stop / Return to Windows`, and `Reconfigure`;
@@ -279,7 +297,7 @@ After packet work:
 - compatibility/hardware matrix: physical/game evidence;
 - clean-room/notices: dependency/source changes.
 
-Run `tools/validate_implementation_roadmap.py`. Packet IDs must be unique, dependencies declared/acyclic, links valid, states consistent, and the current default packet `READY`.
+Run `tools/validate_implementation_roadmap.py`. Packet IDs must be unique, dependencies declared/acyclic, links valid, states consistent, and the current default packet must be actionable exactly as described by `STATUS.md` (for example `READY`, or a `CODE_COMPLETE` packet whose remaining work is the declared manual acceptance).
 
 ## 12. Project structure
 

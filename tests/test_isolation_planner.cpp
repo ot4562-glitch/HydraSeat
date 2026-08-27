@@ -601,6 +601,62 @@ void testDriverInstallationConsentPolicy() {
           "driver-backed metadata plan proceeds only after explicit consent");
 }
 
+void testGlfwExternalProfileBoundary() {
+    const auto profile = hydra::compatibilityProfileTemplate(
+        "glfw-3.5.1-cursor-test");
+    check(profile.has_value(), "GLFW P3-E profile template exists");
+    check(!profile->requireZeroBleed &&
+              !hydra::hasCapability(
+                  profile->requiredCapabilities,
+                  InputIsolationCapability::PhysicalInputSuppression),
+          "P3-E profile does not overclaim physical suppression");
+
+    BackendEnvironment environment;
+    IsolationPlanner planner(hydra::builtInIsolationBackends(environment));
+    auto plan = planner.plan(*profile, environment);
+    check(plan.status == PlanStatus::Unsupported &&
+              rejectedWith(plan, "hydra.controlled-external-shim",
+                           IsolationDiagnosticCode::BackendUnavailable),
+          "P3-E profile fails closed when the controlled bridge is unavailable");
+
+    environment.controlledExternalShimAvailable = true;
+    planner = IsolationPlanner(hydra::builtInIsolationBackends(environment));
+    plan = planner.plan(*profile, environment);
+    check(plan.status == PlanStatus::Unsupported &&
+              rejectedWith(plan, "hydra.controlled-external-shim",
+                           IsolationDiagnosticCode::InjectionConsentRequired),
+          "P3-E profile requires explicit injection approval");
+
+    environment.processInjectionApproved = true;
+    planner = IsolationPlanner(hydra::builtInIsolationBackends(environment));
+    plan = planner.plan(*profile, environment);
+    check(plan.status == PlanStatus::Unsupported &&
+              rejectedWith(plan, "hydra.controlled-external-shim",
+                           IsolationDiagnosticCode::RecoveryGuardMissing),
+          "P3-E profile requires the validated recovery guard");
+
+    environment.recoveryGuardReady = true;
+    planner = IsolationPlanner(hydra::builtInIsolationBackends(environment));
+    plan = planner.plan(*profile, environment);
+    check(plan.status == PlanStatus::SupportedWithWarnings &&
+              hydra::hasNoCapabilities(plan.missingCapabilities) &&
+              selected(plan, "hydra.controlled-external-shim"),
+          "reviewed P3-E environment selects only the controlled external shim");
+    check(!hydra::hasAnyCapability(
+              plan.coveredCapabilities,
+              InputIsolationCapability::PhysicalInputSuppression |
+                  InputIsolationCapability::PhysicalDeviceCloaking),
+          "P3-E plan does not advertise physical hiding or suppression");
+
+    auto protectedProfile = *profile;
+    protectedProfile.antiCheatDetected = true;
+    plan = planner.plan(protectedProfile, environment);
+    check(plan.status == PlanStatus::Unsupported &&
+              rejectedWith(plan, "hydra.controlled-external-shim",
+                           IsolationDiagnosticCode::AntiCheatConflict),
+          "protected target rejects the P3-E invasive bridge");
+}
+
 void testProtectedObservationTemplate() {
     BackendEnvironment environment;
     environment.protoInputAvailable = true;
@@ -645,6 +701,7 @@ int main() {
     testInjectionPolicyCannotBeOverriddenByEnvironment();
     testRequiredInjectionPolicyNeedsInjectionBackend();
     testDriverInstallationConsentPolicy();
+    testGlfwExternalProfileBoundary();
     testProtectedObservationTemplate();
 
     std::cout << "Isolation planner tests passed.\n";

@@ -1,129 +1,69 @@
-# Phase 6 — Launcher, Profile Manager, and Repeatable Session Plans
+# Phase 6 — Game Library, Player Profiles, and Two-Player Setup
 
 ## Phase objective
 
-Turn the MVP's hand-authored configurations into repeatable, validated, provider-aware launch profiles. A user should select a Seat composition and target profile, preview the exact runtime plan and risks, start it, and later reproduce or export the result without hidden machine-specific assumptions.
+Turn the proven two-Seat MVP into the repeatable user model defined by `docs/PRODUCT_V1.md`:
+
+```text
+Game -> Seat 1 / Seat 2 / Both -> Player(s) -> Play
+```
+
+Phase 6 separates persisted hardware, people, installed games, and same-game setup knowledge. It makes local installed-game discovery the normal path, manual EXE entry the fallback, and same-game two-instance setup automatic where safely possible with a guided manual path when automation cannot finish.
+
+No packet in this phase may create a credential vault or bypass provider/game restrictions.
 
 ## Phase exit gate
 
-Phase 6 is complete when:
+Phase 6 closes only when:
 
-1. Seat, target, compatibility, backend, and session schemas are versioned and migratable;
-2. custom executables and at least one provider launcher use the same launch-plan interface;
-3. process/child/window/adapter/audio/display policies are represented as typed profile fields;
-4. preflight displays exact required/optional/missing capabilities and mutations;
-5. profile editor validates before saving;
-6. import/export is deterministic and secrets/private local paths are handled explicitly;
-7. host launches from immutable plan hashes and records the profile version;
-8. provider update/path changes degrade predictably;
-9. CLI and UI use the same validation/host protocol;
-10. compatibility fixtures and migration regression tests pass.
-
-## Dependency graph
-
-```text
-P5-CLOSE-01
-   |
-   +-> P6-SCHEMA-01 -> P6-MIG-01
-   |          |
-   |          +-> P6-PROFILE-01 -> P6-UI-01
-   |
-   +-> P6-CATALOG-01 -> P6-PROV-01 -> P6-PROV-02 / P6-PROV-03
-   |
-   +-> P6-PLAN-01 -> P6-PREFLIGHT-01
-
-schemas + providers + plan -> P6-CLI-01 -> P6-IMPORT-01
-all -> P6-REG-01 -> P6-CLOSE-01
-```
+1. Seat, Player, Game, TwoPlayerSetup, and RuntimeSession schemas are separate/versioned;
+2. existing hardware profiles migrate transactionally;
+3. locally installed games can be discovered through at least the declared initial provider set plus manual EXE fallback;
+4. a Player can move between Seat 1 and Seat 2 while keeping its game/account-reference preferences;
+5. provider credentials remain provider-owned;
+6. selecting the same game for both Seats resolves a validated TwoPlayerSetup;
+7. HydraSeat can generate a bounded candidate setup automatically where feasible;
+8. the guided manual setup path can finish an otherwise unknown lawful title;
+9. at least one real same-title/two-instance scenario works where game/provider rules permit it;
+10. import/export is typed/redacted and cannot silently gain arbitrary code execution;
+11. a Phase-close verification passes.
 
 ---
 
-## P6-SCHEMA-01 — Versioned profile schema family
+## P6-SCHEMA-01 — Versioned Seat, Player, Game, setup, and session schema family
 
 **State:** BLOCKED
 
 **Goal**
 
-Define separate, composable schemas instead of one growing `workspace_config.json` object.
+Define separate persisted/runtime schemas instead of growing one monolithic profile.
 
 **Depends on**
 
-- P5 launch-plan contracts
-- D-012
+- P5-CLOSE-01
 
-**Create/modify**
+**Required schemas/models**
 
-- `schemas/seat-profile-v3.schema.json`
-- `schemas/target-profile-v1.schema.json`
-- `schemas/compatibility-profile-v1.schema.json`
-- `schemas/session-profile-v1.schema.json`
-- `include/hydra/profile_model.hpp`
-- `src/profile_model.cpp`
-- schema fixtures/tests.
-
-**Schema separation**
-
-### Seat profile
-
-- Seat name/ID;
-- display group and primary display;
-- input/controller/audio assignments;
-- shell preferences;
-- optional/shared resources;
-- no process handles or runtime-only state.
-
-### Target profile
-
-- executable/provider/application identity;
-- arguments, environment, working directory;
-- architecture and child-process expectations;
-- window selection/placement policy;
-- audio/controller/display target preferences;
-- no machine secret.
-
-### Compatibility profile
-
-- required/optional capabilities;
-- backend preference/deny rules;
-- startup shim/hook API set;
-- input/controller/window/namespace behavior;
-- anti-cheat/protection declaration;
-- support level and evidence metadata.
-
-### Session profile
-
-- references one Seat profile per Seat and one target/compatibility combination;
-- stores one `managementSeatId` for whole-machine controls, defaulting deterministically to Seat 1 when valid;
-- start order/dependencies;
-- degraded-mode policy;
-- rollback policy;
-- diagnostic/trace policy.
+- `SeatConfig` — physical station hardware only;
+- `PlayerProfile` — local display identity/preferences/provider account references;
+- `GameRecord` — provider/install identity and local metadata;
+- `TwoPlayerSetup` — optional same-game/two-instance recipe;
+- runtime session selection/binding — temporary Seat + Player + Game assignment;
+- compatibility-result reference/provenance fields where needed.
 
 **Invariants**
 
-- stable IDs/references, not duplicate embedded objects where identity matters;
-- unknown required field/version rejected;
-- unknown optional extension preserved or rejected by declared policy;
-- runtime handles/PIDs/HWNDs never persisted;
-- local paths have portability metadata;
-- profile hash is canonical/deterministic.
-
-**Automated tests**
-
-- valid/invalid/minimal/maximal fixtures;
-- duplicate IDs/references/cycles;
-- future/old versions;
-- canonical serialization/hash;
-- Unicode and path edge cases;
-- no secret/runtime fields.
+- v1 active Seat count <= 2;
+- runtime PIDs/HWNDs/handles never persist as stable identity;
+- Player is independent from Seat;
+- Game is independent from Seat/Player;
+- provider passwords/tokens/cookies are not schema fields;
+- every schema has explicit version/count/string/path bounds;
+- unknown future versions fail closed or use an explicitly safe read-only path.
 
 **Done when**
 
-All production planning consumes typed schema models and the old file is read only through migration.
-
-**Suggested commit**
-
-`feat: implement P6-SCHEMA-01 profile schema family`
+Round-trip, malformed, migration-boundary, Unicode/path, maximum-size, unknown-version, and cross-concept isolation tests pass for the schema family.
 
 ---
 
@@ -133,119 +73,59 @@ All production planning consumes typed schema models and the old file is read on
 
 **Goal**
 
-Migrate current Seat profiles and future schema versions without data loss.
+Migrate legacy Seat/workspace data into the separated v1 model without destroying the last valid user configuration.
 
 **Depends on**
 
 - P6-SCHEMA-01
 
-**Create/modify**
+**Requirements**
 
-- `include/hydra/profile_migration.hpp`
-- `src/profile_migration.cpp`
-- migration CLI/subcommand;
-- fixtures for every supported source version;
-- backup/restore tests.
-
-**Implementation skeleton**
-
-1. detect schema/version without mutating;
-2. parse into version-specific source type;
-3. migrate one version step at a time;
-4. validate destination completely;
-5. write temp file, fsync/close where applicable, atomically replace;
-6. retain timestamped backup and migration report;
-7. never auto-delete unknown original data;
-8. support dry-run and export-only migration.
-
-**Invariants**
-
-- failed migration leaves original unchanged;
-- repeated migration is idempotent;
-- backup path and hash recorded;
-- user-visible warnings for dropped/unsupported fields;
-- no silent default that changes ownership/security behavior.
-
-**Automated tests**
-
-- every source fixture;
-- malformed/partial file;
-- write/replace failure;
-- interrupted migration simulation;
-- backup restore;
-- deterministic output.
+- parse/validate old state read-only first;
+- produce a deterministic migration report;
+- create transactional backup/temp output;
+- commit only after complete validation;
+- preserve unmapped data in a bounded diagnostic report rather than guessing;
+- rollback to previous valid state on any error.
 
 **Done when**
 
-Existing `workspace_config.json` can be converted safely and old versions remain covered by fixtures.
-
-**Suggested commit**
-
-`feat: implement P6-MIG-01 profile migration`
+Legacy fixture profiles migrate deterministically and injected write/validation failures leave the original profile usable byte-for-byte where declared.
 
 ---
 
-## P6-CATALOG-01 — Provider-neutral application catalog
+## P6-CATALOG-01 — Provider-neutral local game catalog
 
 **State:** BLOCKED
 
 **Goal**
 
-Represent installed/known applications without coupling profiles directly to Steam/Epic/EA/GOG internals.
+Create the normal HydraSeat game library from locally installed/discovered titles rather than forcing users to browse for executables first.
 
 **Depends on**
 
 - P6-SCHEMA-01
 
-**Create/modify**
+**Catalog fields**
 
-- `include/hydra/application_catalog.hpp`
-- `src/application_catalog.cpp`
-- `include/hydra/application_identity.hpp`
-- catalog storage/cache and tests.
-
-**Core types**
-
-```cpp
-struct ApplicationIdentity;
-struct ApplicationInstallation;
-struct ApplicationLaunchCandidate;
-struct ApplicationCatalogSnapshot;
-```
-
-**Identity fields**
-
-- provider ID and provider-specific application ID;
-- executable identity/path candidates;
-- display title/metadata;
-- architecture where known;
-- install root and manifest source;
-- last verified version/hash/time;
-- confidence and stale state.
+- provider + provider app identity where available;
+- install root/executable candidates;
+- architecture/version/hash/staleness metadata where safely available;
+- title and local icon source;
+- protection/compatibility metadata reference;
+- manual/custom origin.
 
 **Invariants**
 
-- title/friendly name is not identity;
-- catalog discovery is read-only;
-- provider metadata is untrusted input and bounded;
-- missing provider/client does not break custom executable profiles;
-- stale install is visible.
-
-**Automated tests**
-
-- duplicate titles/installs;
-- moved/uninstalled app;
-- malformed provider metadata;
-- multiple libraries/drives;
-- deterministic catalog merge.
+- discovery is read-only;
+- friendly title/icon is presentation, not stable identity;
+- provider metadata is untrusted bounded input;
+- duplicate provider/executable records reconcile deterministically;
+- missing cover art never blocks a game entry.
 
 **Done when**
 
-Profiles reference provider-neutral application identities with resolved launch candidates.
-
-**Suggested commit**
-
-`feat: implement P6-CATALOG-01 application catalog`
+A provider-neutral catalog merges deterministic fixtures and local provider discoveries into stable GameRecords with no filesystem mutation.
 
 ---
 
@@ -255,63 +135,34 @@ Profiles reference provider-neutral application identities with resolved launch 
 
 **Goal**
 
-Define lawful, testable provider integrations behind one interface.
+Define lawful provider-specific discovery/launch/account-reference operations behind a small typed interface.
 
 **Depends on**
 
 - P6-CATALOG-01
-- P5 activation transaction
-
-**Create/modify**
-
-- `include/hydra/launcher_provider.hpp`
-- `src/launcher_provider_registry.cpp`
-- fake provider and tests;
-- provider descriptor/profile fields.
 
 **Contract**
 
-```cpp
-struct ProviderDescriptor;
-struct ProviderProbeResult;
-struct ProviderLaunchRequest;
-struct ProviderLaunchResult;
-class ILauncherProvider;
-```
+Providers may expose only their supported bounded operations such as:
 
-Operations:
-
-- read-only availability/version probe;
-- discover installations/applications;
-- resolve launch command/protocol;
-- identify spawned process candidates;
-- cancel/cleanup only owned launch work;
-- provide diagnostics and limitations.
+- read-only installed-game discovery;
+- executable/launch URI/argument resolution;
+- local icon metadata;
+- detection of already authenticated account identities where the provider exposes a safe supported selector/reference;
+- launch request construction;
+- post-launch child/process identification evidence.
 
 **Invariants**
 
-- no credential/token extraction;
-- no launcher authentication bypass;
-- no arbitrary command interpolation;
-- process ownership validated after provider launch;
-- unsupported provider version fails closed;
-- provider adapter cannot mutate Seat/runtime directly.
-
-**Automated tests**
-
-- fake provider success/failure/timeouts;
-- multiple candidate processes;
-- provider client absent/update;
-- malicious metadata escaping;
-- cancel and no orphan helper.
+- adapter never bypasses account/license/single-instance/provider policy;
+- HydraSeat does not collect provider passwords/tokens;
+- undocumented mutation is not silently treated as a normal provider feature;
+- provider absence/offline state is explicit;
+- provider launch remains part of exact game compatibility evidence.
 
 **Done when**
 
-Custom executable and future providers can produce the same `TargetLaunchPlan`.
-
-**Suggested commit**
-
-`feat: implement P6-PROV-01 launcher provider interface`
+Fake providers prove deterministic discovery/launch-plan/account-reference behavior with malformed/stale metadata rejection.
 
 ---
 
@@ -321,81 +172,46 @@ Custom executable and future providers can produce the same `TargetLaunchPlan`.
 
 **Goal**
 
-Implement one provider integration using documented/local metadata and normal client launch behavior.
+Implement the first concrete provider using local Steam installation metadata and normal Steam-supported launch behavior.
 
 **Depends on**
 
 - P6-PROV-01
 
-**Create/modify**
+**Requirements**
 
-- `src/providers/steam_provider.cpp`
-- Steam metadata parser with fixtures;
-- provider tests/documentation.
-
-**Implementation skeleton**
-
-1. detect installed Steam client/libraries read-only;
-2. parse manifests with bounded input and encoding handling;
-3. map app ID to installation/executable candidates;
-4. launch through normal supported client/protocol or configured executable path;
-5. correlate spawned process tree with app profile;
-6. handle client already running/not running/update dialog;
-7. never read/store credentials.
-
-**Invariants**
-
-- app ID/provider ID is identity;
-- launch ambiguity is explicit;
-- client overlays/dialogs are classified by window policy, not globally hidden;
-- Steam update/path changes degrade to catalog refresh.
-
-**Automated/manual tests**
-
-- parser fixtures;
-- multiple libraries;
-- missing/corrupt manifest;
-- launch controlled non-protected test app through Steam if available;
-- client update/restart behavior.
+- read local library/app metadata without mutation;
+- resolve installed app identity/path/executable hints;
+- reuse local icon/art where safe/licensed through installed metadata rather than bundling it;
+- keep Steam authentication owned by Steam;
+- document what account switching/second-instance behavior Steam does or does not expose;
+- fail closed when same-title/account/license rules cannot support the requested two-player plan.
 
 **Done when**
 
-One Steam application launches through the standard plan/runtime path.
-
-**Suggested commit**
-
-`feat: implement P6-PROV-02 Steam launcher adapter`
+Installed Steam fixture/live discovery works read-only and supported launches are reproducible without HydraSeat storing Steam credentials.
 
 ---
 
 ## P6-PROV-03 — Epic, EA, GOG, and custom provider packets
 
-**State:** BLOCKED / SPLIT BEFORE IMPLEMENTATION
+**State:** BLOCKED
 
 **Goal**
 
-Add providers one at a time after Steam validates the interface. This umbrella packet must be split into:
-
-- `P6-PROV-03A` Epic;
-- `P6-PROV-03B` EA;
-- `P6-PROV-03C` GOG;
-- `P6-PROV-03D` custom executable/script.
+Track secondary provider integrations as separate bounded work rather than one broad unverified launcher abstraction.
 
 **Depends on**
 
-- P6-PROV-02 interface lessons
+- P6-PROV-01
 
-**Rules**
+**Rule**
 
-- one provider per PR;
-- normal supported client behavior only;
-- no credentials, session tokens, DRM bypass, or launcher impersonation;
-- each provider has fixtures, version probe, timeout/process correlation, and uninstall/update behavior;
-- custom scripts require explicit allowlist/quoting and are never imported as trusted by default.
+P6-PROV-03 is complete only when the required v1 subset of its child provider packets is explicitly selected and validated. Non-required providers may remain deferred without blocking release if the published v1 scope says so.
 
 **Done when**
 
-Each subpacket independently meets P6-PROV-01 contract and compatibility evidence.
+The release-target provider subset is explicitly chosen and each selected child packet has truthful evidence or a documented deferred state.
 
 ---
 
@@ -403,43 +219,17 @@ Each subpacket independently meets P6-PROV-01 contract and compatibility evidenc
 
 **State:** BLOCKED
 
-**Goal**
-
-Implement the Epic provider through the normal client/manifest/URI behavior available on the tested version, without credentials or DRM bypass.
-
 **Depends on**
 
-- P6-PROV-02
+- P6-PROV-01
 
-**Create/modify**
+**Goal**
 
-- `src/providers/epic_provider.cpp`
-- sanitized manifest/installation fixtures;
-- provider version/launch/process-correlation tests.
-
-**Implementation skeleton**
-
-1. Probe installed client and supported metadata locations read-only.
-2. Parse bounded manifest data into `ApplicationCatalogSnapshot`.
-3. Resolve one normal launch candidate through P6-PROV-01.
-4. Correlate the resulting target process tree.
-5. Handle absent/updating client and moved installation.
-6. Record exact supported client/version assumptions.
-
-**Invariants**
-
-- no authentication/session token access;
-- provider-specific metadata never grants arbitrary command execution;
-- unknown client/manifest version is unsupported;
-- one provider failure cannot mutate another provider/catalog.
+Read Epic local install metadata and build only supported provider launch requests/account references without handling credentials.
 
 **Done when**
 
-One controlled non-protected Epic application follows the same compiled plan/runtime path as custom/Steam targets.
-
-**Suggested commit**
-
-`feat: implement P6-PROV-03A Epic adapter`
+The declared Epic v1 discovery/launch subset passes fixtures/live smoke evidence, or the packet is explicitly deferred from v1 scope.
 
 ---
 
@@ -447,42 +237,17 @@ One controlled non-protected Epic application follows the same compiled plan/run
 
 **State:** BLOCKED
 
-**Goal**
-
-Implement the EA provider using normal supported client launch behavior and bounded local discovery.
-
 **Depends on**
 
-- P6-PROV-02
+- P6-PROV-01
 
-**Create/modify**
+**Goal**
 
-- `src/providers/ea_provider.cpp`
-- discovery/launch fixtures and tests.
-
-**Implementation skeleton**
-
-1. Probe client/version and declared local metadata.
-2. Resolve application/install identity without scraping credentials.
-3. Generate a normal client launch request.
-4. Correlate launcher/child/game processes using the process policy.
-5. Handle update/login-required/user-interaction states explicitly.
-6. Keep unsupported/ambiguous results out of automatic launch.
-
-**Invariants**
-
-- no login automation, credential/token extraction, or DRM bypass;
-- launcher interaction requirements are visible preflight states;
-- unknown version fails closed;
-- cancellation cleans only owned launch work.
+Read EA local install metadata and build only supported provider launch requests/account references without bypassing provider policy.
 
 **Done when**
 
-One controlled non-protected EA application produces a verified provider launch result or an explicit user-interaction requirement.
-
-**Suggested commit**
-
-`feat: implement P6-PROV-03B EA adapter`
+The declared EA v1 discovery/launch subset passes fixtures/live smoke evidence, or the packet is explicitly deferred from v1 scope.
 
 ---
 
@@ -490,441 +255,273 @@ One controlled non-protected EA application produces a verified provider launch 
 
 **State:** BLOCKED
 
+**Depends on**
+
+- P6-PROV-01
+
 **Goal**
 
-Implement GOG/Galaxy and DRM-free executable discovery while preserving provider-neutral application identity.
+Read GOG/local installation metadata and construct supported launch paths while preserving offline/core use when practical.
+
+**Done when**
+
+The declared GOG v1 discovery/launch subset passes fixtures/live smoke evidence, or the packet is explicitly deferred from v1 scope.
+
+---
+
+## P6-PROV-03D — Custom executable fallback
+
+**State:** BLOCKED
+
+**Depends on**
+
+- P6-PROV-01
+
+**Goal**
+
+Preserve the power-user `Add game / EXE` path for unsupported providers and unusual installations.
+
+**Requirements**
+
+- explicit executable/path/args/working-directory fields;
+- local icon extraction/reference where available;
+- executable identity validation;
+- no arbitrary shell-string interpolation;
+- any future bounded helper/script feature requires a separate typed/trust decision and is not implied by manual EXE support.
+
+**Done when**
+
+A manually added executable becomes a normal GameRecord/launch plan with safe path/argument handling and no implicit arbitrary command runner.
+
+---
+
+## P6-PLAN-01 — Immutable provider-aware game/Seat launch-plan compiler
+
+**State:** BLOCKED
+
+**Goal**
+
+Compile current Game + Seat + Player + provider/setup information into an immutable runtime plan consumed by Phase 5/4 activation contracts.
 
 **Depends on**
 
 - P6-PROV-02
-
-**Create/modify**
-
-- `src/providers/gog_provider.cpp`
-- manifest/catalog fixtures and tests.
-
-**Implementation skeleton**
-
-1. Probe Galaxy and supported local metadata read-only.
-2. Resolve provider application/install identity.
-3. Distinguish normal Galaxy launch from an explicitly configured DRM-free executable candidate.
-4. Compile both through the same target/compatibility plan.
-5. Correlate process tree and handle updates/moved installs.
-6. Record which launch path produced the evidence.
-
-**Invariants**
-
-- no silent substitution between provider and direct executable paths;
-- friendly title/path alone is not identity;
-- unsupported metadata version is visible;
-- no user files outside declared install metadata are scanned broadly.
-
-**Done when**
-
-A GOG application can be cataloged/launched through an explicitly identified path with reproducible process correlation.
-
-**Suggested commit**
-
-`feat: implement P6-PROV-03C GOG adapter`
-
----
-
-## P6-PROV-03D — Custom executable and bounded script adapter
-
-**State:** BLOCKED
-
-**Goal**
-
-Support user-selected executables and carefully bounded launch wrappers without turning profiles into arbitrary unreviewed shell execution.
-
-**Depends on**
-
-- P6-PROV-01
-- P6-SCHEMA-01
-
-**Create/modify**
-
-- `src/providers/custom_provider.cpp`
-- argument/environment/path validation;
-- optional typed wrapper action schema;
-- tests.
-
-**Implementation skeleton**
-
-1. Resolve an explicit executable and working directory.
-2. Parse arguments as an array, not a shell command string.
-3. Allow bounded environment additions/removals.
-4. Represent wait/delay/file-exists/process-exists actions through an allowlisted typed schema.
-5. Make PowerShell/batch/arbitrary script execution expert-only or unsupported by default.
-6. Correlate root/child processes and verify executable identity.
-
-**Invariants**
-
-- no implicit `cmd.exe /c` or shell interpolation;
-- relative paths resolve against an explicit profile root;
-- path traversal/reparse/quoting cases validated;
-- imported untrusted profiles cannot enable arbitrary scripts;
-- cleanup affects only owned processes/actions.
-
-**Done when**
-
-A custom controlled executable launches with Unicode paths/arguments/environment through a deterministic plan and unsafe script forms are rejected.
-
-**Suggested commit**
-
-`feat: implement P6-PROV-03D custom launcher`
-
----
-
-## P6-PLAN-01 — Immutable provider-aware launch-plan compiler
-
-**State:** BLOCKED
-
-**Goal**
-
-Compile profile references, current topology, backend inventory, provider result, and policies into one immutable session plan.
-
-**Depends on**
-
-- P6-SCHEMA-01
-- P6-PROV-01
+- P6-PROV-03D
 - P5-LAUNCH-01
 
-**Create/modify**
+**Plan behavior**
 
-- `include/hydra/launch_plan_compiler.hpp`
-- `src/launch_plan_compiler.cpp`
-- deterministic plan serialization/hash;
-- tests.
-
-**Compiler stages**
-
-1. load and validate referenced profiles;
-2. resolve current stable devices/displays/audio/controllers/apps;
-3. inventory providers/backends/architecture/privilege/recovery;
-4. run compatibility planner;
-5. generate process/window/display/audio/controller/input actions;
-6. generate preconditions/rollback actions;
-7. canonicalize and hash the immutable plan;
-8. return warnings/missing capabilities without side effects.
-
-**Invariants**
-
-- compilation is pure/read-only;
-- same inputs produce same plan/hash;
-- no runtime handle persisted in source profile;
-- every mutation has rollback metadata;
-- unsupported requirement blocks plan.
-
-**Automated tests**
-
-- deterministic hash/order;
-- missing/stale app/device/backend;
-- provider ambiguity;
-- architecture mismatch;
-- profile reference cycle;
-- optional capability warning;
-- no side effects.
+- resolve exactly one or two active Seats;
+- resolve selected Game per Seat;
+- resolve Player account-reference/instance preference;
+- if same Game on both Seats, require a valid TwoPlayerSetup;
+- compute selected provider launches and compatibility capabilities;
+- include exact requirement-aware hardware preflight;
+- hash/correlate the immutable plan.
 
 **Done when**
 
-Host activation consumes only compiled plans, not scattered profile reads.
-
-**Suggested commit**
-
-`feat: implement P6-PLAN-01 launch plan compiler`
+Equivalent input produces an identical plan/hash and any material stale/missing requirement prevents activation rather than silently changing behavior.
 
 ---
 
-## P6-PREFLIGHT-01 — Human-readable risk and mutation preview
+## P6-PREFLIGHT-01 — Human-readable requirements, risk, and mutation preview
 
 **State:** BLOCKED
 
 **Goal**
 
-Translate a compiled plan into a precise preflight report before any mutation.
+Translate the immutable plan into a normal-user summary first and an Expert technical detail view second.
 
 **Depends on**
 
 - P6-PLAN-01
 
-**Create/modify**
+**Normal UX examples**
 
-- `include/hydra/preflight_report.hpp`
-- `src/preflight_report.cpp`
-- JSON/human output;
-- UI model/tests.
+- `Seat 2 needs a controller for this game`;
+- `This same-game setup needs a separate data directory`;
+- `This title is Protected / Experimental`;
+- `Audio cannot be separated with the current setup`;
+- `Two-player setup needs review`.
 
-**Report**
-
-- resolved Seats/targets/topology;
-- selected/rejected backends;
-- required injection/driver/admin/restart;
-- physical cloaking/suppression scope;
-- display/window/audio/controller changes;
-- known unsupported/experimental behavior;
-- expected child processes/windows;
-- watchdog/reset readiness;
-- plan hash/profile versions;
-- explicit confirmation requirements.
-
-**Invariants**
-
-- report derives from the exact immutable plan;
-- no vague “may change system settings” text when exact mutation is known;
-- unsupported status cannot be confirmed away;
-- risky experimental override is distinct from normal support.
+Technical backend/device path/plan hash details remain expandable diagnostics.
 
 **Done when**
 
-UI/CLI show identical plan details and confirmations.
-
-**Suggested commit**
-
-`feat: implement P6-PREFLIGHT-01 launch preflight report`
+Every plan-blocking requirement and user-approved mutation/risk has a clear user message and deterministic expert detail without exposing secrets.
 
 ---
 
-## P6-PROFILE-01 — Compatibility profile validator and editor model
+## P6-PROFILE-01 — Two-player setup validator and editor model
 
 **State:** BLOCKED
 
 **Goal**
 
-Provide typed editing/validation without exposing users to arbitrary JSON as the primary workflow.
+Make same-game/two-instance configuration a typed reusable `TwoPlayerSetup` with both automatic-generation and guided-manual edit paths.
 
 **Depends on**
 
 - P6-SCHEMA-01
 - P6-PLAN-01
 
-**Create/modify**
+**Setup fields may include**
 
-- `include/hydra/profile_editor_model.hpp`
-- `src/profile_editor_model.cpp`
-- field metadata/help/validation rules;
-- tests.
+- exact Game/provider/version match/provenance;
+- per-instance data/config directories;
+- args/environment/working directories;
+- provider account references where supported;
+- bounded start order/waits;
+- process/window matching;
+- input/controller/audio/display requirements;
+- known limitations/protection state;
+- evidence references.
 
-**Editor sections**
+**Automatic path**
 
-- application/provider identity;
-- process/architecture/startup;
-- input API/hook capability requirements;
-- controller API mapping;
-- window/display/fullscreen policy;
-- audio requirements;
-- namespace/single-instance rules;
-- anti-cheat/protection status;
-- backend preference/deny;
-- recovery/degraded policy;
-- evidence/support metadata.
+- inspect allowed local metadata read-only;
+- generate a candidate setup;
+- validate the candidate;
+- show intended mutations before applying;
+- never silently edit game/provider files outside declared approved paths.
 
-**Invariants**
+**Manual path**
 
-- editor cannot create schema-invalid profile;
-- dangerous raw fields live behind expert mode and still validate;
-- unsupported combinations show reasons;
-- defaults are conservative/fail-closed;
-- profile evidence is not editable into `Supported` without matrix validation.
+- expose typed fields and tests;
+- validate continuously;
+- preserve previous valid setup until Save commits transactionally;
+- do not grant arbitrary script execution by default.
 
 **Done when**
 
-A complete profile can be created/validated without direct JSON editing.
-
-**Suggested commit**
-
-`feat: implement P6-PROFILE-01 profile editor model`
+Both an automatically generated fixture setup and a manually edited fixture setup compile into the same validated runtime contract, with all invalid/unsafe combinations rejected.
 
 ---
 
-## P6-UI-01 — Profile/catalog/session management UI
+## P6-UI-01 — Game library, Player, Seat, and two-player setup UI
 
 **State:** BLOCKED
 
 **Goal**
 
-Let users manage Seats, applications, compatibility profiles, and session presets with preview/validation.
+Implement the normal product flow without exposing internal schema jargon.
 
 **Depends on**
 
 - P6-CATALOG-01
 - P6-PROFILE-01
 - P6-PREFLIGHT-01
-- P4-IPC-01
-- P4-CTRL-01/P4-CTRL-02
 
-**Screens/workflows**
+**Primary flow**
 
-- application catalog refresh;
-- target profile create/clone/edit;
-- compatibility profile selection/edit;
-- Seat-to-target session composition;
-- Management Seat selector, default Seat 1, including its primary-display control-console placement preview;
-- guided inactive monitor/input/controller/audio identify-test-assign workflow reached from `Reconfigure`;
-- validation and stale-reference repair;
-- plan preview/risk confirmation;
-- import/export;
-- compatibility evidence/limitations;
-- launch/history/diagnostics.
+```text
+Games
+ -> choose title
+ -> Seat 1 / Seat 2 / Both
+ -> choose Player(s)
+ -> if same game: resolve/create Two-player setup
+ -> preflight only necessary requirements/warnings
+ -> Play
+```
 
-**Invariants**
+**Player UI**
 
-- UI never edits active immutable plan; `Reconfigure` must first complete P4-CTRL-02 verified return-to-Windows and then edit inactive configuration;
-- unsaved changes/version conflict handled;
-- destructive delete checks references;
-- provider scan is cancelable/bounded;
-- UI reflects host and disk results, not optimistic assumptions.
+- create/rename/remove lightweight local Player;
+- optional avatar;
+- recent games/Seat preference;
+- provider account reference selection where supported;
+- never ask HydraSeat to store a provider password.
 
-**Automated tests**
+**Seat settings**
 
-- view-model validation/state transitions;
-- stale/missing profile references;
-- provider refresh cancel/error;
-- import conflict;
-- DPI/accessibility/localization readiness.
+Hardware configuration remains separately accessible and can contain unset items. `Set later` is valid until a selected game actually requires the device.
 
 **Done when**
 
-A user can create and launch the MVP profiles without hand-editing files.
-
-**Suggested commit**
-
-`feat: implement P6-UI-01 profile manager UI`
+A non-developer can discover/add a game, create two Players, select both Seats, resolve same/different-game flows, and produce a validated Play plan without editing JSON.
 
 ---
 
-## P6-CLI-01 — Profile/catalog/plan command-line tools
+## P6-CLI-01 — Expert catalog/setup/plan command-line tools
 
 **State:** BLOCKED
 
 **Goal**
 
-Provide scriptable operations that share production libraries with the UI.
+Provide deterministic diagnostic/admin tooling without making CLI the normal product workflow.
 
 **Depends on**
 
-- P6 schemas/catalog/plan/preflight
+- P6-PLAN-01
+- P6-PROFILE-01
 
 **Commands**
 
-```text
-hydra_profile validate <file>
-hydra_profile migrate <file> --dry-run
-hydra_profile export <session-id>
-hydra_catalog refresh/list/show
-hydra_plan compile <session-profile> --json
-hydra_plan explain <plan-hash>
-hydra_hostctl start/stop/status/export-diagnostics
-```
-
-**Invariants**
-
-- machine JSON output stable/versioned;
-- no prompts in noninteractive mode;
-- exit codes distinguish invalid/unsupported/runtime/error;
-- CLI cannot bypass confirmation/policy without explicit expert flag and planner policy;
-- no duplicate parser/business logic.
+Read/list/validate/export catalog, Player metadata, TwoPlayerSetup, and compiled plan in human/JSON forms with redaction.
 
 **Done when**
 
-CI and support workflows can reproduce UI actions headlessly.
-
-**Suggested commit**
-
-`feat: implement P6-CLI-01 profile and launch CLI`
+CLI output round-trips through stable schemas, never exposes credentials, and is sufficient for issue diagnostics/CI fixtures.
 
 ---
 
-## P6-IMPORT-01 — Portable import/export and redaction
+## P6-IMPORT-01 — Portable import/export, provenance, and redaction
 
 **State:** BLOCKED
 
 **Goal**
 
-Share profiles/evidence without leaking machine-private data or silently binding wrong devices.
+Allow users/community to share setup knowledge without sharing local secrets or machine-specific identity blindly.
 
 **Depends on**
 
 - P6-SCHEMA-01
-- P6-MIG-01
-- P6-CLI-01
+- P6-PROFILE-01
 
-**Bundle contents**
+**Requirements**
 
-- versioned manifest;
-- selected profiles;
-- optional compatibility evidence;
-- dependency/provider/backend requirements;
-- portable matching hints;
-- redaction report;
-- hashes/signature placeholder.
-
-**Import behavior**
-
-- validate manifest/schema/hash;
-- preview conflicts and machine-specific unresolved identities;
-- require user mapping for displays/input/audio/controllers;
-- never auto-map by friendly name alone;
-- transactional write with backup;
-- distinguish trusted local, signed ecosystem, and untrusted bundle.
-
-**Automated tests**
-
-- deterministic export;
-- redaction of usernames/local paths/tokens;
-- tampered/unknown version;
-- ID conflicts;
-- partial mapping/cancel;
-- migration during import.
+- versioned package/schema;
+- source/provenance metadata;
+- no credentials/tokens/cookies;
+- no Player display names by default;
+- personal absolute paths redacted or represented with typed variables;
+- device identities remapped through explicit local selection;
+- imported setup is validated before use;
+- imported data cannot silently execute arbitrary code/download binaries.
 
 **Done when**
 
-A profile can move to another PC and clearly request identity remapping without leaking private data.
-
-**Suggested commit**
-
-`feat: implement P6-IMPORT-01 profile bundles`
+A setup can be exported, privacy-reviewed, imported on another fixture machine, remapped, validated, and compiled without exposing the source machine's private data.
 
 ---
 
-## P6-REG-01 — Launcher/profile regression fixture suite
+## P6-REG-01 — Game/provider/setup regression fixture suite
 
 **State:** BLOCKED
 
 **Goal**
 
-Prevent provider/profile/schema changes from silently breaking supported configurations.
+Prevent provider metadata and setup-schema changes from silently breaking known game-library/two-player behavior.
 
 **Depends on**
 
-- all Phase 6 implementation packets
+- P6-IMPORT-01
 
-**Create/modify**
+**Corpus**
 
-- sanitized provider metadata fixtures;
-- profile schema/migration corpus;
-- compiled plan snapshots;
-- fake runtime/provider integration suite;
-- compatibility matrix validation.
-
-**Coverage**
-
-- old/current/future schema;
-- provider client absent/update/moved library;
-- application version/path change;
-- x86/x64 target;
-- required backend unavailable;
-- user-assisted audio route;
-- multi-monitor Seat;
-- recovery and import/export.
+- multiple provider fixtures;
+- duplicate/moved/uninstalled games;
+- Player moves between Seats;
+- same-game auto/manual setup fixtures;
+- provider offline/missing cases;
+- protection metadata;
+- malformed/imported package cases;
+- Unicode/path edge cases.
 
 **Done when**
 
-Every supported profile/provider path has a stable regression fixture and expected plan.
-
-**Suggested commit**
-
-`test: implement P6-REG-01 launcher profile regressions`
+The fixture corpus runs deterministically on CI and any intentional behavior/schema change requires an explicit migration/update.
 
 ---
 
@@ -932,22 +529,28 @@ Every supported profile/provider path has a stable regression fixture and expect
 
 **State:** BLOCKED
 
-**Closure checklist**
+**Goal**
 
-- schemas/version/migrations stable;
-- custom executable and at least Steam path validated;
-- plan compiler/preflight immutable and side-effect-free;
-- profile editor/manager/CLI share libraries;
-- import/export redaction and remapping proven;
-- runtime starts only compiled plan hashes;
-- provider/update/path errors degrade visibly;
-- regression corpus covers supported MVP profiles;
-- Phase 7 receives stable session/profile/catalog APIs.
+Verify the repeatable game-first data/model layer, including one lawful same-title real demonstration.
+
+**Depends on**
+
+- P6-UI-01
+- P6-REG-01
+
+**Required acceptance**
+
+- separate Seat/Player/Game/TwoPlayerSetup persistence;
+- Player swaps Seats cleanly;
+- automatic installed-game discovery plus manual EXE fallback;
+- no HydraSeat credential storage;
+- same-game setup auto path and guided manual path;
+- one real same-title/two-instance run where game/provider rules permit it;
+- one Seat instance can exit/change while the other continues under D-042;
+- import/export privacy review;
+- x64/x86/provider regression tests;
+- dedicated Phase-close review.
 
 **Done when**
 
-Phase 6 is complete and Phase 7 becomes current.
-
-**Suggested commit**
-
-`docs: close Phase 6 launcher and profile manager`
+A user can repeatably launch different or lawfully same games through the Game/Player/Seat model without developer JSON editing and without widening HydraSeat into a provider/DRM bypass tool.

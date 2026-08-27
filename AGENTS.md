@@ -3,6 +3,7 @@
 OpenAI Codex and other repository agents must follow the canonical project instructions in:
 
 - [`.agents/AGENTS.md`](.agents/AGENTS.md)
+- [`docs/PRODUCT_V1.md`](docs/PRODUCT_V1.md)
 - [`docs/implementation/DECISIONS.md`](docs/implementation/DECISIONS.md)
 - [`docs/implementation/README.md`](docs/implementation/README.md)
 - [`docs/implementation/STATUS.md`](docs/implementation/STATUS.md)
@@ -34,4 +35,4 @@ The second command produces the preferred packet-scoped Codex prompt.
 
 ## Product boundary
 
-HydraSeat is a Seat-first, multi-monitor Windows local gaming multiseat framework. It does not pursue anti-cheat, DRM, protected-process, credential, or security-product bypass. Controlled HydraSeat-owned probes precede third-party process work. Unsupported capabilities fail closed, and recovery is implemented and tested alongside risky mutations.
+HydraSeat v1 is a two-Seat, game-first Windows local gaming multiseat product for households that want to use the spare performance of one capable gaming PC instead of buying a second complete desktop solely for simultaneous local play. Seat hardware, Player identity, Game identity, Two-player setup, and Runtime Session are separate concepts. One Seat may stop/change games while the other continues. v1 uses a minimal idle Seat Launcher rather than a general independent desktop shell, is offline-first and least-privilege, and reports compatibility as transparent evidence rather than an official certification badge. Same-game multi-instance automation is allowed only where the game/provider permit it; protected-title attempts require explicit warnings and never imply anti-cheat safety. HydraSeat does not pursue anti-cheat, DRM, protected-process, credential, launcher/account, single-instance, or security-product bypass. Unsupported capabilities fail closed, and recovery is implemented and tested alongside risky mutations.

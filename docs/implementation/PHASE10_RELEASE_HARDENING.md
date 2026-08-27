@@ -1,216 +1,161 @@
-# Phase 10 — Release Hardening and 1.0 Readiness
+# Phase 10 — v1 Release Hardening
 
 ## Phase objective
 
-Convert the validated product into a supportable release with explicit platform scope, measurable performance and reliability, secure defaults, signed/reproducible artifacts, complete license/provenance information, onboarding and recovery documentation, and release gates that cannot be waived by optimistic wording.
+Qualify HydraSeat v1 as a real two-player Windows gaming product for people who want to use the spare performance of one capable PC rather than buy a second complete desktop solely for simultaneous local gaming.
 
-Phase 10 does not add broad new architecture. New functionality discovered here becomes a separate packet/phase or remains experimental.
+The release gate is the complete user journey and evidence, not a large number of officially certified games.
 
-## Phase exit gate
+## v1 release gate
 
-A production release is approved only when:
+Release candidate/GA must prove at least:
 
-1. supported Windows/architecture/hardware/profile scope is frozen and documented;
-2. release build, tests, installer, signing, SBOM, and provenance are reproducible;
-3. performance and latency budgets pass on reference topologies;
-4. compatibility regression matrix passes or failures are explicitly withdrawn;
-5. security/privacy/threat-model findings are resolved according to policy;
-6. reliability/soak/fault/reboot/update/rollback campaigns pass;
-7. clean-machine onboarding and emergency recovery are documented and tested;
-8. diagnostics/support workflows work without exposing private data;
-9. all third-party licenses, notices, and project license/contribution terms are resolved;
-10. release candidate runs for the declared stabilization period with no unresolved release blocker;
-11. rollback/uninstall restores normal Windows behavior;
-12. version/support/maintenance policy is published.
-
-## Dependency graph
-
-```text
-P8-CLOSE-01 + P9-CLOSE-01 + validated P5 compatibility scope
-                          |
-       +------------------+------------------+
-       |                  |                  |
- P10-SCOPE-01       P10-PERF-01        P10-SEC-01
-       |                  |                  |
-       +-> P10-COMPAT-01  +-> P10-REL-01 <-+
-                |                 |
-          P10-UX-01       P10-PKG-01/P10-LIC-01
-                |                 |
-                +-------> P10-RC-01 -> P10-GA-01 -> P10-MAINT-01
-```
+- exactly two supported active Seats;
+- clean Windows install/repair/uninstall;
+- optional first-run Seat wizard with `Set later`;
+- real two-display/two-input physical acceptance;
+- objective tested zero-bleed evidence;
+- separate controller/audio routing for the declared scenarios;
+- two different real games concurrently;
+- at least one lawful real same-title/two-instance demonstration where game/provider rules permit it;
+- Game-first main UI and Player profiles;
+- local installed-game discovery plus manual EXE fallback;
+- automatic and guided manual TwoPlayerSetup paths;
+- one Seat can exit/change games while the other continues;
+- minimal idle Seat Launcher;
+- both Seats end or explicit Return to Windows -> verified ordinary Windows restore;
+- watchdog/crash/emergency recovery;
+- offline core operation;
+- local-first compatibility results + optional redacted community sharing;
+- compatibility/setup data refresh independent from core program update;
+- user-approved executable/runtime/driver updates;
+- least privilege;
+- measured resource/performance budgets;
+- security/privacy/dependency review;
+- release artifacts/checksums/SBOM/provenance as practical;
+- project license/contribution terms resolved before describing the GA release as open source.
 
 ---
 
-## P10-SCOPE-01 — Freeze supported platform and product scope
+## P10-SCOPE-01 — Freeze supported platform and v1 product scope
 
 **State:** BLOCKED
 
 **Goal**
 
-Define exactly what 1.0 supports before final hardening.
+Freeze what HydraSeat v1 actually promises so release testing is finite and honest.
 
 **Depends on**
 
-- validated compatibility/hardware matrix;
-- Phase 8 installer/support constraints;
-- Phase 9 extension trust state.
+- P9-CLOSE-01
 
-**Freeze fields**
+**Freeze**
 
-- Windows editions/build ranges;
-- x64/x86 target support;
-- CPU/GPU/driver families and minimums where relevant;
-- physical display count/topology/DPI constraints;
-- input/controller/audio device classes;
-- supported/experimental/blocked profiles;
-- required/optional components and versions;
-- virtual display support status;
-- Seat count and process/window limits;
-- install/update/startup modes;
-- unsupported protected/anti-cheat scope;
-- known limitations.
+- maximum two active Seats;
+- supported Windows versions/build families;
+- supported CPU/GPU/architecture baseline;
+- physical-display requirement and optional components;
+- declared input/controller/audio compatibility paths;
+- initial provider/game discovery scope;
+- game-only product boundary;
+- minimal Seat Launcher boundary;
+- protected-title experimental policy;
+- offline/network/update behavior;
+- installer/elevation model.
 
-**Implementation skeleton**
+**Explicit non-goals remain**
 
-1. generate proposed scope from compatibility/hardware/component matrices;
-2. identify entries lacking fresh evidence;
-3. run or remove claims;
-4. lock matrix schema and support level for release branch;
-5. make installer/preflight enforce the same scope;
-6. publish explicit unsupported behavior and upgrade path.
-
-**Invariants**
-
-- README/installer/UI/profile planner derive from the same scope data;
-- no “Windows 10/11 supported” without tested build range;
-- experimental extensions/profiles cannot silently enter production scope;
-- missing hardware evidence removes or downgrades claim;
-- future broader scope does not block a smaller honest 1.0.
+- N-Seat v1 support;
+- general independent Windows desktops/taskbars/clipboard/wallpaper;
+- VM/RDP/streaming requirement;
+- universal same-game multi-instance;
+- anti-cheat/DRM/account/launcher/single-instance bypass;
+- anti-cheat safety certification;
+- mandatory cloud account/telemetry;
+- compatibility with every game.
 
 **Done when**
 
-One machine-readable release-scope manifest drives docs, installer, preflight, and regression selection.
-
-**Suggested commit**
-
-`docs: implement P10-SCOPE-01 release support scope`
+One release-scope document/machine-readable matrix defines every v1 supported/experimental/deferred platform boundary and all other release packets test that same scope.
 
 ---
 
-## P10-PERF-01 — Performance, latency, resource, and scalability qualification
+## P10-PERF-01 — Performance, latency, resource, and two-workload qualification
 
 **State:** BLOCKED
 
 **Goal**
 
-Measure and optimize end-to-end overhead against declared budgets without weakening correctness.
-
-**Depends on**
-
-- production host/shell/adapters/metrics;
-- P10-SCOPE-01 reference topologies.
-
-**Create/modify**
-
-- benchmark executables and scenarios;
-- repeatable reference topology manifest;
-- performance report generator;
-- CI smoke thresholds and scheduled hardware benchmark procedure;
-- profiling documentation.
-
-**Measurements**
-
-- physical event to host observation;
-- route enqueue/dequeue/transport/apply/API query;
-- cross-Seat bleed/drop/queue high-water;
-- controlled and game input latency p50/p95/p99/max;
-- host/watchdog/UI/shell CPU and memory idle/active;
-- handle/thread/process count and growth;
-- window/display reaction time;
-- audio latency/route delay where supported;
-- controller polling/response/vibration delay;
-- startup/stop/rollback duration;
-- 2/3/4 Seat scaling if in scope.
-
-**Invariants**
-
-- correctness/zero-bleed failure cannot be traded for lower latency silently;
-- benchmark clock/method calibrated and versioned;
-- warmup/outlier/sample count documented;
-- unsupported/missing stage is not recorded as zero;
-- traces bounded and privacy-limited;
-- regressions have thresholds and owners.
-
-**Acceptance**
-
-- meet budgets in master roadmap or update budget with evidence/scope decision;
-- no unbounded growth over soak;
-- no input callback blocking regression;
-- release notes include measured reference results and limits.
-
-**Done when**
-
-Performance report passes for every release reference topology/profile.
-
-**Suggested commit**
-
-`perf: complete P10-PERF-01 release qualification`
-
----
-
-## P10-COMPAT-01 — Full compatibility and regression matrix
-
-**State:** BLOCKED
-
-**Goal**
-
-Run every supported profile/topology/backend/provider combination against the release candidate and detect withdrawn/regressed support.
+Measure whether sharing one PC still leaves useful gaming performance instead of merely proving functional isolation.
 
 **Depends on**
 
 - P10-SCOPE-01
-- compatibility matrix and fixture suite;
-- stable installer/build.
+- P5-MET-01
+- P8-SOAK-01
 
-**Matrix dimensions**
+**Measure**
 
-- supported Windows builds;
-- x64/x86 target architecture;
-- GPU/display-driver families;
-- display topology/DPI/mode;
-- input/controller/audio devices;
-- provider/client versions;
-- profile/backend/extension versions;
-- install/update source state;
-- start/stop/reconnect/restart/reboot;
-- safe mode/reset/uninstall.
+- HydraSeat host/watchdog/UI/Seat UI idle and active CPU/memory/handle/thread footprint;
+- input routing/receiver latency p50/p95/p99;
+- queue/drop/loss;
+- launch/stop/rollback times;
+- two concurrent game CPU/GPU/memory pressure;
+- frame-time/FPS impact where reproducibly measurable;
+- audio/controller routing overhead where applicable;
+- long-run growth/leak indicators.
 
-**Implementation skeleton**
+**Product interpretation**
 
-1. generate test plan from release-scope + matrix data;
-2. run automated controlled fixtures in CI;
-3. run physical/game cases using standardized runner;
-4. record pass/fail/evidence timestamp;
-5. compare with prior release and flag regression;
-6. fix, downgrade, block, or withdraw affected entry;
-7. ensure docs/preflight/install scope updates automatically.
-
-**Invariants**
-
-- missing result is not pass;
-- stale evidence expires according to policy;
-- game update invalidates exact-version support until retested;
-- extension/backend update recorded;
-- protected profile remains blocked/observation-only;
-- matrix data is machine-validated.
+HydraSeat cannot promise that every PC can run two games. Release docs should explain that the benefit applies when the user's PC has sufficient headroom for the selected workloads and should expose evidence/diagnostics rather than a magical minimum-spec claim unsupported by measurements.
 
 **Done when**
 
-All release-scope entries have current passing evidence or are removed/downgraded.
+Reference hardware classes have repeatable measurements, pass/fail budgets, and clearly documented conditions under which the two-player use case remains practical.
 
-**Suggested commit**
+---
 
-`test: complete P10-COMPAT-01 release matrix`
+## P10-COMPAT-01 — Full v1 compatibility and regression matrix
+
+**State:** BLOCKED
+
+**Goal**
+
+Run the complete release matrix and publish evidence without creating a fake universal `Supported` badge.
+
+**Depends on**
+
+- P10-SCOPE-01
+- P9-CLOSE-01
+
+**Matrix dimensions**
+
+- Windows/build;
+- HydraSeat version;
+- x64/x86 target path where relevant;
+- provider/game/version;
+- different-game/same-game scenario;
+- input/controller/audio/display compatibility path;
+- two-Seat hardware topology;
+- protection state;
+- install/update/offline mode;
+- recovery cases.
+
+**Required product scenarios**
+
+- two different real non-protected games;
+- at least one permitted same-title/two-instance setup;
+- Player swap between Seats;
+- Seat-local exit/change while other game continues;
+- missing optional hardware and requirement-aware preflight;
+- device/display/audio/controller reconnect;
+- protected-title warning/experimental attempt path without bypass;
+- offline cached catalog operation;
+- clean final rollback.
+
+**Done when**
+
+Release evidence identifies exactly what was tested, with success/failure/sample/limitations, and no README/UI wording implies more than the matrix supports.
 
 ---
 
@@ -220,227 +165,134 @@ All release-scope entries have current passing evidence or are removed/downgrade
 
 **Goal**
 
-Review the complete product boundary and fix release-blocking security/privacy issues.
+Review the complete installed product, especially process interposition, recovery, privilege, community data, provider integration, and update boundaries.
 
 **Depends on**
 
-- production runtime, IPC, watchdog, broker, installer/update, SDK/package system;
-- P9 extension threat model.
+- P10-SCOPE-01
+- P9-SEC-01
+- P8-CLOSE-01
 
-**Threat areas**
+**Threats**
 
-- local IPC authentication/spoof/replay/flood;
-- adapter/shim/DLL search/load hijack;
-- package/update/signature/catalog compromise;
-- elevated broker abuse/path/reparse/TOCTOU;
-- driver/device-control misuse;
-- profile/import/provider metadata injection;
-- process/window ownership confusion/PID/HWND reuse;
-- crash journal/rollback action tampering;
-- extension escape/data exfiltration;
-- diagnostics/raw input/privacy;
-- startup persistence/uninstall residue;
-- untrusted game/launcher process interactions;
-- denial of service and resource exhaustion.
-
-**Create/modify**
-
-- `docs/security/PRODUCT_THREAT_MODEL.md`;
-- security requirements/checklist;
-- parser/protocol fuzz targets;
-- static analysis/sanitizer where applicable;
-- dependency/SBOM/vulnerability scan;
-- code-signing/runtime verification;
-- disclosure and security-update policy.
-
-**Invariants**
-
-- no claim of sandbox where Windows controls do not provide one;
-- normal operation standard-user;
-- privileged operations narrow and authenticated;
-- safe defaults disable experimental/invasive components;
-- no secrets/tokens in logs/crash bundles;
-- critical/high unresolved finding blocks release;
-- medium accepted risk documented with scope/mitigation.
+- malformed local/provider/community metadata;
+- privilege-broker abuse;
+- path/DLL search/reparse attacks;
+- update/catalog tamper/rollback;
+- process/PID/HWND reuse;
+- named-pipe/IPC spoof/replay/flood;
+- adapter misuse outside declared target scope;
+- community setup attempting code execution;
+- diagnostic/privacy exfiltration;
+- installer/uninstaller collateral modification;
+- unsafe automatic activation/recovery race;
+- protected-game experimentation misrepresented as bypass/safety.
 
 **Done when**
 
-Threat models are current, fuzz/static/dependency checks run, and critical/high findings are resolved or affected scope removed.
-
-**Suggested commit**
-
-`security: complete P10-SEC-01 product hardening`
+Critical/high findings are fixed or the affected capability is removed/deferred from v1, with negative tests and a public security/reporting policy ready.
 
 ---
 
-## P10-PRIV-01 — Privacy, data retention, and optional telemetry policy
+## P10-PRIV-01 — Privacy, data retention, and optional community-sharing policy
 
 **State:** BLOCKED
 
 **Goal**
 
-Define and implement privacy-safe diagnostics and any optional telemetry before release.
+Make the local-first privacy model explicit and testable across logs, diagnostics, compatibility evidence, Players, provider references, and updates.
 
 **Depends on**
 
-- diagnostics/metrics/extension exporter/update systems;
-- P10-SEC-01.
-
-**Data inventory**
-
-- hardware stable IDs and friendly metadata;
-- application/profile/provider/version;
-- process/window titles/paths;
-- input event classes/key codes;
-- audio/controller/display topology;
-- error/crash/metrics/update events;
-- extension/package inventory;
-- user-provided descriptions.
+- P9-CLOSE-01
+- P8-DIAG-01
 
 **Policy**
 
-- telemetry off by default unless a later explicit product decision changes it;
-- diagnostics local by default;
-- user preview/export/delete controls;
-- raw keystroke/text never collected by telemetry;
-- key codes only in explicit local diagnostic mode;
-- retention/rotation per data category;
-- network endpoints/data schema/version/public policy if telemetry exists;
-- no advertising/behavior profiling.
-
-**Automated/manual tests**
-
-- redaction corpus;
-- opt-in/opt-out/delete;
-- network disabled/offline behavior;
-- bundle preview;
-- extension exporter permissions;
-- update check versus telemetry separation;
-- privacy policy matches actual fields.
+- no mandatory HydraSeat cloud account;
+- no community compatibility upload by default without explicit opt-in;
+- preview exact redacted JSON before sharing;
+- no provider passwords/tokens/cookies in HydraSeat storage;
+- no raw typed text in default traces/reports;
+- no Player display names/account IDs/personal paths in community evidence by default;
+- retention/rotation/delete/export behavior documented;
+- optional network checks/submission can be disabled;
+- local cache/game/setup/runtime continues offline.
 
 **Done when**
 
-A machine-readable data inventory and user documentation match implementation, and no undeclared network/data flow exists.
-
-**Suggested commit**
-
-`privacy: implement P10-PRIV-01 data policy`
+Privacy fixtures, UI settings/preview/delete/export flows, and documentation agree on what is stored locally, what may leave the machine, and how the user controls it.
 
 ---
 
-## P10-REL-01 — Reliability and long-duration release campaign
+## P10-REL-01 — Long-duration release reliability campaign
 
 **State:** BLOCKED
 
 **Goal**
 
-Run release-level soak, fault, reboot, recovery, and resource-leak tests beyond Phase 8 qualification.
+Repeat the complete installed v1 lifecycle under realistic duration and failure conditions.
 
 **Depends on**
 
-- P8-SOAK-01;
-- release candidate build/scope;
-- P10-PERF-01 instrumentation.
+- P10-PERF-01
+- P10-COMPAT-01
+- P10-SEC-01
 
-**Minimum campaign**
+**Campaign**
 
-- 1000 controlled start/stop cycles;
-- 250 supported MVP start/stop cycles;
-- 72-hour idle host/watchdog/tray/shell;
-- 24-hour active two-Seat supported session;
-- repeated target/UI/shell/host/watchdog kills;
-- input/controller/audio/display hot-plug loops;
-- provider/client restart/update simulation;
-- reboot/logoff/safe-mode/startup;
-- installer repair/update rollback/uninstall;
-- low disk, permission failure, corrupt journal/profile/extension;
-- network unavailable for optional catalog/update;
-- emergency reset at random transition stages.
-
-**Pass criteria**
-
-- no orphan process/window/overlay/device/audio/display route;
-- no unbounded memory/handle/thread/file/log growth;
-- no silent cross-Seat fallback;
-- recovery budget met or explicit recovery-required with successful reset;
-- every injected fault produces diagnosable result;
-- normal Windows usable after final uninstall/reset.
+- repeated install/repair/update/rollback/uninstall;
+- repeated two-Seat start/Seat-stop/change/restart/global-return;
+- long simultaneous real-game session;
+- UI/Seat UI/target/host/watchdog fault cases;
+- sign-out/restart/shutdown;
+- device/display/controller/audio reconnect;
+- network unavailable/catalog unavailable;
+- disk-full/permission/corrupt-state fixtures;
+- emergency reset;
+- memory/handle/thread/log growth measurement.
 
 **Done when**
 
-The campaign report has no unresolved release blocker and resource trends remain within thresholds.
-
-**Suggested commit**
-
-`test: complete P10-REL-01 release reliability campaign`
+The release campaign meets the published reliability/resource budgets and every failure reaches a known safe/recovery state without unexplained collateral mutation.
 
 ---
 
-## P10-UX-01 — Clean-machine onboarding, help, accessibility, and recovery docs
+## P10-UX-01 — Clean-machine onboarding, help, accessibility, and recovery documentation
 
 **State:** BLOCKED
 
 **Goal**
 
-Make the supported product usable from install through recovery without relying on development knowledge.
+Make the full product usable by someone who does not know Raw Input, CMake, IAT hooks, display APIs, or HydraSeat packet IDs.
 
 **Depends on**
 
-- frozen scope;
-- installer/profile manager/shell/reset/diagnostics;
-- P7-I18N-01 and P7-A11Y-01.
+- P7-CLOSE-01
+- P8-INST-01
+- P10-COMPAT-01
 
-**User journey**
+**Required journey docs/UI**
 
-1. install and choose startup/optional components;
-2. detect hardware and explain stable device identification;
-3. compose multi-monitor Seats;
-4. test/flash each input/controller/audio/display;
-5. select/import supported profiles;
-6. preview risk/backend requirements;
-7. run guided hardware acceptance;
-8. start/monitor/stop session;
-9. respond to disconnect/degraded/recovery-required state;
-10. export diagnostics/reset/update/uninstall.
-
-**Deliverables**
-
-- onboarding wizard and skip/resume;
-- in-app help/error remediation links;
-- quick start and advanced architecture guide;
-- physical acceptance instructions;
-- compatibility matrix navigation;
-- emergency reset/recovery card;
-- installer/update/uninstall guide;
-- accessibility/localization review for `en-US`, `ko-KR`, and `zh-CN`;
-- maintained `README.md`, `README.ko.md`, and `README.zh-CN.md` with language-switch links and release-status parity;
-- screenshots/videos only when they match current UI.
-
-**Invariants**
-
-- unsupported profile cannot be presented as recommended;
-- warning identifies exact mutation/recovery;
-- no false “isolated/active” success before host verification;
-- help works offline for core/recovery;
-- emergency reset instructions visible without active session;
-- docs generated/versioned with release;
-- English, Korean, and Simplified Chinese documentation agree on product goal, current support status, recovery behavior, commands, license state, and release version; machine-readable identifiers remain unchanged across translations.
-
-**Manual tests**
-
-- new user on clean supported machine in `en-US`, `ko-KR`, and `zh-CN`;
-- keyboard-only/high-DPI/high-contrast flows;
-- failure/recovery task completion;
-- uninstall/data export;
-- documentation link/version accuracy.
+- what HydraSeat is and why it exists: share spare PC performance instead of buying a second complete desktop;
+- hardware/resource expectations;
+- install/first launch;
+- optional Seat setup and `Set later`;
+- create/select Players;
+- choose a game and Seat 1/Seat 2/Both;
+- automatic/manual same-game TwoPlayerSetup;
+- protected/experimental warning meaning;
+- community compatibility percentage meaning;
+- one player exits/changes while the other continues;
+- Return to Windows;
+- recovery/reset;
+- offline behavior;
+- program update approval versus data catalog refresh;
+- uninstall.
 
 **Done when**
 
-A new tester can complete the supported setup/session/reset without developer assistance.
-
-**Suggested commit**
-
-`docs: implement P10-UX-01 release onboarding`
+Clean-machine usability acceptance in the release locales completes the main journey and common failure/recovery paths without developer assistance.
 
 ---
 
@@ -450,41 +302,33 @@ A new tester can complete the supported setup/session/reset without developer as
 
 **Goal**
 
-Resolve the repository's undeclared license before production release and verify all included code/assets/dependencies are distributable.
+Resolve the legal gate currently preventing the repository/release from being described as open source.
 
 **Depends on**
 
-- project owner/legal decision;
-- complete dependency/component inventory;
-- clean-room provenance records.
+- P10-SCOPE-01
+- clean-room/dependency inventory
 
-**Deliverables**
+**Required decisions**
 
-- tracked `LICENSE` file;
-- contribution/license policy or DCO/CLA decision;
-- `THIRD_PARTY_NOTICES` with exact component/version/license/source;
-- asset/font/icon/sample/profile provenance;
-- SBOM license fields;
-- binary redistribution terms;
-- extension/package license requirements;
-- README/badge/package metadata consistency.
+- choose and add the project license only through an explicit project/user decision;
+- define contribution terms/process and whether a CLA/DCO/other attestation is used;
+- audit bundled/source-linked dependencies and compatible licenses;
+- produce third-party notices/attribution where required;
+- confirm community profile/setup/evidence contribution licensing/provenance;
+- confirm game artwork/icon handling does not cause redistribution problems;
+- preserve clean-room boundaries for proprietary/unlicensed references.
 
 **Invariants**
 
-- no MIT or other badge without matching tracked license;
-- no copied code with unclear/incompatible terms;
-- GPL/copyleft boundary decisions explicit;
-- proprietary/unlicensed references remain behavior-only;
-- source/binary packages include required notices;
-- release is blocked until ownership/permission is clear.
+- do not invent/assume a project license automatically;
+- do not call the repository/release legally open source before this packet passes;
+- no unlicensed/GPL-incompatible/proprietary source copied into the chosen core license path;
+- third-party binaries/data have explicit redistribution/trust treatment.
 
 **Done when**
 
-A license/provenance review finds no unresolved redistribution blocker.
-
-**Suggested commit**
-
-`legal: implement P10-LIC-01 license and notices`
+A reviewed project license/contribution/notices set is committed and the repository's public open-source description is legally aligned with it.
 
 ---
 
@@ -494,54 +338,28 @@ A license/provenance review finds no unresolved redistribution blocker.
 
 **Goal**
 
-Produce deterministic, verifiable release packages for each supported architecture/channel.
+Produce verifiable release artifacts from the tested release commit.
 
 **Depends on**
 
-- P8 signing/installer/update;
-- P10-LIC-01;
-- frozen release scope.
+- P10-LIC-01
+- P8-SIGN-01
+- P8-INST-01
 
 **Artifacts**
 
-- signed installer/package;
-- portable/developer bundle if supported;
-- application/adapter architecture layout;
-- symbols or private/public symbol policy;
-- source archive;
-- SHA-256 checksums;
-- SPDX/CycloneDX SBOM;
-- signed release/update manifest;
-- build provenance/commit/toolchain/dependency versions;
-- license/notices/docs/compatibility matrix.
-
-**Implementation skeleton**
-
-1. pin/record build toolchain/dependencies;
-2. clean checkout build;
-3. normalize generated timestamps/order where feasible;
-4. build/test/sign/package;
-5. verify package on clean machine;
-6. compare reproducibility within declared scope;
-7. scan contents for secrets/private paths/debug artifacts;
-8. publish checksums/SBOM/provenance with artifact.
-
-**Invariants**
-
-- exact commit and dirty state recorded;
-- release package contains only intended files;
-- optional components match manifests/hashes;
-- no signing secrets/logs;
-- artifact version consistent across binary/manifest/docs;
-- rollback package/previous version available according to policy.
+- installer/uninstaller/repair path;
+- application/runtime architecture files;
+- checksums;
+- SBOM;
+- source/revision/version metadata;
+- signatures/provenance where configured;
+- license/notices;
+- compatibility/setup seed catalog as a separate data artifact where used.
 
 **Done when**
 
-A clean release workflow produces installable, verifiable artifacts with complete provenance.
-
-**Suggested commit**
-
-`build: implement P10-PKG-01 release artifacts`
+A clean release build produces artifact hashes/provenance matching the declared source commit and installation smoke tests pass from those exact artifacts.
 
 ---
 
@@ -551,40 +369,28 @@ A clean release workflow produces installable, verifiable artifacts with complet
 
 **Goal**
 
-Define how real failures become reproducible fixes without overclaiming support.
+Define sustainable maintenance for a one-developer project and a community-driven compatibility catalog.
 
 **Depends on**
 
-- diagnostic bundle;
-- compatibility/release scope;
-- security/privacy policy.
+- P10-LIC-01
+- P9-CLOSE-01
+- P8-DIAG-01
 
-**Deliverables**
+**Process**
 
-- issue templates for hardware/profile/runtime/install/update/security;
-- diagnostic bundle instructions and privacy warning;
-- reproduction/evidence checklist;
-- severity and release-blocker policy;
-- compatibility regression/withdrawal process;
-- supported version and end-of-support policy;
-- security disclosure contact/process;
-- FAQ/known issues generated from matrix.
-
-**Invariants**
-
-- reports never request passwords/tokens/full memory dumps/raw private text by default;
-- protected/anti-cheat requests are triaged to policy, not bypass work;
-- compatibility entry can be downgraded/withdrawn quickly;
-- regression has owner/status/evidence;
-- support documents match active release.
+- bug/security/compatibility report templates;
+- redacted diagnostic/result attachments;
+- game/setup evidence requirements;
+- stale/broken compatibility cohort handling;
+- protected-game reports never reframed as safety claims;
+- setup/catalog withdrawal/revocation for unsafe/broken entries;
+- duplicate/community report triage;
+- maintainer capacity expectations and best-effort wording.
 
 **Done when**
 
-A tester can file a sanitized, reproducible issue and maintainers can map it to component/profile/matrix evidence.
-
-**Suggested commit**
-
-`docs: implement P10-SUP-01 support workflow`
+A contributor/user can report a reproducible issue or compatibility result without exposing sensitive information and the maintainer has a bounded triage/withdrawal workflow.
 
 ---
 
@@ -594,80 +400,53 @@ A tester can file a sanitized, reproducible issue and maintainers can map it to 
 
 **Goal**
 
-Create a release candidate only when every mandatory gate is evidenced and freeze new features during stabilization.
+Freeze a candidate and run the entire v1 acceptance matrix on the exact candidate artifacts.
 
 **Depends on**
 
-- P10 scope/perf/compat/security/privacy/reliability/UX/license/package/support packets;
-- all release-blocking Phase 8/9 packets.
+- P10-PKG-01
+- P10-REL-01
+- P10-UX-01
+- P10-SUP-01
+- P10-PRIV-01
 
-**RC checklist**
+**RC rule**
 
-- clean release branch/tag candidate;
-- full CI and artifact pipeline pass;
-- clean-machine installer/update/rollback/uninstall pass;
-- scope/matrix current;
-- performance/reliability/security/privacy reports approved;
-- license/notices/SBOM/provenance complete;
-- no critical/high issue or unknown rollback failure;
-- all user docs/version links match;
-- diagnostic/reset/support flow tested;
-- release notes list support, limitations, changes, migration, rollback;
-- feature freeze active except blocker fixes.
-
-**Stabilization period**
-
-Initial recommendation: at least 14 days and multiple external/independent testers on declared topologies. A shorter period requires an explicit documented release decision.
+No feature expansion after RC freeze unless required to fix a release-blocking defect; such a fix resets the affected validation matrix.
 
 **Done when**
 
-RC has no unresolved release blocker and all blocker fixes rerun affected/full gates.
-
-**Suggested commit**
-
-`release: prepare P10-RC-01 release candidate`
+The exact RC commit/artifacts pass installation, two-Seat physical/game lifecycle, recovery, offline/update, privacy/security, localization/accessibility, performance, and documentation gates with all known release blockers closed.
 
 ---
 
-## P10-GA-01 — General availability / 1.0 release
+## P10-GA-01 — General availability / v1 release
 
 **State:** BLOCKED
 
 **Goal**
 
-Publish a supportable release without overstating capability.
+Publish the tested v1 artifacts and truthful public product status.
 
 **Depends on**
 
-- P10-RC-01 stabilization complete.
+- P10-RC-01
+- P10-LIC-01
 
-**Release actions**
+**GA publish**
 
-- create signed/versioned tag;
-- publish verified artifacts/checksums/SBOM/provenance/source/notices;
-- publish release notes, compatibility matrix, known issues, rollback/uninstall instructions;
-- publish security/privacy/support/version policy;
-- verify update channel and fresh install;
-- retain prior rollback artifact;
-- monitor first-run issues and compatibility regressions;
-- do not silently expand support scope in announcement.
-
-**Post-release immediate validation**
-
-- download and verify public artifacts;
-- install/update/uninstall on clean supported machine;
-- run one supported two-Seat session and emergency reset;
-- validate documentation/download links;
-- verify no secret/internal debug path in artifacts;
-- confirm release/update manifests resolve correctly.
+- exact tested installer/artifacts/checksums/SBOM/provenance;
+- release notes and known limitations;
+- clear two-Seat/game-only scope;
+- physical/resource requirements and performance caveats;
+- compatibility evidence/catalog version;
+- protected/experimental policy;
+- recovery/uninstall docs;
+- license/contribution/security/support links.
 
 **Done when**
 
-The public release is reproducible, verifiable, installable, recoverable, and accurately scoped.
-
-**Suggested commit/tag**
-
-`release: HydraSeat 1.0.0`
+Published artifacts match the passing RC evidence and the public README/release page makes no broader compatibility, open-source, or anti-cheat-safety claim than the release evidence/legal state permits.
 
 ---
 
@@ -677,63 +456,58 @@ The public release is reproducible, verifiable, installable, recoverable, and ac
 
 **Goal**
 
-Define how the project remains reliable after 1.0.
+Define how the v1 branch is maintained and how post-v1 scope expansion is evaluated.
 
 **Depends on**
 
-- P10-GA-01.
+- P10-GA-01
 
-**Policy**
+**Policy topics**
 
-- supported release branches and duration;
-- security patch process;
-- Windows/game/provider/driver update retest triggers;
-- compatibility evidence expiry;
-- extension SDK deprecation/version policy;
-- telemetry/privacy change approval;
-- bugfix versus feature release gates;
-- database/profile/schema migrations;
-- nightly/scheduled matrix tests;
-- issue triage and regression withdrawal;
-- future phases such as additional Seats, sessions, platforms, or custom IDD require new packet plans.
+- patch/update support window;
+- Windows/game/provider regression re-test rules;
+- compatibility catalog refresh cadence/process;
+- emergency security/compatibility withdrawal;
+- data/schema migration support;
+- when a future third/fourth Seat, full desktop apps, virtual display driver, or binary extension SDK is worth reactivating;
+- one-developer scope/capacity constraints.
 
-**Invariants**
+**Decision rule**
 
-- maintenance release does not bypass release gates relevant to changed components;
-- compatibility claim can be withdrawn faster than a code release;
-- security/privacy change documented;
-- unsupported EOL version visible;
-- roadmap retains packet/evidence discipline.
+Post-v1 expansion must be justified by actual user benefit/evidence rather than by making the architecture generically larger.
 
 **Done when**
 
-Published maintenance policy and scheduled validation workflows exist.
-
-**Suggested commit**
-
-`docs: implement P10-MAINT-01 maintenance policy`
+Maintenance/retest/EOL and post-v1 decision rules are published and can be followed without destabilizing the v1 two-Seat product.
 
 ---
 
-## P10-CLOSE-01 — Master roadmap closure for 1.0
+## P10-CLOSE-01 — Master roadmap closure for v1
 
 **State:** BLOCKED
 
-**Closure checklist**
+**Goal**
 
-- GA release and post-release validation pass;
-- maintenance/security/support policy active;
-- release scope and compatibility matrix remain accurate;
-- no unresolved license/provenance blocker;
-- installer/update/reset/rollback verified from public artifacts;
-- performance/reliability/security/privacy evidence archived;
-- all phases/status/README/docs agree;
-- future work moved to new versioned roadmap packets rather than silently extending 1.0 scope.
+Record that the release actually satisfied the complete product contract.
+
+**Depends on**
+
+- P10-MAINT-01
+- P10-GA-01
+
+**Final verification**
+
+- the reason for the product and intended household user is clearly documented;
+- exactly two v1 Seats;
+- complete real game-first user journey;
+- independent Seat lifecycle;
+- physical zero-bleed evidence;
+- lawful same-game demonstration;
+- installer/recovery/offline/update/privacy/security/performance gates;
+- community evidence model without official-certification claims;
+- license/open-source legal gate resolved;
+- all README/roadmap/status/release claims match actual evidence.
 
 **Done when**
 
-The 1.0 roadmap is closed with public evidence and a new maintenance/future roadmap is initialized.
-
-**Suggested commit**
-
-`docs: close HydraSeat 1.0 implementation roadmap`
+A dedicated final review records that HydraSeat v1 is a usable, legally publishable, evidence-backed two-person local gaming product and moves remaining ambitions into a post-v1 roadmap rather than silently including them in 1.0.

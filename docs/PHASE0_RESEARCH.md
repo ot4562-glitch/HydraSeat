@@ -4,6 +4,8 @@ This document closes the remaining Phase 0 research task from `docs/ROADMAP.md` 
 
 The goal is not to add dependencies during Phase 0. The goal is to record which technologies fit HydraSeat's documented direction so later phases can proceed without repeating the same investigation.
 
+Current v1 product note: HydraSeat now targets exactly two active local gaming Seats for households that want to use spare performance from one capable PC instead of buying a second complete desktop. This research remains valid as historical technical input, but virtual-display drivers and broad N-Seat/general-desktop ambitions are no longer v1 critical-path requirements; `docs/PRODUCT_V1.md` and the current roadmap take precedence.
+
 ## Decision Summary
 
 | Technology | Phase 0 decision | Intended HydraSeat role |

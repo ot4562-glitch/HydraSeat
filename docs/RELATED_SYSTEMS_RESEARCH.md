@@ -11,6 +11,8 @@ This document records the systems studied for HydraSeat's Phase 3 input-isolatio
 
 The reference repositories used for this study were cloned outside the HydraSeat source tree under `C:\HydraSeat\references`. They are research inputs, not vendored dependencies. Proprietary software was studied only through public documentation and ordinary observable behavior.
 
+Current product interpretation: HydraSeat v1 is intentionally a two-Seat, game-only product for sharing the spare performance of one capable Windows gaming PC. Related systems may implement broader multiseat desktops or other techniques; those broader scopes are research context only and do not automatically become HydraSeat v1 requirements. `docs/PRODUCT_V1.md` and the current roadmap are authoritative.
+
 > Important: the HydraSeat repository does not contain a tracked `LICENSE` file. The README no longer presents the previous MIT badge as an established license. Until the project license is made explicit, no third-party source should be copied into HydraSeat. Architecture and clean-room implementation can continue, but direct code reuse must wait for a license decision and dependency audit.
 
 ## Studied revisions

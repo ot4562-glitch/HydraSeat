@@ -67,6 +67,63 @@ jobs:
         path: ${{ matrix.build_dir }}/raw-input-observed-${{ matrix.architecture }}.json
         if-no-files-found: error
 
+  p3-e-open-source-application:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up MSVC & CMake
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Clone pinned GLFW 3.5.1 source outside HydraSeat
+      shell: pwsh
+      run: git clone --depth 1 --branch 3.5.1 https://github.com/glfw/glfw.git "$env:RUNNER_TEMP\p3-e-glfw-src"
+
+    - name: Configure HydraSeat P3-E x64 artifacts
+      shell: pwsh
+      run: cmake -B build-p3e-ci -S . -A x64 -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build HydraSeat P3-E bridge and harness
+      shell: pwsh
+      run: >-
+        cmake --build build-p3e-ci --config Release --parallel
+        --target hydra_gate_c_external_bridge hydra_gate_c_external_harness
+
+    - name: Prepare pinned GLFW cursor target and import manifest
+      shell: powershell
+      run: >-
+        .\tools\prepare_p3_e_01_glfw.ps1
+        -SourceRoot "$env:RUNNER_TEMP\p3-e-glfw-src"
+        -BuildRoot "$env:RUNNER_TEMP\p3-e-glfw-build"
+        -EvidenceDirectory .\p3-e-evidence\prepared
+        -CMakePath cmake.exe
+        -DumpBinPath dumpbin.exe
+
+    - name: Install per-app Mesa software OpenGL for headless runner
+      uses: f3d-app/install-mesa-windows-action@1824e370ed7fb1795f5bc88fd1f6c81eb15d92bc # v1
+      with:
+        path: ${{ runner.temp }}\p3-e-glfw-build\tests\Release
+        version: 23.3.5
+
+    - name: Run real open-source application acceptance
+      shell: powershell
+      run: >-
+        .\tools\run_p3_e_01_glfw.ps1
+        -BuildManifest .\p3-e-evidence\prepared\glfw-build-manifest.json
+        -HarnessPath .\build-p3e-ci\gate-c\x64\hydra_gate_c_external_harness.exe
+        -BridgePath .\build-p3e-ci\gate-c\x64\hydra_gate_c_external_bridge.dll
+        -EvidenceDirectory .\p3-e-evidence\acceptance
+
+    - name: Upload P3-E open-source application evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: p3-e-glfw-acceptance
+        path: p3-e-evidence/
+        if-no-files-found: error
+
   gate-c-cross-architecture:
     runs-on: windows-latest
 

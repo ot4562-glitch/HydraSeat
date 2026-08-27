@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -41,6 +42,18 @@ struct RollbackExecutionSummary {
 class RollbackExecutor {
 public:
     virtual ~RollbackExecutor() = default;
+
+    // P8-RESET-01 may pre-acquire exact process objects before it stops the
+    // runtime owner. This is non-mutating and optional: watchdog executors and
+    // test doubles that do not need process leases keep the default no-op.
+    virtual bool prepareOwnedProcesses(
+        std::span<const RollbackActionDescriptor> actions,
+        std::string* error = nullptr) {
+        (void)actions;
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    virtual void clearPreparedOwnedProcesses() noexcept {}
 
     virtual RollbackActionOutcome terminateOwnedProcess(
         const RollbackActionDescriptor& action,
@@ -90,6 +103,18 @@ private:
 // owns that mutable state. Unsupported actions fail closed as RecoveryRequired.
 class DefaultRollbackExecutor final : public RollbackExecutor {
 public:
+    DefaultRollbackExecutor() = default;
+    ~DefaultRollbackExecutor() override;
+    DefaultRollbackExecutor(const DefaultRollbackExecutor&) = delete;
+    DefaultRollbackExecutor& operator=(const DefaultRollbackExecutor&) = delete;
+    DefaultRollbackExecutor(DefaultRollbackExecutor&&) = delete;
+    DefaultRollbackExecutor& operator=(DefaultRollbackExecutor&&) = delete;
+
+    bool prepareOwnedProcesses(
+        std::span<const RollbackActionDescriptor> actions,
+        std::string* error = nullptr) override;
+    void clearPreparedOwnedProcesses() noexcept override;
+
     RollbackActionOutcome terminateOwnedProcess(
         const RollbackActionDescriptor& action,
         std::uint32_t timeoutMilliseconds) override;
@@ -108,6 +133,16 @@ public:
     RollbackActionOutcome writeSafeModeResult(
         const RollbackActionDescriptor& action,
         std::uint32_t timeoutMilliseconds) override;
+
+private:
+    struct PreparedOwnedProcess {
+        std::uint32_t actionId{0};
+        ProcessIdentity process{};
+        std::uintptr_t nativeHandle{0};
+        bool alreadySatisfied{false};
+    };
+
+    std::vector<PreparedOwnedProcess> m_preparedOwnedProcesses;
 };
 
 bool queryProcessIdentity(std::uint32_t processId,

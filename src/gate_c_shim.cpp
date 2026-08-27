@@ -756,20 +756,32 @@ std::uint32_t HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_api_version(void) {
     return HYDRA_GATE_C_SHIM_API_VERSION;
 }
 
-HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
-    HydraGateCAdapterHandle adapter, const HydraGateCShimConfigV2* config) {
+HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install_v3(
+    HydraGateCAdapterHandle adapter, const HydraGateCShimConfigV3* config) {
     try {
     if (adapter == nullptr || config == nullptr) {
         return HYDRA_GATE_C_SHIM_INVALID_ARGUMENT;
     }
-    if (config->struct_size != sizeof(HydraGateCShimConfigV2) ||
+    if (config->struct_size != sizeof(HydraGateCShimConfigV3) ||
         config->api_version != HYDRA_GATE_C_SHIM_API_VERSION) {
         return HYDRA_GATE_C_SHIM_STRUCT_VERSION_MISMATCH;
     }
+    const std::uint32_t requiredMask = config->required_api_mask;
+    const std::uint32_t pollingRequiredMask =
+        requiredMask & HYDRA_GATE_C_SHIM_POLLING_API_MASK;
+    const bool wantsCursorFocus =
+        (requiredMask & HYDRA_GATE_C_SHIM_CURSOR_FOCUS_API_MASK) != 0;
+    const bool wantsRawInput =
+        (requiredMask & HYDRA_GATE_C_SHIM_RAW_INPUT_API_MASK) != 0;
+    const std::uint32_t expectedFlags =
+        (wantsCursorFocus ? HYDRA_GATE_C_SHIM_ENABLE_CURSOR_FOCUS : 0u) |
+        (wantsRawInput ? HYDRA_GATE_C_SHIM_ENABLE_RAW_INPUT : 0u);
     if (config->seat_id == 0 || config->process_id == 0 ||
         (config->flags & ~HYDRA_GATE_C_SHIM_CONFIG_FLAGS_MASK) != 0 ||
-        config->reserved0 != 0 ||
-        config->target_window == 0) {
+        config->flags != expectedFlags || config->reserved0 != 0 ||
+        config->reserved1 != 0 || config->target_window == 0 ||
+        requiredMask == 0 || pollingRequiredMask == 0 ||
+        (requiredMask & ~HYDRA_GATE_C_SHIM_ALL_API_MASK) != 0) {
         return HYDRA_GATE_C_SHIM_INVALID_ARGUMENT;
     }
     if (hydra_gate_c_adapter_api_version() !=
@@ -804,15 +816,9 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
     state.restoredMask = 0;
     state.rollbackComplete = true;
     state.lastAdapterResult = HYDRA_GATE_C_ADAPTER_OK;
-    state.cursorFocusEnabled =
-        (config->flags & HYDRA_GATE_C_SHIM_ENABLE_CURSOR_FOCUS) != 0;
-    state.rawInputEnabled =
-        (config->flags & HYDRA_GATE_C_SHIM_ENABLE_RAW_INPUT) != 0;
-    state.expectedMask = HYDRA_GATE_C_SHIM_POLLING_API_MASK |
-        (state.cursorFocusEnabled
-             ? HYDRA_GATE_C_SHIM_CURSOR_FOCUS_API_MASK
-             : 0u) |
-        (state.rawInputEnabled ? HYDRA_GATE_C_SHIM_RAW_INPUT_API_MASK : 0u);
+    state.cursorFocusEnabled = wantsCursorFocus;
+    state.rawInputEnabled = wantsRawInput;
+    state.expectedMask = requiredMask;
     state.originals.fill(0);
     state.cursorFocusOriginals.fill(0);
     state.rawInputOriginals.fill(0);
@@ -853,7 +859,7 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
             reinterpret_cast<std::uintptr_t>(&shimGetKeyboardState)};
     std::vector<hydra::gatec::PollingIatSlot> slots;
     const auto discovered = hydra::gatec::discoverCurrentProcessPollingImports(
-        replacements, slots);
+        replacements, pollingRequiredMask, slots);
     state.discoveredMask = discovered.discoveredMask;
     if (!discovered) {
         if (state.priorWindowStateValid) {
@@ -872,8 +878,8 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
         state.originals[static_cast<std::size_t>(slot.function)] =
             slot.original;
     }
-    const auto patched = state.patches.install(
-        slots, hydra::gatec::writeProcessIatSlot);
+    const auto patched = state.patches.installProfiled(
+        slots, pollingRequiredMask, hydra::gatec::writeProcessIatSlot);
     state.discoveredMask = patched.discoveredMask;
     state.patchedMask = patched.patchedMask;
     state.restoredMask = patched.restoredMask;
@@ -908,10 +914,12 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
                 reinterpret_cast<std::uintptr_t>(&shimGetCapture),
                 reinterpret_cast<std::uintptr_t>(&shimSetCapture),
                 reinterpret_cast<std::uintptr_t>(&shimReleaseCapture)};
+        const std::uint32_t cursorRequiredMask =
+            (requiredMask & HYDRA_GATE_C_SHIM_CURSOR_FOCUS_API_MASK) >> 3u;
         std::vector<hydra::gatec::CursorFocusIatSlot> cursorFocusSlots;
         const auto cursorDiscovered =
             hydra::gatec::discoverCurrentProcessCursorFocusImports(
-                cursorFocusReplacements, cursorFocusSlots);
+                cursorFocusReplacements, cursorRequiredMask, cursorFocusSlots);
         state.discoveredMask |= cursorFocusStatusMask(
             cursorDiscovered.discoveredMask);
         if (!cursorDiscovered) {
@@ -942,11 +950,12 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
             state.cursorFocusOriginals[
                 static_cast<std::size_t>(slot.function)] = slot.original;
         }
-        const auto cursorPatched = state.cursorFocusPatches.install(
-            cursorFocusSlots, hydra::gatec::writeProcessIatSlot);
-        state.discoveredMask = HYDRA_GATE_C_SHIM_POLLING_API_MASK |
+        const auto cursorPatched = state.cursorFocusPatches.installProfiled(
+            cursorFocusSlots, cursorRequiredMask,
+            hydra::gatec::writeProcessIatSlot);
+        state.discoveredMask = pollingRequiredMask |
             cursorFocusStatusMask(cursorPatched.discoveredMask);
-        state.patchedMask = HYDRA_GATE_C_SHIM_POLLING_API_MASK |
+        state.patchedMask = pollingRequiredMask |
             cursorFocusStatusMask(cursorPatched.patchedMask);
         state.restoredMask = cursorFocusStatusMask(
             cursorPatched.restoredMask);
@@ -1012,10 +1021,12 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
                     &shimGetRegisteredRawInputDevices),
                 reinterpret_cast<std::uintptr_t>(&shimGetRawInputData),
                 reinterpret_cast<std::uintptr_t>(&shimGetRawInputBuffer)};
+        const std::uint32_t rawRequiredMask =
+            (requiredMask & HYDRA_GATE_C_SHIM_RAW_INPUT_API_MASK) >> 13u;
         std::vector<hydra::gatec::RawInputIatSlot> rawSlots;
         const auto rawDiscovered =
             hydra::gatec::discoverCurrentProcessRawInputImports(
-                rawReplacements, rawSlots);
+                rawReplacements, rawRequiredMask, rawSlots);
         state.discoveredMask |= rawInputStatusMask(
             rawDiscovered.discoveredMask);
         if (!rawDiscovered) {
@@ -1048,8 +1059,8 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
             state.rawInputOriginals[
                 static_cast<std::size_t>(slot.function)] = slot.original;
         }
-        const auto rawPatched = state.rawInputPatches.install(
-            rawSlots, hydra::gatec::writeProcessIatSlot);
+        const auto rawPatched = state.rawInputPatches.installProfiled(
+            rawSlots, rawRequiredMask, hydra::gatec::writeProcessIatSlot);
         state.discoveredMask |= rawInputStatusMask(
             rawPatched.discoveredMask);
         state.patchedMask |= rawInputStatusMask(rawPatched.patchedMask);
@@ -1114,6 +1125,29 @@ HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
                                  !state.rawInputPatches.installed();
         return state.lastResult;
     }
+}
+
+HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL hydra_gate_c_shim_install(
+    HydraGateCAdapterHandle adapter, const HydraGateCShimConfigV2* config) {
+    if (config == nullptr) return HYDRA_GATE_C_SHIM_INVALID_ARGUMENT;
+    if (config->struct_size != sizeof(HydraGateCShimConfigV2) ||
+        config->api_version != HYDRA_GATE_C_SHIM_API_VERSION) {
+        return HYDRA_GATE_C_SHIM_STRUCT_VERSION_MISMATCH;
+    }
+    HydraGateCShimConfigV3 v3{};
+    v3.struct_size = sizeof(v3);
+    v3.api_version = config->api_version;
+    v3.seat_id = config->seat_id;
+    v3.process_id = config->process_id;
+    v3.flags = config->flags;
+    v3.reserved0 = config->reserved0;
+    v3.target_window = config->target_window;
+    v3.required_api_mask = HYDRA_GATE_C_SHIM_POLLING_API_MASK |
+        ((config->flags & HYDRA_GATE_C_SHIM_ENABLE_CURSOR_FOCUS) != 0
+             ? HYDRA_GATE_C_SHIM_CURSOR_FOCUS_API_MASK : 0u) |
+        ((config->flags & HYDRA_GATE_C_SHIM_ENABLE_RAW_INPUT) != 0
+             ? HYDRA_GATE_C_SHIM_RAW_INPUT_API_MASK : 0u);
+    return hydra_gate_c_shim_install_v3(adapter, &v3);
 }
 
 HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL

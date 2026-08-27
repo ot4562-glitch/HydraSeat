@@ -123,6 +123,10 @@ public:
     IatPatchReport install(std::span<const PollingIatSlot> slots,
                            IatSlotWriter writer,
                            void* writerContext = nullptr);
+    IatPatchReport installProfiled(std::span<const PollingIatSlot> slots,
+                                   std::uint32_t requiredMask,
+                                   IatSlotWriter writer,
+                                   void* writerContext = nullptr);
     IatPatchReport uninstall(IatSlotWriter writer,
                              void* writerContext = nullptr);
 
@@ -141,6 +145,10 @@ public:
     IatPatchReport install(std::span<const CursorFocusIatSlot> slots,
                            IatSlotWriter writer,
                            void* writerContext = nullptr);
+    IatPatchReport installProfiled(std::span<const CursorFocusIatSlot> slots,
+                                   std::uint32_t requiredMask,
+                                   IatSlotWriter writer,
+                                   void* writerContext = nullptr);
     IatPatchReport uninstall(IatSlotWriter writer,
                              void* writerContext = nullptr);
 
@@ -159,6 +167,10 @@ public:
     IatPatchReport install(std::span<const RawInputIatSlot> slots,
                            IatSlotWriter writer,
                            void* writerContext = nullptr);
+    IatPatchReport installProfiled(std::span<const RawInputIatSlot> slots,
+                                   std::uint32_t requiredMask,
+                                   IatSlotWriter writer,
+                                   void* writerContext = nullptr);
     IatPatchReport uninstall(IatSlotWriter writer,
                              void* writerContext = nullptr);
 
@@ -181,13 +193,25 @@ IatWriteResult writeProcessIatSlot(
 IatPatchReport discoverCurrentProcessPollingImports(
     const std::array<std::uintptr_t, kPollingImportCount>& replacements,
     std::vector<PollingIatSlot>& slots);
+IatPatchReport discoverCurrentProcessPollingImports(
+    const std::array<std::uintptr_t, kPollingImportCount>& replacements,
+    std::uint32_t requiredMask,
+    std::vector<PollingIatSlot>& slots);
 
 IatPatchReport discoverCurrentProcessCursorFocusImports(
     const std::array<std::uintptr_t, kCursorFocusImportCount>& replacements,
     std::vector<CursorFocusIatSlot>& slots);
+IatPatchReport discoverCurrentProcessCursorFocusImports(
+    const std::array<std::uintptr_t, kCursorFocusImportCount>& replacements,
+    std::uint32_t requiredMask,
+    std::vector<CursorFocusIatSlot>& slots);
 
 IatPatchReport discoverCurrentProcessRawInputImports(
     const std::array<std::uintptr_t, kRawInputImportCount>& replacements,
+    std::vector<RawInputIatSlot>& slots);
+IatPatchReport discoverCurrentProcessRawInputImports(
+    const std::array<std::uintptr_t, kRawInputImportCount>& replacements,
+    std::uint32_t requiredMask,
     std::vector<RawInputIatSlot>& slots);
 
 } // namespace hydra::gatec

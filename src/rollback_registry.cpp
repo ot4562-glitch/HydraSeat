@@ -201,6 +201,102 @@ RollbackActionOutcome RollbackRegistry::executeOne(
     return makeOutcome(action, RollbackActionResult::InvalidAction);
 }
 
+DefaultRollbackExecutor::~DefaultRollbackExecutor() {
+    clearPreparedOwnedProcesses();
+}
+
+bool DefaultRollbackExecutor::prepareOwnedProcesses(
+    std::span<const RollbackActionDescriptor> actions,
+    std::string* error) {
+    clearPreparedOwnedProcesses();
+    if (error != nullptr) error->clear();
+#if defined(_WIN32)
+    for (const auto& action : actions) {
+        if (action.kind != RollbackActionKind::TerminateOwnedProcess) continue;
+        if (action.actionId == 0 || action.process.processId == 0 ||
+            action.process.creationTime100ns == 0) {
+            if (error != nullptr) {
+                *error = "invalid terminate-owned-process action in reset preflight";
+            }
+            clearPreparedOwnedProcesses();
+            return false;
+        }
+
+        const HANDLE rawProcess = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE,
+            FALSE, action.process.processId);
+        if (rawProcess == nullptr) {
+            const DWORD systemError = GetLastError();
+            if (systemError == ERROR_INVALID_PARAMETER) {
+                m_preparedOwnedProcesses.push_back(
+                    {action.actionId, action.process, 0, true});
+                continue;
+            }
+            if (error != nullptr) {
+                *error = "failed to acquire exact rollback process before owner stop: " +
+                         std::to_string(systemError);
+            }
+            clearPreparedOwnedProcesses();
+            return false;
+        }
+
+        ProcessIdentity observed;
+        std::uint32_t identityError = 0;
+        if (!readProcessIdentity(rawProcess, action.process.processId,
+                                 observed, &identityError)) {
+            CloseHandle(rawProcess);
+            if (error != nullptr) {
+                *error = "failed to verify rollback process identity before owner stop: " +
+                         std::to_string(identityError);
+            }
+            clearPreparedOwnedProcesses();
+            return false;
+        }
+        if (observed != action.process) {
+            CloseHandle(rawProcess);
+            if (error != nullptr) {
+                *error = "rollback process identity changed before owner stop";
+            }
+            clearPreparedOwnedProcesses();
+            return false;
+        }
+
+        const DWORD before = WaitForSingleObject(rawProcess, 0);
+        if (before == WAIT_FAILED) {
+            const DWORD systemError = GetLastError();
+            CloseHandle(rawProcess);
+            if (error != nullptr) {
+                *error = "failed to inspect rollback process before owner stop: " +
+                         std::to_string(systemError);
+            }
+            clearPreparedOwnedProcesses();
+            return false;
+        }
+        m_preparedOwnedProcesses.push_back({
+            action.actionId,
+            action.process,
+            reinterpret_cast<std::uintptr_t>(rawProcess),
+            before == WAIT_OBJECT_0,
+        });
+    }
+#else
+    (void)actions;
+#endif
+    return true;
+}
+
+void DefaultRollbackExecutor::clearPreparedOwnedProcesses() noexcept {
+#if defined(_WIN32)
+    for (auto& prepared : m_preparedOwnedProcesses) {
+        if (prepared.nativeHandle != 0) {
+            CloseHandle(reinterpret_cast<HANDLE>(prepared.nativeHandle));
+            prepared.nativeHandle = 0;
+        }
+    }
+#endif
+    m_preparedOwnedProcesses.clear();
+}
+
 RollbackActionOutcome DefaultRollbackExecutor::terminateOwnedProcess(
     const RollbackActionDescriptor& action,
     std::uint32_t timeoutMilliseconds) {
@@ -210,21 +306,43 @@ RollbackActionOutcome DefaultRollbackExecutor::terminateOwnedProcess(
     }
 
 #if defined(_WIN32)
-    const HANDLE rawProcess = OpenProcess(
-        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE,
-        FALSE, action.process.processId);
-    if (rawProcess == nullptr) {
-        const DWORD error = GetLastError();
-        if (error == ERROR_INVALID_PARAMETER) {
+    HANDLE processHandle = nullptr;
+    std::optional<ScopedHandle> openedProcess;
+    const auto prepared = std::find_if(
+        m_preparedOwnedProcesses.begin(), m_preparedOwnedProcesses.end(),
+        [&](const PreparedOwnedProcess& candidate) {
+            return candidate.actionId == action.actionId;
+        });
+    if (prepared != m_preparedOwnedProcesses.end()) {
+        if (prepared->process != action.process) {
+            return makeOutcome(action, RollbackActionResult::IdentityMismatch);
+        }
+        if (prepared->alreadySatisfied) {
             return makeOutcome(action, RollbackActionResult::AlreadySatisfied);
         }
-        return makeOutcome(action, RollbackActionResult::Failed, error);
+        processHandle = reinterpret_cast<HANDLE>(prepared->nativeHandle);
+        if (processHandle == nullptr || processHandle == INVALID_HANDLE_VALUE) {
+            return makeOutcome(action, RollbackActionResult::Failed,
+                               ERROR_INVALID_HANDLE);
+        }
+    } else {
+        const HANDLE rawProcess = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE,
+            FALSE, action.process.processId);
+        if (rawProcess == nullptr) {
+            const DWORD error = GetLastError();
+            if (error == ERROR_INVALID_PARAMETER) {
+                return makeOutcome(action, RollbackActionResult::AlreadySatisfied);
+            }
+            return makeOutcome(action, RollbackActionResult::Failed, error);
+        }
+        openedProcess.emplace(rawProcess);
+        processHandle = rawProcess;
     }
-    ScopedHandle process(rawProcess);
 
     ProcessIdentity observed;
     std::uint32_t identityError = 0;
-    if (!readProcessIdentity(process.get(), action.process.processId,
+    if (!readProcessIdentity(processHandle, action.process.processId,
                              observed, &identityError)) {
         return makeOutcome(action, RollbackActionResult::Failed, identityError);
     }
@@ -232,7 +350,7 @@ RollbackActionOutcome DefaultRollbackExecutor::terminateOwnedProcess(
         return makeOutcome(action, RollbackActionResult::IdentityMismatch);
     }
 
-    const DWORD before = WaitForSingleObject(process.get(), 0);
+    const DWORD before = WaitForSingleObject(processHandle, 0);
     if (before == WAIT_OBJECT_0) {
         return makeOutcome(action, RollbackActionResult::AlreadySatisfied);
     }
@@ -241,15 +359,22 @@ RollbackActionOutcome DefaultRollbackExecutor::terminateOwnedProcess(
     }
 
     constexpr UINT kWatchdogRollbackExitCode = 0x48594452u; // "HYDR".
-    if (TerminateProcess(process.get(), kWatchdogRollbackExitCode) == FALSE) {
+    if (TerminateProcess(processHandle, kWatchdogRollbackExitCode) == FALSE) {
         const DWORD error = GetLastError();
-        if (WaitForSingleObject(process.get(), 0) == WAIT_OBJECT_0) {
+        const DWORD concurrentWait = WaitForSingleObject(
+            processHandle,
+            error == ERROR_ACCESS_DENIED ? timeoutMilliseconds : 0u);
+        if (concurrentWait == WAIT_OBJECT_0) {
             return makeOutcome(action, RollbackActionResult::AlreadySatisfied);
+        }
+        if (concurrentWait == WAIT_FAILED) {
+            return makeOutcome(action, RollbackActionResult::Failed,
+                               GetLastError());
         }
         return makeOutcome(action, RollbackActionResult::Failed, error);
     }
 
-    const DWORD wait = WaitForSingleObject(process.get(), timeoutMilliseconds);
+    const DWORD wait = WaitForSingleObject(processHandle, timeoutMilliseconds);
     if (wait == WAIT_OBJECT_0) {
         return makeOutcome(action, RollbackActionResult::Success);
     }

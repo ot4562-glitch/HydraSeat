@@ -20,9 +20,10 @@
 extern "C" {
 #endif
 
-#define HYDRA_GATE_C_SHIM_API_VERSION 3u
+#define HYDRA_GATE_C_SHIM_API_VERSION 4u
 #define HYDRA_GATE_C_SHIM_CONFIG_V1_BYTES 24u
 #define HYDRA_GATE_C_SHIM_CONFIG_V2_BYTES 32u
+#define HYDRA_GATE_C_SHIM_CONFIG_V3_BYTES 40u
 #define HYDRA_GATE_C_SHIM_STATUS_V1_BYTES 60u
 #define HYDRA_GATE_C_SHIM_GET_ASYNC_KEY_STATE_BIT 0x00000001u
 #define HYDRA_GATE_C_SHIM_GET_KEY_STATE_BIT 0x00000002u
@@ -97,6 +98,23 @@ typedef struct HydraGateCShimConfigV2 {
     uint64_t target_window;
 } HydraGateCShimConfigV2;
 
+/*
+ * P3-E-01 adds an explicit allowlisted API mask for real non-protected
+ * application profiles. V1/V2 keep the original all-or-nothing controlled
+ * probe contract; only the V3 entry point may request a strict subset.
+ */
+typedef struct HydraGateCShimConfigV3 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    uint32_t seat_id;
+    uint32_t process_id;
+    uint32_t flags;
+    uint32_t reserved0;
+    uint64_t target_window;
+    uint32_t required_api_mask;
+    uint32_t reserved1;
+} HydraGateCShimConfigV3;
+
 typedef struct HydraGateCShimStatusV1 {
     uint32_t struct_size;
     uint32_t api_version;
@@ -125,6 +143,11 @@ HYDRA_GATE_C_SHIM_API HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL
 hydra_gate_c_shim_install(
     HydraGateCAdapterHandle adapter,
     const HydraGateCShimConfigV2* config);
+
+HYDRA_GATE_C_SHIM_API HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL
+hydra_gate_c_shim_install_v3(
+    HydraGateCAdapterHandle adapter,
+    const HydraGateCShimConfigV3* config);
 
 HYDRA_GATE_C_SHIM_API HydraGateCShimResult HYDRA_GATE_C_SHIM_CALL
 hydra_gate_c_shim_mark_adapter_unavailable(void);
