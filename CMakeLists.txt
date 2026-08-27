@@ -167,6 +167,26 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P4-PROC-01 Seat-owned process trees. Windows Job Objects provide exact
+# descendant containment and completion notifications; weaker capabilities are
+# explicit and never grant ownership over unrelated processes.
+add_library(hydra_process STATIC
+    src/process_group.cpp
+    src/process_launcher.cpp
+    include/hydra/process_group.hpp
+    include/hydra/process_launcher.hpp
+)
+target_link_libraries(hydra_process PUBLIC hydra_runtime Threads::Threads)
+if(WIN32)
+    target_link_libraries(hydra_process PRIVATE User32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_process PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_process PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 if(MSVC)
     target_compile_options(hydra_hardware PRIVATE /W4 /permissive-)
 endif()
@@ -729,6 +749,25 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 add_test(NAME HostIpcProcessTests COMMAND host_ipc_process_tests)
+
+add_executable(hydra_process_tree_child tests/process_tree_child.cpp)
+if(MSVC)
+    target_compile_options(hydra_process_tree_child PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_process_tree_child PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+add_executable(process_group_tests tests/test_process_group.cpp)
+target_link_libraries(process_group_tests PRIVATE hydra_process)
+add_dependencies(process_group_tests hydra_process_tree_child)
+if(MSVC)
+    target_compile_options(process_group_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(process_group_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ProcessGroupTests COMMAND process_group_tests)
 
 # Pure Phase 1 identity checks: deterministic and independent of attached hardware.
 add_executable(hardware_identity_tests
