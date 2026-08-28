@@ -25,7 +25,11 @@ Phase 5 closes only when:
 
 ## P5-AUD-01 — Audio endpoint inventory and Seat assignment validation
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
+
+**D-051 automated-development rule**
+
+P4-CLOSE-01 is still blocked by deferred physical/manual acceptance, but this packet is read-only and independently testable. Its implementation may reach `CODE_COMPLETE` without implying that Phase 4 is closed or that two physical audio outputs have been acceptance-tested.
 
 **Goal**
 
@@ -54,11 +58,27 @@ Provide stable read-only audio endpoint identity and validate optional Seat audi
 
 Audio inventory/assignment validation passes deterministic tests and a real two-endpoint machine records stable identities without mutation.
 
+**Automated implementation evidence — 2026-08-28**
+
+- `hydra_audio_inventory` separates portable normalization/Seat validation from the native Core Audio source. Persistent identity is the Core Audio endpoint ID; friendly name, default role, enumeration order, and state remain observations only.
+- Native enumeration is read-only and covers render/capture endpoints across active, disabled, not-present, and unplugged states. Default console/multimedia/communications roles are observed without changing Windows policy.
+- `IMMNotificationClient` runs behind a bounded generation counter. Snapshot refresh retries only when topology changes during the read, so callbacks never perform UI/disk/network/routing work.
+- Audio may remain unset on a saved Seat. A configured but unplugged/disabled endpoint is structurally valid but currently not ready; missing/wrong-flow IDs and more than two active Seats fail explicitly.
+- `hydra_audio_diag --list` is read-only. On the current Windows development machine it successfully observed 37 Core Audio endpoints with notifications available; this is native integration evidence, not the deferred two-physical-output acceptance gate.
+- MSVC x64 and Win32/x86 focused P5-AUD-01 builds/tests pass 2/2. The strict MinGW P5-AUD-01 targets also build and pass 2/2.
+- No default-device, volume, session, or per-process routing mutation exists in this packet. Those capabilities remain P5-AUD-02.
+
+Physical confirmation of two selected endpoints, reconnect behavior, and any audible routing result remains deferred manual evidence before `VALIDATED`.
+
 ---
 
 ## P5-AUD-02 — Per-process audio routing capability backends
 
-**State:** BLOCKED
+**State:** READY
+
+**D-051 automated-development rule**
+
+The routing contract, exact process/session ownership checks, fake/controlled backends, apply/verify/rollback state machine, and documented supported provider/Windows backends may be implemented before audible two-output acceptance. A missing safe public Windows mutation path must remain an explicit unsupported capability rather than being replaced with undocumented/private policy COM interfaces.
 
 **Goal**
 

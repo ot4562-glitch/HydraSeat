@@ -444,6 +444,25 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P5-AUD-01 read-only Core Audio endpoint inventory and two-Seat assignment
+# validation. This target deliberately exposes no default-device, volume, or
+# per-process routing mutation; those belong to later capability packets.
+add_library(hydra_audio_inventory STATIC
+    src/audio_endpoint_inventory.cpp
+    src/audio_endpoint_native.cpp
+    include/hydra/audio_endpoint_inventory.hpp
+)
+target_link_libraries(hydra_audio_inventory PUBLIC Threads::Threads)
+if(WIN32)
+    target_link_libraries(hydra_audio_inventory PUBLIC Ole32.lib Uuid.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_audio_inventory PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_audio_inventory PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P8-JOURNAL-01 bounded durable crash journal and safe-mode marker. The journal
 # is evidence only: action IDs are validated against the trusted watchdog plan
 # and cannot introduce arbitrary commands or paths.
@@ -738,6 +757,17 @@ if(MSVC)
     target_compile_options(hydra_hidhide_session_lab PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_hidhide_session_lab PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P5-AUD-01 read-only endpoint diagnostic used for eventual physical evidence.
+# It cannot change default devices, volume, or per-process routing.
+add_executable(hydra_audio_diag src/audio_diag_main.cpp)
+target_link_libraries(hydra_audio_diag PRIVATE hydra_audio_inventory)
+if(MSVC)
+    target_compile_options(hydra_audio_diag PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_audio_diag PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
@@ -1184,6 +1214,22 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME HidHideSessionRecoveryTests COMMAND hidhide_session_recovery_tests)
 set_tests_properties(HidHideSessionRecoveryTests PROPERTIES LABELS "P3-D-02;P8-WATCH-01")
+
+# P5-AUD-01 deterministic fake inventory/notification/Seat-assignment tests.
+add_executable(audio_endpoint_inventory_tests
+    tests/test_audio_endpoint_inventory.cpp
+)
+target_link_libraries(audio_endpoint_inventory_tests PRIVATE hydra_audio_inventory)
+if(MSVC)
+    target_compile_options(audio_endpoint_inventory_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(audio_endpoint_inventory_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME AudioEndpointInventoryTests COMMAND audio_endpoint_inventory_tests)
+set_tests_properties(AudioEndpointInventoryTests PROPERTIES LABELS "P5-AUD-01")
+add_test(NAME AudioEndpointDiagHelp COMMAND hydra_audio_diag --help)
+set_tests_properties(AudioEndpointDiagHelp PROPERTIES LABELS "P5-AUD-01")
 
 # P8-WATCH-01 portable protocol/registry tests and Windows process/fault tests.
 add_executable(watchdog_protocol_tests
