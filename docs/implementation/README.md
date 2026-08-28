@@ -338,7 +338,7 @@ Do not imply universal support from one successful run.
 
 ## 14. Codex task entry point
 
-Every implementation task names one packet ID.
+An implementation task may cover one or more actionable packet IDs. Start from the current default packet (or another explicitly selected actionable packet) and continue through additional READY/actionable packets in dependency order when useful.
 
 Before coding:
 
@@ -360,7 +360,7 @@ the active PHASE*.md packet
 docs/ARCHITECTURE.md
 ```
 
-Do not implement later packets opportunistically and do not mark manual gates complete without real evidence.
+Do not skip declared prerequisites or mark any packet/manual gate complete without the required evidence. Crossing from one completed packet into another actionable packet does not require a new task or user turn.
 
 ## 15. Current next step
 

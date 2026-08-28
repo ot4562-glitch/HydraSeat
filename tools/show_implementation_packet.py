@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Show one HydraSeat implementation packet or generate a Codex task prompt.
+"""Show HydraSeat implementation packet information or generate a starting-task prompt.
 
 The script validates the complete roadmap before returning packet content so an
 agent never starts from an inconsistent packet graph.
@@ -63,7 +63,7 @@ def codex_prompt(packet: roadmap.Packet, root: Path) -> str:
         if packet.dependencies
         else "none declared"
     )
-    return f"""Implement packet {packet.packet_id} exactly as specified in
+    return f"""Start with packet {packet.packet_id} as specified in
   {phase_path}
 
 Packet title:
@@ -84,8 +84,9 @@ Read and obey before editing:
 - every design/source/test file linked by the packet
 
 Scope rules:
-- implement only {packet.packet_id} and explicitly permitted coupled tests;
-- do not implement later packets;
+- {packet.packet_id} is the starting packet, not an exclusive task boundary;
+- after completing it, additional READY/actionable packets may be implemented in declared dependency order without waiting for another user turn;
+- verify every packet's declared prerequisites before dependent implementation and keep per-packet state/evidence truthful;
 - do not widen v1 beyond two active Seats or the game-only product contract;
 - keep Seat, Player, Game, TwoPlayerSetup, and runtime bindings separate;
 - do not weaken fail-closed behavior or recovery requirements;
@@ -102,14 +103,14 @@ Required workflow:
 2. inspect existing implementation and tests;
 3. record files/types, ownership/thread model, OS state touched, rollback path,
    tests, and pending manual gates before editing;
-4. implement the smallest coherent packet scope;
+4. implement the starting packet and then continue through additional actionable packets in dependency order when useful;
 5. add normal, boundary, malformed, stale/duplicate, failure, teardown,
-   rollback, and no-cross-Seat tests as applicable;
-6. run the packet checks and existing regression suite;
+   rollback, and no-cross-Seat tests as applicable to every changed packet;
+6. run focused checks for each changed packet plus the applicable regression suite;
 7. run python tools/validate_implementation_roadmap.py;
 8. run git diff --check;
-9. update docs/implementation/STATUS.md with truthful evidence;
-10. summarize changed files, tests, known limits, and unperformed manual gates.
+9. update docs/implementation/STATUS.md with truthful per-packet evidence;
+10. summarize changed files, packet states, tests, known limits, and unperformed manual gates.
 
 Do not treat CODE_COMPLETE as VALIDATED when manual acceptance remains pending.
 """

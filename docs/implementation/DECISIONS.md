@@ -216,9 +216,9 @@ HydraSeat does not silently download or execute external injection DLLs, wrapper
 
 Until a tracked project license and contribution terms exist, third-party source is not copied into HydraSeat. Public architecture and behavior may be studied under `docs/CLEAN_ROOM_POLICY.md`.
 
-## D-026 — One work packet, one reviewable purpose
+## D-026 — Reviewable multi-packet implementation batches
 
-A normal implementation PR contains one packet or a tightly coupled group explicitly allowed by the phase document. Large formatting changes, broad renames, generated assets, dependency upgrades, and unrelated refactors are separate packets.
+A normal implementation task/branch/PR may contain one or more roadmap packets when their dependencies are satisfied and the batch remains reviewable. Agents may continue from a completed packet directly into additional READY/actionable packets without waiting for another user turn. Each packet retains its own state, tests, evidence, manual gates, and completion criteria. Large formatting changes, broad renames, generated assets, dependency upgrades, and unrelated refactors remain separate unless they are required by the selected packet batch and documented.
 
 ## D-027 — Manual gates remain manual
 

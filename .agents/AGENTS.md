@@ -35,26 +35,26 @@ Before changing code or documentation, read and obey in this order:
 
 When lower-precedence material conflicts with a higher-precedence decision, follow the higher-precedence source and update stale documentation in the packet scope.
 
-## 3. One work packet per task
+## 3. Multi-packet execution with explicit dependencies
 
-Every implementation task must name exactly one roadmap packet, such as `P3-API-01`.
+An implementation task may cover one packet or an ordered batch of multiple roadmap packets. Start from the current default packet or another explicitly selected actionable packet, then continue directly through additional READY/actionable packets when their declared prerequisites are satisfied. Independent packets may also be implemented in the same task when their changes do not conflict.
 
 Required behavior:
 
-- implement only that packet and explicitly permitted coupled test work;
-- do not implement later packets because they appear convenient;
-- do not perform broad renames, dependency upgrades, generated asset changes, or unrelated refactors;
-- do not mark adjacent packets complete;
-- if an undeclared prerequisite or design decision is required, stop coding and propose/update the roadmap first;
-- update `docs/implementation/STATUS.md` with truthful evidence.
+- verify each selected packet's declared prerequisites before implementing that packet;
+- preserve packet-specific state, tests, evidence, and manual-gate truth even when several packets are implemented in one task/branch/PR;
+- do not skip undeclared prerequisites or mark a packet complete before its implementation/evidence exists;
+- do not perform broad renames, dependency upgrades, generated asset changes, or unrelated refactors unless they are required by the selected packet batch and documented;
+- if an undeclared prerequisite or design decision is required, update/propose the roadmap before implementing work that depends on it;
+- update `docs/implementation/STATUS.md` with truthful evidence for every packet whose state changes.
 
 Use `docs/implementation/CODEX_PLAYBOOK.md` as the standard workflow and prompt contract.
 
 ### Phase-close verification exception
 
-The roadmap **phase** is the numbered product phase in `docs/ROADMAP.md` and `docs/implementation/README.md`, not a conversation turn or one coding packet.
+The roadmap **phase** is the numbered product phase in `docs/ROADMAP.md` and `docs/implementation/README.md`, not a conversation turn or implementation batch.
 
-Before a numbered phase may change to `Complete`, run one dedicated **Phase-close verification** task across the entire phase. This is a review and verification gate, not permission to implement multiple feature packets at once.
+Before a numbered phase may change to `Complete`, run one dedicated **Phase-close verification** task across the entire phase. This remains a separate review/verification gate after multi-packet implementation work.
 
 The phase-close task must:
 
@@ -140,7 +140,7 @@ Read `docs/CLEAN_ROOM_POLICY.md` before external research or source use.
 
 ## 7. Standard implementation loop
 
-For a packet:
+For each selected packet in an implementation batch:
 
 1. Read all mandatory documents and packet-linked files.
 2. Verify prerequisites and current branch/worktree.
@@ -154,7 +154,7 @@ For a packet:
    - automated tests;
    - manual gates left pending.
 4. Inspect existing implementation/tests before editing.
-5. Implement the smallest coherent packet scope.
+5. Implement the smallest coherent scope required by that packet, then continue to the next actionable selected packet without requiring a new task boundary.
 6. Add normal, boundary, malformed, stale/duplicate, failure, teardown, rollback, and no-cross-Seat tests as applicable.
 7. Run strict local checks and Windows CI requirements.
 8. Diagnose root causes; do not hide failures or weaken assertions.
@@ -337,8 +337,8 @@ When creating build directories, traces, logs, temporary profiles, reports, down
 ## 14. Git and remote policy
 
 - Inspect status/diff before and after work.
-- Use a packet-specific branch.
-- Keep commits reviewable and packet-scoped.
+- Use a task/batch-specific branch that clearly identifies the implemented packet set.
+- Keep commits reviewable; a commit or PR may cover one or more clearly identified packets when the dependency/order is coherent.
 - Do not rewrite unrelated user changes.
 - Do not use destructive reset/clean/checkout over user work without explicit authorization.
 - Local commit only when requested/appropriate to the active workflow.
@@ -364,9 +364,9 @@ Partial completion with truthful evidence is preferred over a fabricated green s
 
 Before reporting completion:
 
-- [ ] correct packet and prerequisites;
+- [ ] selected packet set and prerequisites are correct;
 - [ ] Seat-first/multi-monitor architecture preserved;
-- [ ] only packet scope changed;
+- [ ] changes stay within the declared multi-packet batch plus documented prerequisites;
 - [ ] unsupported behavior fails closed;
 - [ ] no false isolation/game/support claim;
 - [ ] contracts versioned/bounded;

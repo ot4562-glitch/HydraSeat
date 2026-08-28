@@ -2,7 +2,7 @@
 
 ## 1. Goal
 
-This playbook turns a roadmap packet into a bounded coding task. The expected Codex behavior is not “continue the project broadly”; it is “implement one named packet, verify every declared invariant, and leave evidence.”
+This playbook turns the roadmap into reviewable implementation batches. Codex may implement one or more actionable packets in a task, following declared dependency order and leaving separate truthful evidence for every packet whose state changes.
 
 ## 2. Mandatory read order
 
@@ -19,29 +19,30 @@ Before editing code, read:
 
 Do not scan unrelated third-party reference repositories during an implementation packet unless the packet explicitly classifies the task as research. Clean-room boundaries still apply.
 
-## 3. One-packet rule
+## 3. Multi-packet execution rule
 
-A task prompt must contain one packet ID, for example:
+A task may start from one packet ID, the current default packet, or an ordered set selected from the READY/actionable frontier, for example:
 
 ```text
-Implement P3-API-02.
+Start with P3-API-02, then continue through additional actionable packets in dependency order.
 ```
 
-A packet may authorize a tightly coupled pair, such as an implementation packet and its test packet. Otherwise:
+After a packet reaches its truthful automated completion state, Codex may proceed immediately to another actionable packet without waiting for a new user turn. For every selected packet:
 
-- do not implement a later packet “while here”;
-- do not reorganize unrelated modules;
-- do not update unrelated dependencies;
-- do not mark neighboring roadmap items complete;
-- write a new roadmap packet when prerequisite work is genuinely missing.
+- verify declared prerequisites before editing work that depends on them;
+- keep packet-specific tests/evidence/status distinguishable even when changes share a branch or PR;
+- do not skip missing prerequisites or mark packets complete without implementation/evidence;
+- do not reorganize unrelated modules or update unrelated dependencies unless the selected batch requires it and the reason is documented;
+- write/update a roadmap packet or decision when genuinely missing prerequisite work is discovered.
 
 ## 4. Standard task prompt
 
-Preferred: generate a packet-scoped prompt from the validated roadmap:
+Preferred: generate a starting-packet prompt from the validated roadmap and use `--ready` to identify additional actionable work:
 
 ```text
 python tools/show_implementation_packet.py --current --prompt
 python tools/show_implementation_packet.py <PACKET-ID> --prompt
+python tools/show_implementation_packet.py --ready
 ```
 
 The tool refuses to produce a task when packet IDs, dependencies, links, states, or the current packet are inconsistent.
@@ -49,8 +50,9 @@ The tool refuses to produce a task when packet IDs, dependencies, links, states,
 Manual template:
 
 ```text
-Implement packet <PACKET-ID> exactly as specified in
+Start with packet <PACKET-ID> as specified in
 <PHASE-DOCUMENT>.
+After it is complete, continue through additional actionable packets in declared dependency order when useful.
 
 Read and obey:
 - .agents/AGENTS.md
@@ -58,10 +60,11 @@ Read and obey:
 - docs/implementation/DECISIONS.md
 - docs/implementation/CODEX_PLAYBOOK.md
 - docs/implementation/STATUS.md
-- the packet section and all linked design documents
+- the selected packet sections and all linked design documents
 
 Scope rules:
-- do not implement later packets;
+- additional actionable packets may be implemented in the same task without a new user turn;
+- do not skip undeclared prerequisites;
 - do not weaken fail-closed policy;
 - do not mark manual acceptance complete;
 - do not claim a capability not proven by the required tests;
@@ -70,15 +73,15 @@ Scope rules:
 - no push unless explicitly authorized.
 
 Required workflow:
-1. inspect the existing implementation and tests;
-2. restate packet prerequisites and invariants in the task log;
-3. implement the smallest coherent public/internal API described by the packet;
-4. add normal, boundary, malformed, failure, teardown, and rollback tests;
-5. run all packet checks plus the existing regression suite;
-6. fix every warning/error caused by the patch;
-7. update STATUS.md and relevant documentation with truthful evidence;
+1. inspect the existing implementation and tests for the selected packet(s);
+2. verify each packet's prerequisites and invariants before dependent edits;
+3. implement each selected packet in dependency order, continuing directly to the next actionable packet;
+4. add normal, boundary, malformed, failure, teardown, and rollback tests as applicable to each packet;
+5. run focused checks for every changed packet plus the applicable regression suite;
+6. fix every warning/error caused by the batch;
+7. update STATUS.md and relevant documentation with truthful per-packet evidence;
 8. run git diff --check;
-9. summarize changed files, tests, limitations, and unperformed manual gates.
+9. summarize changed files, tests, packet states, limitations, and unperformed manual gates.
 ```
 
 ## 5. Planning before editing
@@ -211,7 +214,7 @@ Required for host/watchdog/driver/update/game support packets.
 
 ### Phase-close verification — whole-phase recalculation
 
-This task runs once when a numbered roadmap phase appears ready to close. It is not a normal one-packet implementation task. Its purpose is to independently recalculate whether the phase's combined code actually satisfies the phase exit gate.
+This task runs once when a numbered roadmap phase appears ready to close. It is a verification pass distinct from normal single- or multi-packet implementation batches. Its purpose is to independently recalculate whether the phase's combined code actually satisfies the phase exit gate.
 
 Required workflow:
 
@@ -300,9 +303,9 @@ A stopped packet becomes `BLOCKED`, `DEFERRED`, or `REJECTED` with an explanatio
 
 ## 13. Review checklist for Codex output
 
-Before considering a packet complete, verify:
+Before considering a selected packet or multi-packet batch complete, verify:
 
-- [ ] only packet scope changed;
+- [ ] changes stay within the declared packet batch plus documented prerequisites;
 - [ ] decisions and naming use Seat-first architecture;
 - [ ] unsupported behavior fails closed;
 - [ ] no false isolation/support claim;
@@ -353,7 +356,7 @@ When a new packet is needed, add this structure to the phase document:
 - how previous state is restored
 
 **Non-goals**
-- later packets and unsupported behavior
+- explicitly excluded or unsupported behavior
 
 **Done when**
 - objective completion conditions

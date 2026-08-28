@@ -609,7 +609,7 @@ Provide a clean-room, process-local controlled DirectInput enumeration/order/vis
 - P3-ARCH-01
 
 P3-CTRL-01 remediation is freshly Windows-validated by run `32832036967`, and
-P3-ARCH-01 is already validated. DirectInput work may now start only as this separate packet.
+P3-ARCH-01 is already validated. The DirectInput work is therefore actionable and may be implemented as part of a larger dependency-respecting packet batch.
 
 **Create/modify**
 
