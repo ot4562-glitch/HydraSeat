@@ -1090,6 +1090,26 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 if(WIN32)
+    # P5-MVP-01 complete controlled two-Seat production-path harness. It uses
+    # real owned Job Object process trees while keeping display/input/audio/controller
+    # evidence explicitly synthetic until physical validation is performed.
+    add_executable(hydra_two_seat_mvp_lab src/two_seat_mvp_lab.cpp)
+    target_link_libraries(hydra_two_seat_mvp_lab PRIVATE
+        hydra_two_seat_launch hydra_session_metrics hydra_runtime hydra_process
+        Threads::Threads)
+    add_dependencies(hydra_two_seat_mvp_lab hydra_process_tree_child)
+    if(MSVC)
+        target_compile_options(hydra_two_seat_mvp_lab PRIVATE /W4 /permissive-)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(hydra_two_seat_mvp_lab PRIVATE
+            -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    endif()
+    add_test(NAME TwoSeatMvpControlledSelfTest
+             COMMAND hydra_two_seat_mvp_lab --self-test)
+    set_tests_properties(TwoSeatMvpControlledSelfTest PROPERTIES
+        TIMEOUT 60
+        LABELS "P5-MVP-01;P5-LAUNCH-01;P5-MET-01")
+
     add_executable(seat_game_process_lifecycle_tests
         tests/test_seat_game_process_lifecycle.cpp)
     target_link_libraries(seat_game_process_lifecycle_tests PRIVATE

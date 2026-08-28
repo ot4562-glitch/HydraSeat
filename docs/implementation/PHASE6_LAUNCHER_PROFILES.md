@@ -32,7 +32,11 @@ Phase 6 closes only when:
 
 ## P6-SCHEMA-01 — Versioned Seat, Player, Game, setup, and session schema family
 
-**State:** BLOCKED
+**State:** READY
+
+**D-051 automated-development rule**
+
+P5-MVP-01 CODE_COMPLETE is sufficient to start the isolated schema/model implementation. P5-CLOSE-01 remains a required real-product validation gate before Phase 6 can be declared validated/closed; it no longer blocks unrelated versioned schema coding.
 
 **Goal**
 
@@ -40,7 +44,11 @@ Define separate persisted/runtime schemas instead of growing one monolithic prof
 
 **Depends on**
 
-- P5-CLOSE-01
+- P5-MVP-01
+
+**Phase-entry validation gate**
+
+- P5-CLOSE-01 before Phase 6 validation/closure claims
 
 **Required schemas/models**
 

@@ -295,7 +295,7 @@ Real physical zero-bleed, real-game latency/resource behavior, and physical audi
 
 ## P5-MVP-01 — Controlled/open-source end-to-end two-Seat session
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **D-051 automated-development rule**
 
@@ -325,6 +325,18 @@ Run the complete production host path first against deterministic controlled/ope
 **Done when**
 
 The complete production lifecycle passes with a reproducible evidence bundle on real hardware using controlled/open-source targets.
+
+**Automated implementation evidence — 2026-08-28**
+
+- hydra_two_seat_mvp_lab compiles the immutable exactly-two-Seat launch plan and drives it through the authoritative RuntimeHost / PlannedSeatGameInstanceFactory path rather than bypassing the production Seat lifecycle.
+- Each Seat launches a real HydraSeat-owned Windows Job Object root plus descendant through ProcessLauncher; exact PID + creation-time identities are captured and later checked for termination.
+- The happy path proves both Seats Playing concurrently, Seat 2 stop while Seat 1's exact process identity remains unchanged, Seat 2 restart as a new exact identity, a controlled Seat 2 natural exit with Seat-local cleanup while Seat 1 continues, both Seats Idle, and final verified host Return to Windows.
+- The injected fault path fails Seat 2 after an input-resource mutation, verifies reverse rollback removes the Seat 2 process tree, and confirms Seat 1 remains the same live Playing process. Final cleanup checks every captured owned process identity is gone.
+- The integrated P5-MET report is generated from the same run. Because display/input/controller/audio evidence is synthetic in this harness, the report origin is deliberately Synthetic and physicalValidationEligible=false even though the process lifecycle is real. The harness therefore cannot be mistaken for physical zero-bleed validation.
+- --run emits the aggregate redacted JSON evidence and --self-test is registered in CTest as TwoSeatMvpControlledSelfTest.
+- MSVC x64 full suite passes **83/83**; MSVC Win32/x86 full suite passes **83/83**; strict MinGW P5-MVP-01 passes **1/1** with -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion.
+
+The original physical two-display/two-input, owned-window placement, physical receiver zero-cross, and selected real audio/controller acceptance remain deferred. CODE_COMPLETE records the complete controlled production-path implementation, not physical validation.
 
 ---
 
