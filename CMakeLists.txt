@@ -463,6 +463,22 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P5-AUD-02 exact-owned audio session observation and typed route transaction.
+# The native Windows implementation is observation-only until a documented,
+# reversible routing backend is selected; no private audio-policy COM API is used.
+add_library(hydra_audio_routing STATIC
+    src/audio_routing.cpp
+    src/audio_session_native.cpp
+    include/hydra/audio_routing.hpp
+)
+target_link_libraries(hydra_audio_routing PUBLIC hydra_audio_inventory)
+if(MSVC)
+    target_compile_options(hydra_audio_routing PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_audio_routing PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P8-JOURNAL-01 bounded durable crash journal and safe-mode marker. The journal
 # is evidence only: action IDs are validated against the trusted watchdog plan
 # and cannot introduce arbitrary commands or paths.
@@ -763,7 +779,7 @@ endif()
 # P5-AUD-01 read-only endpoint diagnostic used for eventual physical evidence.
 # It cannot change default devices, volume, or per-process routing.
 add_executable(hydra_audio_diag src/audio_diag_main.cpp)
-target_link_libraries(hydra_audio_diag PRIVATE hydra_audio_inventory)
+target_link_libraries(hydra_audio_diag PRIVATE hydra_audio_routing)
 if(MSVC)
     target_compile_options(hydra_audio_diag PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -1230,6 +1246,19 @@ add_test(NAME AudioEndpointInventoryTests COMMAND audio_endpoint_inventory_tests
 set_tests_properties(AudioEndpointInventoryTests PROPERTIES LABELS "P5-AUD-01")
 add_test(NAME AudioEndpointDiagHelp COMMAND hydra_audio_diag --help)
 set_tests_properties(AudioEndpointDiagHelp PROPERTIES LABELS "P5-AUD-01")
+
+# P5-AUD-02 exact process/session ownership, late-session observation, typed
+# mutable backend, apply verification, rollback, and unsupported production path.
+add_executable(audio_routing_tests tests/test_audio_routing.cpp)
+target_link_libraries(audio_routing_tests PRIVATE hydra_audio_routing)
+if(MSVC)
+    target_compile_options(audio_routing_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(audio_routing_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME AudioRoutingTests COMMAND audio_routing_tests)
+set_tests_properties(AudioRoutingTests PROPERTIES LABELS "P5-AUD-02")
 
 # P8-WATCH-01 portable protocol/registry tests and Windows process/fault tests.
 add_executable(watchdog_protocol_tests

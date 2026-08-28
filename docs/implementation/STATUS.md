@@ -3,8 +3,8 @@
 ## Current program state
 
 - Current validation phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P5-AUD-02 — Per-process audio routing capability backends** (automated implementation frontier under D-051)
-- Current default packet state: **READY for automated implementation** — P5-AUD-01 is `CODE_COMPLETE`; P5-AUD-02 may implement typed routing capability contracts, process/session ownership, fake/controlled apply/verify/rollback, and only a documented Windows production backend where the public API actually supports it. Missing physical audible routing evidence remains a validation/release gate, not a coding blocker.
+- Current default packet: **P5-CTRL-01 — Production controller source and per-process routing** (automated implementation frontier under D-051)
+- Current default packet state: **READY for automated implementation** — P3-CTRL-01/P3-CTRL-02 are `VALIDATED`, P4-SEAT-01 is `CODE_COMPLETE`, and P5-AUD-02 is now `CODE_COMPLETE`. Production controller source identity/polling, per-Seat mapping, controlled XInput/DirectInput capability selection, vibration ownership, and reconnect generation may proceed while physical controller/vibration evidence remains a validation gate.
 - Deferred validation queue starts with **P3-HW-01** — tooling/CI are complete; real two-keyboard/two-pointing-device physical Gate A/B/C evidence is still required before physical isolation/cloaking claims and Phase 3 closure.
 - Product contract: **HydraSeat v1 is a two-Seat, game-first local Windows gaming product** for households that want to use the spare performance of one capable PC instead of buying a second complete desktop solely for simultaneous local gaming. See `docs/PRODUCT_V1.md`.
 - v1 does not pursue N-Seat generalization, a general independent Windows desktop per Seat, or a maintainer-created official game-certification badge.
@@ -175,7 +175,8 @@ Remaining evidence:
 | Packet | State | Evidence / remaining gate |
 | --- | --- | --- |
 | P5-AUD-01 | CODE_COMPLETE | Read-only Core Audio render/capture inventory, stable endpoint ID, state/default-role observation, bounded notification generation, optional Seat audio validation; x64/x86 full 77/77, strict P5-AUD-01 2/2, and local native read-only inventory observed 37 endpoints; selected two-output reconnect/audible acceptance remains physical/manual |
-| P5-AUD-02 | READY | Implement typed per-process audio-routing capability contracts and fake/controlled apply/verify/rollback; production Windows mutation is allowed only through a documented supported API/backend and must leave unsupported paths explicit |
+| P5-AUD-02 | CODE_COMPLETE | Exact PID+creation-time Core Audio session ownership, late-session observation, typed apply/verify/rollback contract, explicit observe-only production fallback, x64/x86 full 78/78 and strict P5-AUD-02 1/1 pass; native read-only session enumeration succeeds, while arbitrary endpoint movement/audible two-output routing remains unsupported unless a documented safe backend is selected and physically verified |
+| P5-CTRL-01 | READY | Validated P3 XInput/DirectInput models may now be integrated into production controller source/mapping/reconnect/vibration ownership code under D-051; physical controller/vibration evidence remains deferred |
 
 ## Manual/physical gates still pending
 
@@ -193,7 +194,7 @@ Remaining evidence:
 
 ## Current next action
 
-Under D-051, `P5-AUD-01` has reached `CODE_COMPLETE` while selected two-output reconnect/audible evidence remains deferred. The automated implementation frontier advances to **P5-AUD-02**: implement typed per-process audio routing capability contracts, exact owned-process/session checks, fake/controlled apply/verify/rollback, and only documented supported production routing paths; unsupported Windows/game paths must remain explicit rather than relying on private policy interfaces.
+Under D-051, `P5-AUD-02` has reached `CODE_COMPLETE` while audible two-output evidence remains deferred. The automated implementation frontier advances to **P5-CTRL-01**: integrate the already validated XInput/DirectInput controller contracts into a production source inventory/polling and per-Seat mapping layer with stable source identity, reconnect generations, exact vibration ownership, and explicit unsupported API paths; physical controller/vibration acceptance remains deferred.
 
 Deferred validation queue: P3-HW-01 Gate A/B/C remains physically unvalidated and still blocks `PhysicalDeviceCloaking`/physical zero-bleed claims, Phase 3 closure, and release validation. It no longer blocks unrelated automated coding. Later phases may be implemented against truthful controlled/fake evidence and remain `CODE_COMPLETE` until their manual gates are eventually run.
 

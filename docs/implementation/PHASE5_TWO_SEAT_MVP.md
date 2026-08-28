@@ -74,11 +74,11 @@ Physical confirmation of two selected endpoints, reconnect behavior, and any aud
 
 ## P5-AUD-02 — Per-process audio routing capability backends
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **D-051 automated-development rule**
 
-The routing contract, exact process/session ownership checks, fake/controlled backends, apply/verify/rollback state machine, and documented supported provider/Windows backends may be implemented before audible two-output acceptance. A missing safe public Windows mutation path must remain an explicit unsupported capability rather than being replaced with undocumented/private policy COM interfaces.
+The routing contract, exact process/session ownership checks, fake/controlled backends, apply/verify/rollback state machine, and documented supported provider/Windows backends may be implemented before audible two-output acceptance. A missing safe public Windows mutation path remains an explicit unsupported capability rather than being replaced with undocumented/private policy COM interfaces.
 
 **Goal**
 
@@ -108,11 +108,27 @@ Route each selected game's supported audio sessions to its Seat endpoint only wh
 
 Two controlled/real application sessions can be routed to separate physical outputs and restored without modifying unrelated audio sessions.
 
+**Automated implementation evidence — 2026-08-28**
+
+- `hydra_audio_routing` adds a typed route request/status/backend transaction separate from endpoint inventory. It can wait for a late-created game session, recognize an already-correct route without mutation, apply a selected mutable backend, receiver-verify the result, and verify rollback against captured pre-apply endpoint evidence.
+- Ownership is fail-closed: a candidate session must match an exact HydraSeat-owned process by PID plus process creation time. PID-only evidence, PID reuse, system-sounds sessions, and Core Audio sessions reported as spanning multiple processes are never promoted to mutable ownership.
+- The native Windows observer uses the documented `IAudioSessionManager2` / `IAudioSessionEnumerator` / `IAudioSessionControl2` read-only path across active render endpoints. `hydra_audio_diag --sessions` succeeds on the development Windows machine and records exact process identity where Windows permits it.
+- The production `ObserveOnlyRouteBackend` reports `SatisfiedWithoutMutation` only when all exact owned sessions already render on the requested endpoint. If they do not, it reports explicit `Unsupported`; HydraSeat does not use undocumented/private audio-policy COM interfaces to pretend arbitrary cross-endpoint movement is supported.
+- A typed fake mutable backend covers capture-before-mutation, exact root/child ownership, unrelated-session preservation, successful apply verification, partial-apply failure rollback, false-success rejection, rollback verification, and `RecoveryRequired` when rollback cannot be proven.
+- Microsoft-documented process-loopback activation was reviewed as a possible future experimental backend. It provides process-tree render **capture** independent of endpoint; it is not treated as proof of arbitrary endpoint routing and is not enabled by this packet.
+- MSVC x64 and Win32/x86 full suites pass 78/78. Focused P5-AUD-02 tests pass 1/1 on x64, x86, and strict MinGW.
+
+Physical audible two-output routing remains deferred manual evidence. `CODE_COMPLETE` therefore means the capability boundary, observer, transaction, controlled backend behavior, and explicit unsupported production path are complete; it does not claim that arbitrary Windows games can already be moved between audio endpoints.
+
 ---
 
 ## P5-CTRL-01 — Production controller source and per-process routing
 
-**State:** BLOCKED
+**State:** READY
+
+**D-051 automated-development rule**
+
+P3-CTRL-01 and P3-CTRL-02 are `VALIDATED`, and P4-SEAT-01 is `CODE_COMPLETE`. Production controller inventory/polling, stable source identity, per-Seat mapping, synthetic/controlled state/vibration routing, and reconnect generation handling may proceed to `CODE_COMPLETE`; physical controller/vibration acceptance remains a later validation gate.
 
 **Goal**
 
