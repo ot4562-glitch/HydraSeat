@@ -189,6 +189,21 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P5-LAUNCH-01 immutable exactly-two-Seat launch plan and Seat-local activation
+# transaction. Production resource backends are injected behind a typed factory;
+# the coordinator owns ordering, verification, reverse rollback, and isolation.
+add_library(hydra_two_seat_launch STATIC
+    src/two_seat_launch.cpp
+    include/hydra/two_seat_launch.hpp
+)
+target_link_libraries(hydra_two_seat_launch PUBLIC hydra_process hydra_runtime)
+if(MSVC)
+    target_compile_options(hydra_two_seat_launch PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_two_seat_launch PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P4-WIN-01 process-identity-backed top-level window inventory. WinEvent
 # callbacks only enqueue bounded hints; ownership/classification work stays on a
 # dedicated message-pump worker and never adopts windows outside Seat groups.
@@ -1012,6 +1027,19 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 add_test(NAME SeatGameLifecycleTests COMMAND seat_game_lifecycle_tests)
+
+# P5-LAUNCH-01 immutable plan compiler, all-resource activation failure-index
+# rollback, natural-exit Seat-local cleanup, and RuntimeHost two-Seat isolation.
+add_executable(two_seat_launch_tests tests/test_two_seat_launch.cpp)
+target_link_libraries(two_seat_launch_tests PRIVATE hydra_two_seat_launch hydra_runtime)
+if(MSVC)
+    target_compile_options(two_seat_launch_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(two_seat_launch_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME TwoSeatLaunchTests COMMAND two_seat_launch_tests)
+set_tests_properties(TwoSeatLaunchTests PROPERTIES LABELS "P5-LAUNCH-01;P4-SEAT-01")
 
 add_test(NAME RuntimeHostProcessSelfTest COMMAND hydra_host --self-test)
 

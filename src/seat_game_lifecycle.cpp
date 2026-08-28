@@ -253,10 +253,14 @@ SeatGameCommandResult SeatGameLifecycle::observeTargetExit(
         return rejectLocked(SeatGameResultCode::InvalidState,
                             "target exit was reported while exact process ownership is still live");
     }
+    // Process exit does not prove that Seat-local display/input/controller/audio
+    // ownership has already been restored. Run the same idempotent Seat-local
+    // stop/rollback path before accepting the exit as clean.
     std::string verifyError;
-    if (!entry->instance->verifyStopped(verifyError)) {
+    if (!entry->instance->stop(verifyError) ||
+        !entry->instance->verifyStopped(verifyError)) {
         entry->state.phase = SeatGamePhase::RecoveryRequired;
-        entry->state.diagnostic = boundedDiagnostic("target exited but cleanup is unverified: " + verifyError);
+        entry->state.diagnostic = boundedDiagnostic("target exited but Seat-local cleanup is unverified: " + verifyError);
         return finishLocked(SeatGameResultCode::RecoveryRequired,
                             entry->state.diagnostic);
     }
@@ -289,14 +293,15 @@ SeatGameCommandResult SeatGameLifecycle::reconcile(std::uint64_t correlationId) 
         if (entry.state.phase != SeatGamePhase::Playing || !entry.instance ||
             entry.instance->running()) continue;
         std::string error;
-        if (!entry.instance->verifyStopped(error)) {
+        if (!entry.instance->stop(error) ||
+            !entry.instance->verifyStopped(error)) {
             entry.state.phase = SeatGamePhase::RecoveryRequired;
-            entry.state.diagnostic = boundedDiagnostic("automatic exit cleanup unverified: " + error);
+            entry.state.diagnostic = boundedDiagnostic("automatic Seat-local exit cleanup unverified: " + error);
         } else {
             entry.instance.reset();
             entry.state.binding.reset();
             entry.state.phase = SeatGamePhase::Idle;
-            entry.state.diagnostic = "normal target exit reconciled";
+            entry.state.diagnostic = "normal target exit reconciled with Seat-local rollback";
         }
         changed = true;
     }

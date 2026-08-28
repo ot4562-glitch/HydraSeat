@@ -1,0 +1,491 @@
+#include "hydra/two_seat_launch.hpp"
+#include "hydra/runtime_host.hpp"
+
+#include <algorithm>
+#include <cstdlib>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+namespace {
+
+using namespace hydra;
+using namespace hydra::launch;
+using namespace hydra::runtime;
+
+int failures = 0;
+
+void check(bool condition, std::string_view message) {
+    if (!condition) {
+        std::cerr << "FAIL: " << message << '\n';
+        ++failures;
+    }
+}
+
+std::string key(SeatId seatId, ResourceKind kind) {
+    return std::to_string(seatId) + ":" + std::string(resourceKindName(kind));
+}
+
+SeatLaunchInput makeInput(SeatId seatId, std::string gameId) {
+    SeatLaunchInput input;
+    input.seat.seatId = seatId;
+    input.seat.name = L"Seat " + std::to_wstring(seatId);
+    input.seat.displayIds = {L"DISPLAY-" + std::to_wstring(seatId)};
+    input.seat.primaryDisplayId = input.seat.displayIds.front();
+    input.seat.keyboardIds = {L"KEYBOARD-" + std::to_wstring(seatId)};
+    input.seat.mouseIds = {L"MOUSE-" + std::to_wstring(seatId)};
+    input.seat.controllerIds = {L"CONTROLLER-" + std::to_wstring(seatId)};
+    input.seat.audioOutputEndpointId = L"AUDIO-" + std::to_wstring(seatId);
+    input.seat.audioInputEndpointId = L"MIC-" + std::to_wstring(seatId);
+    input.seat.targetHwnd = 1000u + seatId;
+    input.seat.active = true;
+
+    input.target.gameId = std::move(gameId);
+    input.target.process.seatId = seatId;
+    input.target.process.executablePath = L"C:\\HydraSeat\\fixture.exe";
+    input.target.process.arguments = {L"--seat", std::to_wstring(seatId)};
+    input.target.process.workingDirectory = L"C:\\HydraSeat";
+    input.target.process.environmentOverrides = {{L"HYDRA_SEAT", std::to_wstring(seatId)}};
+    input.target.requirements.display = true;
+    input.target.requirements.keyboard = true;
+    input.target.requirements.mouse = true;
+    input.target.requirements.controller = true;
+    input.target.requirements.audioOutput = true;
+    input.target.requirements.windowOwnership = true;
+    input.target.requirements.recovery = true;
+    return input;
+}
+
+std::vector<SeatLaunchInput> validInputs() {
+    return {makeInput(1, "game-a"), makeInput(2, "game-b")};
+}
+
+const SeatActivationPlan* seatPlan(const TwoSeatLaunchPlan& plan, SeatId seatId) {
+    const auto found = std::find_if(
+        plan.seats.begin(), plan.seats.end(),
+        [seatId](const SeatActivationPlan& seat) { return seat.seatId == seatId; });
+    return found == plan.seats.end() ? nullptr : &*found;
+}
+
+struct SharedResourceState {
+    std::map<std::string, bool> active;
+    std::vector<std::string> log;
+    std::optional<std::pair<SeatId, ResourceKind>> failActivateAfterMutation;
+    std::optional<std::pair<SeatId, ResourceKind>> failVerifyActive;
+    std::optional<std::pair<SeatId, ResourceKind>> failRollback;
+    std::optional<std::pair<SeatId, ResourceKind>> failPrepare;
+    int createCalls{0};
+};
+
+bool matches(const std::optional<std::pair<SeatId, ResourceKind>>& configured,
+             SeatId seatId, ResourceKind kind) {
+    return configured && configured->first == seatId && configured->second == kind;
+}
+
+class FakeResource final : public ISeatActivationResource {
+public:
+    FakeResource(SeatId seatId, ResourceKind kind,
+                 std::shared_ptr<SharedResourceState> state)
+        : seatId_(seatId), kind_(kind), state_(std::move(state)) {}
+
+    ResourceKind kind() const noexcept override { return kind_; }
+
+    bool prepare(const SeatActivationPlan& plan,
+                 const SeatGameBinding& binding,
+                 std::string& error) override {
+        state_->log.push_back("prepare:" + key(seatId_, kind_));
+        if (plan.seatId != seatId_ || binding.gameId != plan.target.gameId) {
+            error = "fixture plan/binding mismatch";
+            return false;
+        }
+        if (matches(state_->failPrepare, seatId_, kind_)) {
+            error = "injected prepare failure";
+            return false;
+        }
+        prepared_ = true;
+        error.clear();
+        return true;
+    }
+
+    bool activate(std::string& error) override {
+        state_->log.push_back("activate:" + key(seatId_, kind_));
+        if (!prepared_) {
+            error = "activate before prepare";
+            return false;
+        }
+        state_->active[key(seatId_, kind_)] = true;
+        if (matches(state_->failActivateAfterMutation, seatId_, kind_)) {
+            error = "injected activation failure after mutation";
+            return false;
+        }
+        error.clear();
+        return true;
+    }
+
+    bool verifyActive(std::string& error) override {
+        state_->log.push_back("verify-active:" + key(seatId_, kind_));
+        if (matches(state_->failVerifyActive, seatId_, kind_)) {
+            error = "injected active verification failure";
+            return false;
+        }
+        if (!active()) {
+            error = "resource is not active";
+            return false;
+        }
+        error.clear();
+        return true;
+    }
+
+    bool rollback(std::string& error) noexcept override {
+        state_->log.push_back("rollback:" + key(seatId_, kind_));
+        if (matches(state_->failRollback, seatId_, kind_)) {
+            error = "injected rollback failure";
+            return false;
+        }
+        state_->active[key(seatId_, kind_)] = false;
+        error.clear();
+        return true;
+    }
+
+    bool verifySafe(std::string& error) noexcept override {
+        state_->log.push_back("verify-safe:" + key(seatId_, kind_));
+        if (active()) {
+            error = "resource remains active";
+            return false;
+        }
+        error.clear();
+        return true;
+    }
+
+    bool active() const noexcept override {
+        const auto found = state_->active.find(key(seatId_, kind_));
+        return found != state_->active.end() && found->second;
+    }
+
+private:
+    SeatId seatId_{0};
+    ResourceKind kind_{ResourceKind::Recovery};
+    std::shared_ptr<SharedResourceState> state_;
+    bool prepared_{false};
+};
+
+class FakeResourceFactory final : public ISeatActivationResourceFactory {
+public:
+    explicit FakeResourceFactory(std::shared_ptr<SharedResourceState> state)
+        : state_(std::move(state)) {}
+
+    std::unique_ptr<ISeatActivationResource> create(
+        ResourceKind kind, const SeatActivationPlan& plan,
+        std::string& error) override {
+        ++state_->createCalls;
+        error.clear();
+        return std::make_unique<FakeResource>(plan.seatId, kind, state_);
+    }
+
+private:
+    std::shared_ptr<SharedResourceState> state_;
+};
+
+bool allSeatResourcesInactive(const SharedResourceState& state, SeatId seatId,
+                              const SeatActivationPlan& plan) {
+    return std::all_of(plan.resources.begin(), plan.resources.end(),
+                       [&](ResourceKind kind) {
+                           const auto found = state.active.find(key(seatId, kind));
+                           return found == state.active.end() || !found->second;
+                       });
+}
+
+bool allSeatResourcesActive(const SharedResourceState& state, SeatId seatId,
+                            const SeatActivationPlan& plan) {
+    return std::all_of(plan.resources.begin(), plan.resources.end(),
+                       [&](ResourceKind kind) {
+                           const auto found = state.active.find(key(seatId, kind));
+                           return found != state.active.end() && found->second;
+                       });
+}
+
+void forceProcessExited(SharedResourceState& state, SeatId seatId) {
+    state.active[key(seatId, ResourceKind::Process)] = false;
+}
+
+SeatGamePhase phaseFor(const HostRuntimeSnapshot& snapshot, SeatId seatId) {
+    const auto found = std::find_if(
+        snapshot.seatGames.begin(), snapshot.seatGames.end(),
+        [seatId](const SeatGameState& seat) { return seat.seatId == seatId; });
+    return found == snapshot.seatGames.end() ? SeatGamePhase::RecoveryRequired
+                                            : found->phase;
+}
+
+SeatGameBinding bindingFor(const SeatActivationPlan& seat, std::string player) {
+    return {std::move(player), seat.target.gameId};
+}
+
+void testCompileDeterminismAndTransientStateRemoval() {
+    auto inputs = validInputs();
+    auto first = compileTwoSeatLaunchPlan(inputs);
+    check(first.succeeded(), "valid exactly-two-Seat launch inputs compile");
+    if (!first.plan) return;
+    check(first.plan->seats.size() == 2 && first.plan->seats[0].seatId == 1 &&
+              first.plan->seats[1].seatId == 2 && first.plan->fingerprint != 0,
+          "compiled plan is canonical by Seat ID and fingerprinted");
+    check(first.plan->seats[0].seat.targetHwnd == 0 &&
+              first.plan->seats[1].seat.targetHwnd == 0,
+          "legacy transient HWND is stripped from the immutable launch plan");
+
+    std::reverse(inputs.begin(), inputs.end());
+    inputs[0].seat.targetHwnd = 999999u;
+    inputs[1].seat.targetHwnd = 888888u;
+    auto second = compileTwoSeatLaunchPlan(inputs);
+    check(second.succeeded() && second.plan &&
+              second.plan->fingerprint == first.plan->fingerprint &&
+              second.plan->seats == first.plan->seats,
+          "input order and stale HWND do not change the canonical immutable plan");
+
+    auto changed = validInputs();
+    changed[0].target.capabilities.audio = false;
+    changed[0].target.requirements.audioOutput = false;
+    auto changedPlan = compileTwoSeatLaunchPlan(changed);
+    check(changedPlan.succeeded() && changedPlan.plan &&
+              changedPlan.plan->fingerprint != first.plan->fingerprint,
+          "capability changes are covered by the immutable plan fingerprint");
+}
+
+void testCompilePreflightFailsBeforeMutation() {
+    auto inputs = validInputs();
+    inputs[1].seat.keyboardIds.clear();
+    auto missing = compileTwoSeatLaunchPlan(inputs);
+    check(!missing.succeeded() &&
+              std::any_of(missing.issues.begin(), missing.issues.end(),
+                          [](const CompileIssue& issue) {
+                              return issue.code == CompileIssueCode::MissingKeyboard;
+                          }),
+          "missing keyboard fails only when the game declares keyboard required");
+
+    inputs = validInputs();
+    inputs[1].target.requirements.keyboard = false;
+    inputs[1].seat.keyboardIds.clear();
+    check(compileTwoSeatLaunchPlan(inputs).succeeded(),
+          "Seat may omit keyboard when the selected game does not require one");
+
+    inputs = validInputs();
+    inputs[1].seat.primaryDisplayId = L"NOT-IN-GROUP";
+    check(!compileTwoSeatLaunchPlan(inputs).succeeded(),
+          "primary display must belong to the Seat display group");
+
+    inputs = validInputs();
+    inputs[1].seat.displayIds = inputs[0].seat.displayIds;
+    inputs[1].seat.primaryDisplayId = inputs[1].seat.displayIds.front();
+    check(!compileTwoSeatLaunchPlan(inputs).succeeded(),
+          "exclusive required display cannot be shared across launch Seats");
+
+    inputs = validInputs();
+    inputs[1].seat.audioOutputEndpointId = inputs[0].seat.audioOutputEndpointId;
+    auto duplicateAudio = compileTwoSeatLaunchPlan(inputs);
+    check(!duplicateAudio.succeeded() &&
+              std::any_of(duplicateAudio.issues.begin(), duplicateAudio.issues.end(),
+                          [](const CompileIssue& issue) {
+                              return issue.code == CompileIssueCode::DuplicateExclusiveAudioOutput;
+                          }),
+          "required per-Seat audio output cannot silently alias the same endpoint");
+
+    inputs = validInputs();
+    inputs[0].target.capabilities.controller = false;
+    check(!compileTwoSeatLaunchPlan(inputs).succeeded(),
+          "required unsupported controller capability fails before resource creation");
+
+    inputs = validInputs();
+    inputs[0].target.requirements.highRisk = true;
+    check(!compileTwoSeatLaunchPlan(inputs).succeeded(),
+          "high-risk launch options require explicit approval at plan compile time");
+    inputs[0].target.highRiskApproved = true;
+    check(compileTwoSeatLaunchPlan(inputs).succeeded(),
+          "explicit high-risk approval allows the otherwise valid plan to compile");
+
+    const auto oneSeat = std::vector<SeatLaunchInput>{makeInput(1, "one")};
+    check(!compileTwoSeatLaunchPlan(oneSeat).succeeded(),
+          "P5 launch plan requires exactly two active Seats");
+    auto three = validInputs();
+    three.push_back(makeInput(3, "three"));
+    check(!compileTwoSeatLaunchPlan(three).succeeded(),
+          "third active Seat is rejected before activation");
+}
+
+void testEveryActivationFailureRollsBackInReverse() {
+    const auto compiled = compileTwoSeatLaunchPlan(validInputs());
+    check(compiled.plan.has_value(), "failure-index fixture compiles");
+    if (!compiled.plan) return;
+    const auto* plan = seatPlan(*compiled.plan, 2);
+    if (plan == nullptr) return;
+
+    for (const auto failKind : plan->resources) {
+        auto state = std::make_shared<SharedResourceState>();
+        state->failActivateAfterMutation = std::make_pair(SeatId{2}, failKind);
+        auto factory = std::make_shared<FakeResourceFactory>(state);
+        PlannedSeatGameInstance instance(*plan, factory);
+        std::string error;
+        const bool started = instance.start(bindingFor(*plan, "luigi"), error);
+        check(!started && !error.empty(),
+              "each injected activation failure is surfaced");
+        check(allSeatResourcesInactive(*state, 2, *plan),
+              "each activation failure restores every Seat-local resource to safe state");
+        check(instance.verifyStopped(error),
+              "rolled-back failed activation verifies stopped");
+
+        std::vector<ResourceKind> rollbackKinds;
+        for (const auto& event : state->log) {
+            if (!event.starts_with("rollback:2:")) continue;
+            const auto name = event.substr(std::string("rollback:2:").size());
+            const auto found = std::find_if(
+                plan->resources.begin(), plan->resources.end(),
+                [&](ResourceKind kind) { return resourceKindName(kind) == name; });
+            if (found != plan->resources.end()) rollbackKinds.push_back(*found);
+        }
+        const std::vector<ResourceKind> expected(plan->resources.rbegin(),
+                                                 plan->resources.rend());
+        check(rollbackKinds == expected,
+              "failure cleanup invokes resource rollback in exact reverse activation order");
+    }
+}
+
+void testRollbackFailureRetainsRecoveryOwnership() {
+    const auto compiled = compileTwoSeatLaunchPlan(validInputs());
+    if (!compiled.plan) return;
+    const auto* plan = seatPlan(*compiled.plan, 2);
+    if (plan == nullptr) return;
+    auto state = std::make_shared<SharedResourceState>();
+    state->failActivateAfterMutation = std::make_pair(SeatId{2}, ResourceKind::Controller);
+    state->failRollback = std::make_pair(SeatId{2}, ResourceKind::Controller);
+    auto factory = std::make_shared<FakeResourceFactory>(state);
+    PlannedSeatGameInstance instance(*plan, factory);
+    std::string error;
+    check(!instance.start(bindingFor(*plan, "luigi"), error),
+          "fixture activation fails with injected rollback failure");
+    check(!instance.verifyStopped(error),
+          "unverified rollback is not converted to a stopped result");
+    check(state->active[key(2, ResourceKind::Controller)],
+          "failed rollback retains exact active resource ownership for recovery retry");
+    state->failRollback.reset();
+    check(instance.stop(error) && instance.verifyStopped(error),
+          "later Seat-local recovery retry can clean the retained exact resource");
+}
+
+void testRuntimeHostIndependentSeatIsolationAndNaturalExitCleanup() {
+    const auto compiled = compileTwoSeatLaunchPlan(validInputs());
+    check(compiled.plan.has_value(), "RuntimeHost integration plan compiles");
+    if (!compiled.plan) return;
+    const auto* seat1 = seatPlan(*compiled.plan, 1);
+    const auto* seat2 = seatPlan(*compiled.plan, 2);
+    if (seat1 == nullptr || seat2 == nullptr) return;
+
+    auto state = std::make_shared<SharedResourceState>();
+    auto resourceFactory = std::make_shared<FakeResourceFactory>(state);
+    auto instanceFactory = std::make_shared<PlannedSeatGameInstanceFactory>(
+        *compiled.plan, resourceFactory);
+    RuntimeHost host({}, instanceFactory);
+    std::vector<SeatConfig> profile{seat1->seat, seat2->seat};
+    check(host.loadProfile(profile, 1, 100).succeeded(), "host loads two-Seat profile");
+    check(host.plan(101).succeeded() && host.prepare(102).succeeded() &&
+              host.start(103).succeeded(),
+          "host enters active whole-machine runtime before Seat game starts");
+    check(host.assignSeatGame(1, bindingFor(*seat1, "mario"), 104).succeeded() &&
+              host.startSeatGame(1, 105).succeeded(),
+          "Seat 1 starts from the immutable resource plan");
+    check(host.assignSeatGame(2, bindingFor(*seat2, "luigi"), 106).succeeded() &&
+              host.startSeatGame(2, 107).succeeded(),
+          "Seat 2 starts independently from the same immutable two-Seat plan");
+    auto snapshot = host.snapshot();
+    check(phaseFor(snapshot, 1) == SeatGamePhase::Playing &&
+              phaseFor(snapshot, 2) == SeatGamePhase::Playing &&
+              allSeatResourcesActive(*state, 1, *seat1) &&
+              allSeatResourcesActive(*state, 2, *seat2),
+          "both Seat-local resource sets are active without shared ownership");
+
+    check(host.stopSeatGame(2, 108).succeeded(), "Seat 2 stops independently");
+    snapshot = host.snapshot();
+    check(phaseFor(snapshot, 1) == SeatGamePhase::Playing &&
+              phaseFor(snapshot, 2) == SeatGamePhase::Idle &&
+              allSeatResourcesActive(*state, 1, *seat1) &&
+              allSeatResourcesInactive(*state, 2, *seat2),
+          "Seat 2 rollback does not rebuild or stop healthy Seat 1");
+
+    check(host.assignSeatGame(2, bindingFor(*seat2, "luigi"), 109).succeeded() &&
+              host.startSeatGame(2, 110).succeeded(),
+          "idle Seat 2 may start again while Seat 1 remains playing");
+    forceProcessExited(*state, 2);
+    check(host.observeSeatGameExit(2, true, "fixture exited", 111).succeeded(),
+          "natural Seat 2 process exit triggers Seat-local cleanup");
+    snapshot = host.snapshot();
+    check(phaseFor(snapshot, 1) == SeatGamePhase::Playing &&
+              phaseFor(snapshot, 2) == SeatGamePhase::Idle &&
+              allSeatResourcesActive(*state, 1, *seat1) &&
+              allSeatResourcesInactive(*state, 2, *seat2),
+          "natural process exit rolls back display/input/controller/audio resources for only that Seat");
+
+    check(host.stopSeatGame(1, 112).succeeded(), "Seat 1 final stop succeeds");
+    snapshot = host.snapshot();
+    check(snapshot.wholeMachineReturnRequested &&
+              phaseFor(snapshot, 1) == SeatGamePhase::Idle &&
+              phaseFor(snapshot, 2) == SeatGamePhase::Idle,
+          "both Seat games Idle requests verified whole-machine return");
+}
+
+void testOneSeatStartFailureDoesNotRollbackHealthySeat() {
+    const auto compiled = compileTwoSeatLaunchPlan(validInputs());
+    if (!compiled.plan) return;
+    const auto* seat1 = seatPlan(*compiled.plan, 1);
+    const auto* seat2 = seatPlan(*compiled.plan, 2);
+    if (seat1 == nullptr || seat2 == nullptr) return;
+
+    auto state = std::make_shared<SharedResourceState>();
+    auto resourceFactory = std::make_shared<FakeResourceFactory>(state);
+    auto instanceFactory = std::make_shared<PlannedSeatGameInstanceFactory>(
+        *compiled.plan, resourceFactory);
+    RuntimeHost host({}, instanceFactory);
+    std::vector<SeatConfig> profile{seat1->seat, seat2->seat};
+    check(host.loadProfile(profile, 1, 200).succeeded() &&
+              host.plan(201).succeeded() && host.prepare(202).succeeded() &&
+              host.start(203).succeeded(),
+          "failure-isolation host reaches active runtime");
+    check(host.assignSeatGame(1, bindingFor(*seat1, "mario"), 204).succeeded() &&
+              host.startSeatGame(1, 205).succeeded(),
+          "healthy Seat 1 starts before Seat 2 failure injection");
+
+    state->failActivateAfterMutation =
+        std::make_pair(SeatId{2}, ResourceKind::Controller);
+    check(host.assignSeatGame(2, bindingFor(*seat2, "luigi"), 206).succeeded(),
+          "Seat 2 binding is accepted before controlled backend failure");
+    const auto failed = host.startSeatGame(2, 207);
+    check(!failed.succeeded() && failed.code == SeatGameResultCode::BackendFailure,
+          "Seat 2 activation failure is contained as Seat-local backend failure after verified rollback");
+    const auto snapshot = host.snapshot();
+    check(phaseFor(snapshot, 1) == SeatGamePhase::Playing &&
+              phaseFor(snapshot, 2) == SeatGamePhase::Idle &&
+              allSeatResourcesActive(*state, 1, *seat1) &&
+              allSeatResourcesInactive(*state, 2, *seat2),
+          "Seat 2 start failure leaves exact healthy Seat 1 state/resources unchanged");
+}
+
+} // namespace
+
+int main() {
+    testCompileDeterminismAndTransientStateRemoval();
+    testCompilePreflightFailsBeforeMutation();
+    testEveryActivationFailureRollsBackInReverse();
+    testRollbackFailureRetainsRecoveryOwnership();
+    testRuntimeHostIndependentSeatIsolationAndNaturalExitCleanup();
+    testOneSeatStartFailureDoesNotRollbackHealthySeat();
+
+    if (failures != 0) {
+        std::cerr << failures << " two-Seat launch test(s) failed.\n";
+        return EXIT_FAILURE;
+    }
+    std::cout << "Two-Seat launch tests passed.\n";
+    return EXIT_SUCCESS;
+}
