@@ -245,7 +245,7 @@ This is controlled/fake resource evidence. Real-game process/window/input/contro
 
 ## P5-MET-01 — Integrated session metrics and zero-bleed report
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **D-051 automated-development rule**
 
@@ -279,11 +279,27 @@ Default report remains redacted: no typed text, credentials, Player names, perso
 
 A machine-readable report can prove or disprove the declared MVP isolation/resource criteria without inferring zero bleed from missing receiver evidence.
 
+**Automated implementation evidence — 2026-08-28**
+
+- `hydra_session_metrics` wraps the existing receiver-aware Phase 3 `InputMetricsReport` in a versioned two-Seat session report keyed by the immutable P5 launch-plan fingerprint. The aggregate contains no Player name, typed text, credential, personal path, or raw device-serial field.
+- Evidence origin is explicit: `Synthetic`, `ControlledProcess`, or `Physical`. A complete controlled-process run may pass its declared controlled criteria but can never set `physicalValidationEligible`; only complete physical evidence may do that.
+- Isolation fails on verified cross-Seat/cross-process receiver evidence. Zero observed cross-events is only a pass when every unique input event has complete receiver evidence, all required stages are present, and queue/recorder evidence is loss-free. Missing receiver evidence therefore remains `InsufficientEvidence`, never inferred zero bleed.
+- The report carries launch/stop/rollback duration maxima, bounded host CPU/working-set samples already collected by P3 metrics, and per-Seat process/window/display/input plus controller/audio outcomes. `Unsupported`/`MissingEvidence` prevents a pass; explicit capability failure or `RecoveryRequired` fails the overall session evidence.
+- `ReturnedToWindows` cannot be a successful session verdict without an attempted and verified rollback postcondition. A status label alone is not evidence that ordinary Windows was restored.
+- Input validation rejects unsupported schema, zero plan fingerprint, anything other than exactly two unique nonzero Seat metric records, invalid underlying input traces, and impossible rollback state.
+- MSVC x64 and Win32/x86 full suites pass 82/82 after the final rollback-postcondition hardening. Focused P5-MET-01 passes 1/1 on x64, x86, and strict MinGW.
+
+Real physical zero-bleed, real-game latency/resource behavior, and physical audio/controller/display outcomes remain deferred validation evidence. `CODE_COMPLETE` describes the evidence model/aggregator, not those product claims.
+
 ---
 
 ## P5-MVP-01 — Controlled/open-source end-to-end two-Seat session
 
-**State:** BLOCKED
+**State:** READY
+
+**D-051 automated-development rule**
+
+The production controlled/open-source harness, immutable plan/host integration, deterministic process/window/display/input/controller/audio fake or already-safe observed paths, lifecycle sequencing, orphan checks, evidence bundle generation, and synthetic/controlled end-to-end fault matrix may proceed to `CODE_COMPLETE`. The packet's declared physical two-display/two-input acceptance remains deferred and is required only before `VALIDATED`/release claims.
 
 **Goal**
 

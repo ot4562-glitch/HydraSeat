@@ -450,6 +450,21 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P5-MET-01 bounded privacy-safe integrated two-Seat evidence report. This
+# aggregates existing input metrics plus Seat capability/timing outcomes and
+# keeps physical-validation eligibility separate from controlled/synthetic pass.
+add_library(hydra_session_metrics STATIC
+    src/session_metrics.cpp
+    include/hydra/session_metrics.hpp
+)
+target_link_libraries(hydra_session_metrics PUBLIC hydra_input_metrics)
+if(MSVC)
+    target_compile_options(hydra_session_metrics PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_session_metrics PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P8-WATCH-01 versioned lease/rollback protocol and idempotent rollback registry.
 # The portable core contains no arbitrary command execution or persistent-state I/O.
 add_library(hydra_watchdog_core STATIC
@@ -1571,6 +1586,18 @@ add_test(NAME InputMetricsCliSelfTest
          COMMAND hydra_input_metrics_cli --self-test)
 add_test(NAME InputMetricsFixtureReport
          COMMAND hydra_input_metrics_cli --fixture-report)
+
+# P5-MET-01 integrated evidence origin/verdict/privacy/zero-cross report tests.
+add_executable(session_metrics_tests tests/test_session_metrics.cpp)
+target_link_libraries(session_metrics_tests PRIVATE hydra_session_metrics)
+if(MSVC)
+    target_compile_options(session_metrics_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(session_metrics_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SessionMetricsTests COMMAND session_metrics_tests)
+set_tests_properties(SessionMetricsTests PROPERTIES LABELS "P5-MET-01")
 
 # P3-HW-01 acceptance tooling is CI-tested without claiming physical acceptance.
 # Python parses bounded synthetic evidence; Windows additionally checks that the
