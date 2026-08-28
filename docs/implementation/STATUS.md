@@ -127,7 +127,7 @@ Known product gap exposed by the roadmap rewrite:
 ### 2026-08-28 — P4-SEAT-01 controlled implementation complete
 
 State: `CODE_COMPLETE` — declared automated implementation and controlled-process evidence pass; real-game/physical recovery gates remain separate.
-Branch: `feat/p4-seat-lifecycle`; implementation commit and exact remote CI run are recorded after fork validation.
+Branch/commit: `feat/p4-seat-lifecycle`, implementation commit `b5fd37ff8fda8aed6e35b5f2b951e8d707972b69`; fork PR #27 run `33134415259` passed Windows x64, Win32/x86, Gate C cross-architecture, and P3-E open-source application jobs.
 Automated evidence:
 
 - MSVC x64 full build and CTest pass **72/72**, including `SeatGameLifecycleTests`, `HostProtocolTests`, and `SeatGameProcessLifecycleTests`;
@@ -151,7 +151,7 @@ Next dependency: P4-REC-01 controlled automation is code-complete, but productio
 ### 2026-08-28 — P4-REC-01 controlled recovery implementation complete
 
 State: `CODE_COMPLETE` — declared controlled automation is implemented and passing; required production integration/manual evidence is incomplete.
-Branch: `feat/p4-seat-lifecycle`; implementation commit and exact remote CI run are recorded after fork validation.
+Branch/commit: `feat/p4-seat-lifecycle`, implementation commit `b5fd37ff8fda8aed6e35b5f2b951e8d707972b69`; fork PR #27 run `33134415259` passed Windows x64, Win32/x86, Gate C cross-architecture, and P3-E open-source application jobs.
 Automated evidence:
 
 - MSVC x64 and Win32/x86 full builds and CTest pass **72/72**;
