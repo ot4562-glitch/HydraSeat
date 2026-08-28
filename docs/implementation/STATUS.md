@@ -3,8 +3,8 @@
 ## Current program state
 
 - Current validation phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P5-AUD-01 — Audio endpoint inventory and Seat assignment validation** (automated implementation frontier under D-051)
-- Current default packet state: **READY for automated implementation** — Phase 4's remaining blockers are manual/physical validation only; P5-AUD-01 is read-only inventory/validation work and may proceed to `CODE_COMPLETE` without pretending Phase 4 is `VALIDATED`/closed.
+- Current default packet: **P5-AUD-02 — Per-process audio routing capability backends** (automated implementation frontier under D-051)
+- Current default packet state: **READY for automated implementation** — P5-AUD-01 is `CODE_COMPLETE`; P5-AUD-02 may implement typed routing capability contracts, process/session ownership, fake/controlled apply/verify/rollback, and only a documented Windows production backend where the public API actually supports it. Missing physical audible routing evidence remains a validation/release gate, not a coding blocker.
 - Deferred validation queue starts with **P3-HW-01** — tooling/CI are complete; real two-keyboard/two-pointing-device physical Gate A/B/C evidence is still required before physical isolation/cloaking claims and Phase 3 closure.
 - Product contract: **HydraSeat v1 is a two-Seat, game-first local Windows gaming product** for households that want to use the spare performance of one capable PC instead of buying a second complete desktop solely for simultaneous local gaming. See `docs/PRODUCT_V1.md`.
 - v1 does not pursue N-Seat generalization, a general independent Windows desktop per Seat, or a maintainer-created official game-certification badge.
@@ -170,6 +170,13 @@ Remaining evidence:
 - physical display unplug/replug, sign-out/restart, and ordinary-Windows postcondition acceptance;
 - real-game/input/audio/controller/window-helper ownership remains outside the controlled synthetic fixture.
 
+## Phase 5 automated frontier
+
+| Packet | State | Evidence / remaining gate |
+| --- | --- | --- |
+| P5-AUD-01 | CODE_COMPLETE | Read-only Core Audio render/capture inventory, stable endpoint ID, state/default-role observation, bounded notification generation, optional Seat audio validation; x64/x86 full 77/77, strict P5-AUD-01 2/2, and local native read-only inventory observed 37 endpoints; selected two-output reconnect/audible acceptance remains physical/manual |
+| P5-AUD-02 | READY | Implement typed per-process audio-routing capability contracts and fake/controlled apply/verify/rollback; production Windows mutation is allowed only through a documented supported API/backend and must leave unsupported paths explicit |
+
 ## Manual/physical gates still pending
 
 | Gate | State | Required evidence |
@@ -186,7 +193,7 @@ Remaining evidence:
 
 ## Current next action
 
-Under D-051, `P3-D-02` has reached `CODE_COMPLETE` while its physical Gate D evidence remains deferred. The automated implementation frontier advances to **P5-AUD-01**: implement read-only Windows audio endpoint inventory, stable endpoint identity, at-most-two-Seat assignment validation, and deterministic change snapshots without performing per-process audio routing mutation.
+Under D-051, `P5-AUD-01` has reached `CODE_COMPLETE` while selected two-output reconnect/audible evidence remains deferred. The automated implementation frontier advances to **P5-AUD-02**: implement typed per-process audio routing capability contracts, exact owned-process/session checks, fake/controlled apply/verify/rollback, and only documented supported production routing paths; unsupported Windows/game paths must remain explicit rather than relying on private policy interfaces.
 
 Deferred validation queue: P3-HW-01 Gate A/B/C remains physically unvalidated and still blocks `PhysicalDeviceCloaking`/physical zero-bleed claims, Phase 3 closure, and release validation. It no longer blocks unrelated automated coding. Later phases may be implemented against truthful controlled/fake evidence and remain `CODE_COMPLETE` until their manual gates are eventually run.
 
