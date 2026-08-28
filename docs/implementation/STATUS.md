@@ -3,8 +3,8 @@
 ## Current program state
 
 - Current validation phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P5-CTRL-01 — Production controller source and per-process routing** (automated implementation frontier under D-051)
-- Current default packet state: **READY for automated implementation** — P3-CTRL-01/P3-CTRL-02 are `VALIDATED`, P4-SEAT-01 is `CODE_COMPLETE`, and P5-AUD-02 is now `CODE_COMPLETE`. Production controller source identity/polling, per-Seat mapping, controlled XInput/DirectInput capability selection, vibration ownership, and reconnect generation may proceed while physical controller/vibration evidence remains a validation gate.
+- Current default packet: **P5-LAUNCH-01 — Minimal two-Seat launch plan and activation transaction** (automated implementation frontier under D-051)
+- Current default packet state: **READY for automated implementation** — P5-AUD-02 and P5-CTRL-01 are `CODE_COMPLETE`; immutable two-Seat plan compilation, controlled resource preparation, activation ordering, failure-index rollback, and production-host integration may proceed while P3-CLOSE-01 remains physically/manual blocked and must not be re-labelled complete.
 - Deferred validation queue starts with **P3-HW-01** — tooling/CI are complete; real two-keyboard/two-pointing-device physical Gate A/B/C evidence is still required before physical isolation/cloaking claims and Phase 3 closure.
 - Product contract: **HydraSeat v1 is a two-Seat, game-first local Windows gaming product** for households that want to use the spare performance of one capable PC instead of buying a second complete desktop solely for simultaneous local gaming. See `docs/PRODUCT_V1.md`.
 - v1 does not pursue N-Seat generalization, a general independent Windows desktop per Seat, or a maintainer-created official game-certification badge.
@@ -176,7 +176,8 @@ Remaining evidence:
 | --- | --- | --- |
 | P5-AUD-01 | CODE_COMPLETE | Read-only Core Audio render/capture inventory, stable endpoint ID, state/default-role observation, bounded notification generation, optional Seat audio validation; x64/x86 full 77/77, strict P5-AUD-01 2/2, and local native read-only inventory observed 37 endpoints; selected two-output reconnect/audible acceptance remains physical/manual |
 | P5-AUD-02 | CODE_COMPLETE | Exact PID+creation-time Core Audio session ownership, late-session observation, typed apply/verify/rollback contract, explicit observe-only production fallback, x64/x86 full 78/78 and strict P5-AUD-02 1/1 pass; native read-only session enumeration succeeds, while arbitrary endpoint movement/audible two-output routing remains unsupported unless a documented safe backend is selected and physically verified |
-| P5-CTRL-01 | READY | Validated P3 XInput/DirectInput models may now be integrated into production controller source/mapping/reconnect/vibration ownership code under D-051; physical controller/vibration evidence remains deferred |
+| P5-CTRL-01 | CODE_COMPLETE | Production poll worker, runtime-only XInput slot policy, stable DirectInput GUID identity, two-Seat binding, reconnect generation, exact virtual-state/vibration ownership, x64/x86 full 80/80, strict focused 2/2, and native read-only controller diagnostic pass; no physical controller is currently attached on the dev PC, so physical state/vibration evidence remains deferred |
+| P5-LAUNCH-01 | READY | Compile/execute one immutable two-Seat plan using CODE_COMPLETE audio/controller/runtime foundations with controlled/fake resources and failure-index rollback under D-051; P3-CLOSE physical/manual evidence remains deferred and cannot be inferred |
 
 ## Manual/physical gates still pending
 
@@ -194,7 +195,7 @@ Remaining evidence:
 
 ## Current next action
 
-Under D-051, `P5-AUD-02` has reached `CODE_COMPLETE` while audible two-output evidence remains deferred. The automated implementation frontier advances to **P5-CTRL-01**: integrate the already validated XInput/DirectInput controller contracts into a production source inventory/polling and per-Seat mapping layer with stable source identity, reconnect generations, exact vibration ownership, and explicit unsupported API paths; physical controller/vibration acceptance remains deferred.
+Under D-051, `P5-CTRL-01` has reached `CODE_COMPLETE` while physical controller/vibration evidence remains deferred. The automated implementation frontier advances to **P5-LAUNCH-01**: compile one immutable exactly-two-Seat activation plan, prepare owned resources, arm required recovery, activate Seat process/display/input/controller/audio ownership in a deterministic order, verify controlled postconditions, and roll back every injected failure index without mutating the other healthy Seat. P3-CLOSE-01 remains a deferred validation gate, not permission to fabricate physical evidence.
 
 Deferred validation queue: P3-HW-01 Gate A/B/C remains physically unvalidated and still blocks `PhysicalDeviceCloaking`/physical zero-bleed claims, Phase 3 closure, and release validation. It no longer blocks unrelated automated coding. Later phases may be implemented against truthful controlled/fake evidence and remain `CODE_COMPLETE` until their manual gates are eventually run.
 

@@ -362,6 +362,28 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P5-CTRL-01 production controller source inventory/polling and Seat mapping.
+# XInput slot numbers remain runtime-only hints; stable persistent identity is
+# provided by capable backends such as DirectInput instance GUIDs (and a future
+# optional GameInput provider). Polling never runs on the Raw Input callback.
+add_library(hydra_controller_runtime STATIC
+    src/controller_runtime.cpp
+    src/controller_native.cpp
+    include/hydra/controller_runtime.hpp
+)
+target_link_libraries(hydra_controller_runtime PUBLIC
+    hydra_virtual_xinput hydra_directinput_policy Threads::Threads)
+if(WIN32)
+    target_link_libraries(hydra_controller_runtime PRIVATE
+        Dinput8.lib Dxguid.lib Xinput.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_controller_runtime PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_controller_runtime PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P3-D-01 read-only HidHide availability probe. The portable core interprets
 # bounded observations; the Windows path uses only service/interface/version
 # queries and the documented GET_ACTIVE/GET_WLINVERSE IOCTLs.
@@ -905,6 +927,17 @@ if(MSVC)
     target_compile_options(hydra_directinput_probe PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_directinput_probe PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P5-CTRL-01 read-only native controller inventory diagnostic. It never sends
+# vibration and explicitly labels XInput slots as runtime-only identities.
+add_executable(hydra_controller_diag src/controller_diag_main.cpp)
+target_link_libraries(hydra_controller_diag PRIVATE hydra_controller_runtime)
+if(MSVC)
+    target_compile_options(hydra_controller_diag PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_controller_diag PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
@@ -1478,6 +1511,21 @@ if(WIN32)
     add_test(NAME DirectInputNativeObservationSelfTest
              COMMAND hydra_directinput_probe --native-observation-self-test)
 endif()
+
+# P5-CTRL-01 production source polling, stable/runtime identity separation,
+# two-Seat mapping, reconnect generation, and exact vibration ownership tests.
+add_executable(controller_runtime_tests tests/test_controller_runtime.cpp)
+target_link_libraries(controller_runtime_tests PRIVATE hydra_controller_runtime)
+if(MSVC)
+    target_compile_options(controller_runtime_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(controller_runtime_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ControllerRuntimeTests COMMAND controller_runtime_tests)
+set_tests_properties(ControllerRuntimeTests PROPERTIES LABELS "P5-CTRL-01")
+add_test(NAME ControllerDiagHelp COMMAND hydra_controller_diag --help)
+set_tests_properties(ControllerDiagHelp PROPERTIES LABELS "P5-CTRL-01")
 
 # P3-MET-01 recorder/report contract, deterministic fixture, and CLI checks.
 add_executable(input_metrics_tests
