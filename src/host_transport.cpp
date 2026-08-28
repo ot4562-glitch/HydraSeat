@@ -7,6 +7,7 @@
 #include <deque>
 #include <limits>
 #include <mutex>
+#include <random>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -16,6 +17,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <bcrypt.h>
 #include <sddl.h>
 #endif
 
@@ -25,6 +27,30 @@ namespace {
 constexpr std::uint32_t kHandshakeTimeoutMs = 5000u;
 constexpr std::size_t kMaxConnectedClients = 16u;
 constexpr std::size_t kSeenCorrelationCapacity = 128u;
+
+std::uint64_t makeCorrelationSeed() noexcept {
+    std::uint64_t value = 0;
+#ifdef _WIN32
+    const NTSTATUS status = BCryptGenRandom(
+        nullptr, reinterpret_cast<PUCHAR>(&value), static_cast<ULONG>(sizeof(value)),
+        BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    if (status >= 0 && value != 0) return value;
+#else
+    try {
+        std::random_device random;
+        value = (static_cast<std::uint64_t>(random()) << 32u) ^
+                static_cast<std::uint64_t>(random());
+        if (value != 0) return value;
+    } catch (...) {
+    }
+#endif
+    static std::atomic<std::uint64_t> fallback{1u};
+    const auto clock = static_cast<std::uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    value = clock ^ (fallback.fetch_add(1u, std::memory_order_relaxed) *
+                     0x9e3779b97f4a7c15ull);
+    return value == 0 ? 1u : value;
+}
 
 #ifdef _WIN32
 
@@ -373,19 +399,20 @@ std::wstring currentHostPipeName() {
 #ifdef _WIN32
     DWORD sessionId = 0;
     if (ProcessIdToSessionId(GetCurrentProcessId(), &sessionId) == FALSE) sessionId = 0;
-    return L"\\\\.\\pipe\\HydraSeat.Host.v2." + std::to_wstring(sessionId);
+    return L"\\\\.\\pipe\\HydraSeat.Host.v3." + std::to_wstring(sessionId);
 #else
-    return L"HydraSeat.Host.v2.unsupported";
+    return L"HydraSeat.Host.v3.unsupported";
 #endif
 }
 
 class HostControlClient::Impl {
 public:
+    Impl() : nextCorrelation(makeCorrelationSeed()) {}
 #ifdef _WIN32
     UniqueHandle pipe;
 #endif
     ClientRole role{ClientRole::ReadOnly};
-    std::atomic<std::uint64_t> nextCorrelation{1};
+    std::atomic<std::uint64_t> nextCorrelation;
     std::optional<std::uint64_t> subscriptionCorrelation;
 
     std::uint64_t allocateCorrelation() {
@@ -558,6 +585,61 @@ std::optional<runtime::RuntimeCommandResult> HostControlClient::applyProfile(
     }
     auto result = decodeCommandResult(response->payload);
     if (!result && error) *error = "host ApplyProfile result payload is malformed";
+    return result;
+}
+
+std::optional<runtime::SeatGameCommandResult> HostControlClient::seatGameCommand(
+    MessageType requestType, const SeatGameCommandPayload& commandPayload,
+    std::uint32_t timeoutMs, std::string* error,
+    std::optional<ErrorPayload>* protocolError) {
+    if (requestType != MessageType::AssignSeatGame &&
+        requestType != MessageType::StartSeatGame &&
+        requestType != MessageType::StopSeatGame) {
+        if (error) *error = "unsupported Seat game command type";
+        return std::nullopt;
+    }
+    const auto payload = encodeSeatGameCommandPayload(commandPayload);
+    if (payload.empty()) {
+        if (error) *error = "Seat game command payload is malformed";
+        return std::nullopt;
+    }
+    const auto correlation = impl_->allocateCorrelation();
+    const auto response = transact(requestType, payload, correlation, timeoutMs, error);
+    if (!response) return std::nullopt;
+    if (response->type == MessageType::Error) {
+        auto decoded = decodeError(response->payload);
+        if (protocolError) *protocolError = decoded;
+        if (error && decoded) *error = decoded->diagnostic;
+        return std::nullopt;
+    }
+    if (response->type != responseTypeFor(requestType)) {
+        if (error) *error = "unexpected Seat game command response type";
+        return std::nullopt;
+    }
+    auto result = decodeSeatGameCommandResult(response->payload);
+    if (!result && error) *error = "Seat game command result payload is malformed";
+    return result;
+}
+
+std::optional<runtime::SeatGameCommandResult> HostControlClient::reconcileSeatGames(
+    std::uint32_t timeoutMs, std::string* error,
+    std::optional<ErrorPayload>* protocolError) {
+    const auto correlation = impl_->allocateCorrelation();
+    const auto response = transact(MessageType::ReconcileSeatGames, {}, correlation,
+                                   timeoutMs, error);
+    if (!response) return std::nullopt;
+    if (response->type == MessageType::Error) {
+        auto decoded = decodeError(response->payload);
+        if (protocolError) *protocolError = decoded;
+        if (error && decoded) *error = decoded->diagnostic;
+        return std::nullopt;
+    }
+    if (response->type != MessageType::ReconcileSeatGamesResult) {
+        if (error) *error = "unexpected Seat reconcile response type";
+        return std::nullopt;
+    }
+    auto result = decodeSeatGameCommandResult(response->payload);
+    if (!result && error) *error = "Seat reconcile result payload is malformed";
     return result;
 }
 
@@ -843,6 +925,51 @@ public:
                                kDefaultHostIpcTimeoutMs, nullptr)) {
                     return;
                 }
+                continue;
+            }
+            if (request->type == MessageType::AssignSeatGame ||
+                request->type == MessageType::StartSeatGame ||
+                request->type == MessageType::StopSeatGame) {
+                const auto seatCommand = decodeSeatGameCommandPayload(request->payload);
+                const bool bindingExpected = request->type == MessageType::AssignSeatGame;
+                if (!seatCommand || seatCommand->binding.has_value() != bindingExpected) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::Malformed,
+                                    "malformed Seat game command payload");
+                    continue;
+                }
+                runtime::SeatGameCommandResult seatResult;
+                if (request->type == MessageType::AssignSeatGame) {
+                    seatResult = host.assignSeatGame(
+                        seatCommand->seatId, *seatCommand->binding,
+                        request->correlationId);
+                } else if (request->type == MessageType::StartSeatGame) {
+                    seatResult = host.startSeatGame(seatCommand->seatId,
+                                                    request->correlationId);
+                } else {
+                    seatResult = host.stopSeatGame(seatCommand->seatId,
+                                                   request->correlationId);
+                }
+                if (!sendFrame(pipe.value,
+                               Frame{responseTypeFor(request->type),
+                                     request->correlationId,
+                                     encodeSeatGameCommandResult(seatResult)},
+                               kDefaultHostIpcTimeoutMs, nullptr)) return;
+                continue;
+            }
+            if (request->type == MessageType::ReconcileSeatGames) {
+                if (!request->payload.empty()) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::Malformed,
+                                    "Seat reconcile payload must be empty");
+                    continue;
+                }
+                const auto seatResult = host.reconcileSeatGames(request->correlationId);
+                if (!sendFrame(pipe.value,
+                               Frame{MessageType::ReconcileSeatGamesResult,
+                                     request->correlationId,
+                                     encodeSeatGameCommandResult(seatResult)},
+                               kDefaultHostIpcTimeoutMs, nullptr)) return;
                 continue;
             }
             if (!isMutatingRequest(request->type) || !request->payload.empty()) {

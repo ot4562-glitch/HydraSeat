@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hydra/runtime_state.hpp"
+#include "hydra/seat_game_lifecycle.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -13,7 +14,7 @@
 namespace hydra::hostipc {
 
 constexpr std::uint32_t kHostProtocolMagic = 0x31505348u; // "HSP1" little-endian
-constexpr std::uint16_t kHostProtocolVersion = 2u;
+constexpr std::uint16_t kHostProtocolVersion = 3u;
 constexpr std::size_t kHostProtocolHeaderBytes = 24u;
 constexpr std::size_t kHostProtocolMaxPayloadBytes = 64u * 1024u;
 constexpr std::size_t kHostProtocolMaxStringBytes = 2048u;
@@ -48,6 +49,14 @@ enum class MessageType : std::uint16_t {
     Error = 22,
     ApplyProfile = 23,
     ApplyProfileResult = 24,
+    AssignSeatGame = 25,
+    AssignSeatGameResult = 26,
+    StartSeatGame = 27,
+    StartSeatGameResult = 28,
+    StopSeatGame = 29,
+    StopSeatGameResult = 30,
+    ReconcileSeatGames = 31,
+    ReconcileSeatGamesResult = 32,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -93,6 +102,11 @@ struct ProfilePayload {
     std::vector<SeatConfig> seats;
 };
 
+struct SeatGameCommandPayload {
+    SeatId seatId{0};
+    std::optional<runtime::SeatGameBinding> binding;
+};
+
 struct SubscribeRequest {
     std::uint64_t afterSequence{0};
     std::uint32_t maxEvents{kHostProtocolMaxEvents};
@@ -123,6 +137,22 @@ std::optional<HelloAck> decodeHelloAck(std::span<const std::byte> payload);
 
 std::vector<std::byte> encodeProfilePayload(const ProfilePayload& profile);
 std::optional<ProfilePayload> decodeProfilePayload(std::span<const std::byte> payload);
+
+// P4-SEAT-01 reconnect/state boundary. The payload is fixed-order, bounded to
+// the v1 two-Seat limit, pointer-free, and rejects future enum values/reserved
+// bytes. It transports temporary runtime bindings, never persisted credentials.
+std::vector<std::byte> encodeSeatGameStates(
+    std::span<const runtime::SeatGameState> states);
+std::optional<std::vector<runtime::SeatGameState>> decodeSeatGameStates(
+    std::span<const std::byte> payload);
+std::vector<std::byte> encodeSeatGameCommandResult(
+    const runtime::SeatGameCommandResult& result);
+std::optional<runtime::SeatGameCommandResult> decodeSeatGameCommandResult(
+    std::span<const std::byte> payload);
+std::vector<std::byte> encodeSeatGameCommandPayload(
+    const SeatGameCommandPayload& payload);
+std::optional<SeatGameCommandPayload> decodeSeatGameCommandPayload(
+    std::span<const std::byte> payload);
 
 std::vector<std::byte> encodeSnapshot(const runtime::HostRuntimeSnapshot& snapshot);
 std::optional<runtime::HostRuntimeSnapshot> decodeSnapshot(

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <thread>
@@ -96,6 +97,31 @@ bool launchHost(const std::filesystem::path& profile, OwnedProcess& owned) {
                           &startup, &owned.process) != FALSE;
 }
 
+DWORD runHostCtl(std::wstring arguments) {
+    const auto executable = executableDirectory() / L"hydra_hostctl.exe";
+    std::wstring command = L"\"" + executable.wstring() + L"\" " + arguments;
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\0');
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (CreateProcessW(executable.c_str(), mutableCommand.data(), nullptr, nullptr,
+                       FALSE, CREATE_NO_WINDOW, nullptr,
+                       executableDirectory().c_str(), &startup, &process) == FALSE) {
+        return std::numeric_limits<DWORD>::max();
+    }
+    CloseHandle(process.hThread);
+    const DWORD wait = WaitForSingleObject(process.hProcess, 5000u);
+    DWORD exitCode = std::numeric_limits<DWORD>::max();
+    if (wait == WAIT_OBJECT_0) (void)GetExitCodeProcess(process.hProcess, &exitCode);
+    if (wait == WAIT_TIMEOUT) {
+        (void)TerminateProcess(process.hProcess, 0x43544c54u); // CTLT
+        (void)WaitForSingleObject(process.hProcess, 2000u);
+    }
+    CloseHandle(process.hProcess);
+    return exitCode;
+}
+
 bool waitForClient(HostControlClient& client, ClientRole role, hydra::SeatId seatId = 0) {
     for (int attempt = 0; attempt < 50; ++attempt) {
         std::string error;
@@ -109,6 +135,8 @@ bool waitForClient(HostControlClient& client, ClientRole role, hydra::SeatId sea
 }
 
 void testRealHostProcess() {
+    check(currentHostPipeName().find(L"HydraSeat.Host.v3.") != std::wstring::npos,
+          "host protocol v3 uses a distinct same-session pipe namespace");
     const auto profile = writeProfile();
     OwnedProcess hostProcess;
     check(launchHost(profile, hostProcess), "real hydra_host process launches");
@@ -120,6 +148,26 @@ void testRealHostProcess() {
           "read-only UI-style client connects to same-user/session host");
     check(waitForClient(control, ClientRole::Control, 2),
           "Management Seat control client connects simultaneously");
+
+    check(runHostCtl(L"--json snapshot") == 0,
+          "hostctl snapshot reports protocol v3 state from a separate process");
+    check(runHostCtl(L"--json seat-assign 1 cli-player cli-game") == 0,
+          "hostctl discovers Management Seat 2 and assigns Seat 1 without hardcoded authority");
+    std::string cliError;
+    const auto cliPlanned = control.getSnapshot(2000u, &cliError);
+    check(cliPlanned && cliPlanned->seatGames[0].phase == SeatGamePhase::Planning &&
+              cliPlanned->seatGames[0].binding ==
+                  SeatGameBinding{"cli-player", "cli-game"},
+          "hostctl Seat assignment is authoritative and observable by another client");
+    check(runHostCtl(L"--json seat-stop 1") == 0,
+          "hostctl cancels a planned Seat binding");
+    check(runHostCtl(L"--json seat-reconcile") == 0,
+          "hostctl reconciles Seat lifecycle idempotently");
+    const auto cliStopped = control.getSnapshot(2000u, &cliError);
+    check(cliStopped && cliStopped->seatGames[0].phase == SeatGamePhase::Idle,
+          "hostctl Seat stop returns the authoritative Seat to Idle");
+    check(runHostCtl(L"seat-start 0") != 0,
+          "hostctl rejects zero Seat ID before sending a mutation");
 
     HostControlClient otherSeatControl;
     std::string otherSeatError;
@@ -156,6 +204,61 @@ void testRealHostProcess() {
     check(control.ping(0x123456789abcdef0ull, 2000u, &error),
           "ping lease round-trip succeeds");
 
+    HostControlClient lifecycleSubscriber;
+    check(waitForClient(lifecycleSubscriber, ClientRole::ReadOnly),
+          "Seat lifecycle event subscriber connects");
+    const auto lifecycleSubscription = lifecycleSubscriber.beginSubscription(
+        initial ? initial->transitionSequence : 0u, 16u, 2000u, &error);
+    check(lifecycleSubscription.has_value(),
+          "Seat lifecycle subscription begins from an authoritative snapshot");
+
+    SeatGameCommandPayload seatOneAssignment;
+    seatOneAssignment.seatId = 1;
+    seatOneAssignment.binding = SeatGameBinding{"player-a", "controlled-game-a"};
+    const auto assignedSeatOne = control.seatGameCommand(
+        MessageType::AssignSeatGame, seatOneAssignment, 2000u, &error);
+    check(assignedSeatOne && assignedSeatOne->succeeded() &&
+              assignedSeatOne->seats.size() == 2u &&
+              assignedSeatOne->seats[0].phase == SeatGamePhase::Planning,
+          "Management client assigns a temporary Player/Game binding to Idle Seat 1");
+    const auto seatEvent = lifecycleSubscriber.readSubscriptionEvent(2000u, &error);
+    check(seatEvent.event && seatEvent.event->command == RuntimeCommand::AssignSeatGame &&
+              seatEvent.event->seatId == 1,
+          "subscribed UI receives ordered Seat-local mutation event with Seat identity");
+    lifecycleSubscriber.close();
+
+    HostControlClient lifecycleReconnect;
+    check(waitForClient(lifecycleReconnect, ClientRole::ReadOnly),
+          "UI-style reader reconnects after Seat-local mutation");
+    const auto lifecycleSnapshot = lifecycleReconnect.getSnapshot(2000u, &error);
+    check(lifecycleSnapshot && lifecycleSnapshot->seatGames.size() == 2u &&
+              lifecycleSnapshot->seatGames[0].phase == SeatGamePhase::Planning &&
+              lifecycleSnapshot->seatGames[0].binding == seatOneAssignment.binding,
+          "reconnected reader receives authoritative two-Seat lifecycle snapshot");
+    lifecycleReconnect.close();
+
+    SeatGameCommandPayload seatOneOnly;
+    seatOneOnly.seatId = 1;
+    const auto unavailableStart = control.seatGameCommand(
+        MessageType::StartSeatGame, seatOneOnly, 2000u, &error);
+    check(unavailableStart && unavailableStart->code == SeatGameResultCode::InvalidState &&
+              unavailableStart->seats[0].phase == SeatGamePhase::Planning,
+          "Seat start fails closed until the whole-machine runtime is active");
+
+    const auto cancelledSeatPlan = control.seatGameCommand(
+        MessageType::StopSeatGame, seatOneOnly, 2000u, &error);
+    check(cancelledSeatPlan && cancelledSeatPlan->succeeded() &&
+              cancelledSeatPlan->seats[0].phase == SeatGamePhase::Idle,
+          "Seat-local Stop cancels a planned binding without global rollback");
+
+    SeatGameCommandPayload thirdSeat;
+    thirdSeat.seatId = 3;
+    thirdSeat.binding = SeatGameBinding{"player-c", "game-c"};
+    const auto rejectedThird = control.seatGameCommand(
+        MessageType::AssignSeatGame, thirdSeat, 2000u, &error);
+    check(rejectedThird && rejectedThird->code == SeatGameResultCode::InvalidSeat,
+          "IPC command rejects a third unconfigured v1 Seat without state change");
+
     std::optional<ErrorPayload> permissionError;
     const auto denied = readOnly.command(MessageType::PlanSession, 2000u, &error,
                                          &permissionError);
@@ -190,6 +293,17 @@ void testRealHostProcess() {
     check(started && started->succeeded() &&
               started->snapshot.sessionPhase == SeatSessionPhase::Active,
           "StartSession prepares and activates through one correlated request");
+
+    const auto reassignedSeatOne = control.seatGameCommand(
+        MessageType::AssignSeatGame, seatOneAssignment, 2000u, &error);
+    const auto unavailablePlannedGame = control.seatGameCommand(
+        MessageType::StartSeatGame, seatOneOnly, 2000u, &error);
+    check(reassignedSeatOne && reassignedSeatOne->succeeded() &&
+              unavailablePlannedGame &&
+              unavailablePlannedGame->code == SeatGameResultCode::BackendFailure &&
+              unavailablePlannedGame->seats[0].phase == SeatGamePhase::Idle &&
+              unavailablePlannedGame->seats[1].phase == SeatGamePhase::Idle,
+          "active host without a validated game launch plan rolls Seat start back locally");
     const auto event = subscriber.readSubscriptionEvent(2000u, &error);
     check(event.event && event.event->sequence >
               (subscription ? subscription->snapshot.transitionSequence : 0u),

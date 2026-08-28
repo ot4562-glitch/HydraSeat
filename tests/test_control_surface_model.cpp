@@ -48,6 +48,14 @@ HostRuntimeSnapshot hostSnapshot(SeatSessionPhase phase, SeatId managementSeatId
     snapshot.profileLoaded = !authoritative.empty();
     snapshot.configuredSeats = std::move(authoritative);
     snapshot.seats = {{1, phase, "seat1"}, {2, phase, "seat2"}};
+    SeatGameState firstGame;
+    firstGame.seatId = 1;
+    firstGame.phase = phase == SeatSessionPhase::Active
+        ? SeatGamePhase::Playing : SeatGamePhase::Idle;
+    SeatGameState secondGame;
+    secondGame.seatId = 2;
+    secondGame.phase = SeatGamePhase::Idle;
+    snapshot.seatGames = {firstGame, secondGame};
     return snapshot;
 }
 
@@ -68,6 +76,21 @@ void testDisconnectedUnknownAndValidatedAssignments() {
           "unknown host state disables optimistic global mutations");
 }
 
+void testV1SeatLimitFailsClosedBeforeHostMutation() {
+    ControlSurfaceModel model;
+    auto three = config();
+    SeatConfig third;
+    third.seatId = 3;
+    third.name = L"Seat 3";
+    three.push_back(third);
+    std::string error;
+    check(!model.setValidatedConfiguration(1, std::move(three), StartupMode::Manual,
+                                           &error) &&
+              error.find("more than two") != std::string::npos &&
+              model.state().assignmentSource == AssignmentSource::None,
+          "control surface rejects a third active v1 Seat before any Host mutation");
+}
+
 void testAuthoritativeActiveSnapshotOverridesInactiveMemory() {
     ControlSurfaceModel model;
     std::string error;
@@ -78,8 +101,12 @@ void testAuthoritativeActiveSnapshotOverridesInactiveMemory() {
     const auto& active = model.state();
     check(active.runtimeStateKnown && active.runtimeMode == RuntimeDisplayMode::SplitActive &&
               active.assignmentSource == AssignmentSource::AuthoritativeHost &&
-              active.seats.size() == 2u && active.seats.front().config.name == L"Seat 1 host",
-          "Active UI assignments come from authoritative host snapshot, not stale disk/UI memory");
+              active.seats.size() == 2u && active.seats.front().config.name == L"Seat 1 host" &&
+              active.seats[0].game &&
+              active.seats[0].game->phase == SeatGamePhase::Playing &&
+              active.seats[1].game &&
+              active.seats[1].game->phase == SeatGamePhase::Idle,
+          "Active UI assignments and per-Seat game phases come from the authoritative host snapshot");
     check(active.actions.stopAndReturnToWindows && active.actions.reconfigure &&
               !active.actions.start && !active.actions.exitBackgroundHost,
           "Active Management Seat exposes Stop/Reconfigure without Exit Host or duplicate Start");
@@ -90,8 +117,47 @@ void testAuthoritativeActiveSnapshotOverridesInactiveMemory() {
     reopened.setControlContext(1, true, true);
     reopened.observeHostSnapshot(hostSnapshot(SeatSessionPhase::Active));
     check(reopened.state().runtimeMode == RuntimeDisplayMode::SplitActive &&
-              reopened.state().seats.front().config.name == L"Seat 1 host",
-          "UI kill/reopen resnapshot restores Active state and current host assignments");
+              reopened.state().seats.front().config.name == L"Seat 1 host" &&
+              reopened.state().seats.front().game &&
+              reopened.state().seats.front().game->phase == SeatGamePhase::Playing,
+          "UI kill/reopen resnapshot restores Active state and per-Seat game phases");
+}
+
+void testSeatGameFaultAndReturnPolicyProjection() {
+    ControlSurfaceModel model;
+    std::string error;
+    check(model.setValidatedConfiguration(1, config(), StartupMode::Manual, &error),
+          "Seat fault projection config loads");
+    model.setControlContext(1, true, true);
+
+    auto degraded = hostSnapshot(SeatSessionPhase::Active);
+    degraded.seatGames[1].phase = SeatGamePhase::Degraded;
+    degraded.seatGames[1].diagnostic = "controlled target exited unexpectedly";
+    model.observeHostSnapshot(degraded);
+    check(model.state().runtimeMode == RuntimeDisplayMode::Degraded &&
+              model.state().seats[0].game->phase == SeatGamePhase::Playing &&
+              model.state().seats[1].game->phase == SeatGamePhase::Degraded &&
+              model.state().actions.stopAndReturnToWindows,
+          "one degraded Seat is visible without hiding the other Playing Seat");
+
+    auto recovery = degraded;
+    recovery.seatGames[1].phase = SeatGamePhase::RecoveryRequired;
+    model.observeHostSnapshot(recovery);
+    check(model.state().runtimeMode == RuntimeDisplayMode::RecoveryRequired &&
+              model.state().actions.emergencyReset &&
+              !model.state().actions.start &&
+              !model.state().actions.reconfigure &&
+              !model.state().actions.stopAndReturnToWindows,
+          "Seat-local RecoveryRequired exposes only the fail-closed global reset action");
+
+    auto bothEnded = hostSnapshot(SeatSessionPhase::Active);
+    bothEnded.seatGames[0].phase = SeatGamePhase::Idle;
+    bothEnded.wholeMachineReturnRequested = true;
+    model.observeHostSnapshot(bothEnded);
+    check(model.state().runtimeMode == RuntimeDisplayMode::SplitActive &&
+              model.state().wholeMachineReturnRequested &&
+              model.state().actions.stopAndReturnToWindows,
+          "both-ended policy is projected without inventing an automatic global rollback");
 }
 
 void testIdleActionsAuthorityAndManagementTransfer() {
@@ -149,7 +215,9 @@ void testTransitionRecoveryAndHostExitPresentation() {
 
 int main() {
     testDisconnectedUnknownAndValidatedAssignments();
+    testV1SeatLimitFailsClosedBeforeHostMutation();
     testAuthoritativeActiveSnapshotOverridesInactiveMemory();
+    testSeatGameFaultAndReturnPolicyProjection();
     testIdleActionsAuthorityAndManagementTransfer();
     testTransitionRecoveryAndHostExitPresentation();
     if (failures != 0) {

@@ -37,6 +37,10 @@ HostRuntimeSnapshot sampleSnapshot() {
         {1, SeatSessionPhase::Active, "seat-one"},
         {2, SeatSessionPhase::Active, "seat-two"},
     };
+    snapshot.seatGames = {
+        {1, SeatGamePhase::Playing, SeatGameBinding{"player-a", "game-a"}, 2, "playing"},
+        {2, SeatGamePhase::Idle, std::nullopt, 1, "idle"},
+    };
     hydra::SeatConfig first;
     first.seatId = 1;
     first.name = L"Seat One";
@@ -51,6 +55,7 @@ HostRuntimeSnapshot sampleSnapshot() {
     transition.from = SeatSessionPhase::Prepared;
     transition.to = SeatSessionPhase::Active;
     transition.result = RuntimeResultCode::Ok;
+    transition.seatId = 2;
     transition.diagnostic = "started";
     snapshot.lastTransition = transition;
     snapshot.diagnostic = "active";
@@ -69,7 +74,7 @@ void testFrameAndVersionValidation() {
           "fixed frame round-trips");
 
     auto future = encoded;
-    future[4] = static_cast<std::byte>(3);
+    future[4] = static_cast<std::byte>(kHostProtocolVersion + 1u);
     const auto rejectedFuture = decodeFrame(future, &decodedResult);
     check(!rejectedFuture && decodedResult.error == ErrorCode::VersionMismatch,
           "future protocol version is rejected explicitly");
@@ -110,6 +115,9 @@ void testPayloadRoundTripsAndBounds() {
               decodedSnapshot->transitionSequence == snapshot.transitionSequence &&
               decodedSnapshot->managementSeatId == snapshot.managementSeatId &&
               decodedSnapshot->seats == snapshot.seats &&
+              decodedSnapshot->seatGames == snapshot.seatGames &&
+              decodedSnapshot->wholeMachineReturnRequested ==
+                  snapshot.wholeMachineReturnRequested &&
               decodedSnapshot->configuredSeats == snapshot.configuredSeats &&
               decodedSnapshot->lastTransition == snapshot.lastTransition,
           "runtime snapshot round-trips without pointer-size assumptions");
@@ -123,6 +131,11 @@ void testPayloadRoundTripsAndBounds() {
               decodedCommand->snapshot.sessionId == snapshot.sessionId &&
               decodedCommand->diagnostic == command.diagnostic,
           "command result round-trips at maximum diagnostic size");
+
+    auto mismatchedLifecycle = snapshot;
+    mismatchedLifecycle.seatGames.pop_back();
+    check(encodeSnapshot(mismatchedLifecycle).empty(),
+          "snapshot rejects Seat lifecycle identities that do not match active profile Seats");
 
     ErrorPayload error{ErrorCode::PermissionDenied, "read-only client"};
     const auto decodedError = decodeError(encodeError(error));
@@ -231,12 +244,132 @@ void testTransitionRingOverflow() {
           "subscriber capacity overflow is explicit instead of silently dropping events");
 }
 
+void testSeatGameStateCodec() {
+    SeatGameState first;
+    first.seatId = 1;
+    first.phase = SeatGamePhase::Playing;
+    first.binding = SeatGameBinding{"player-a", "game-a"};
+    first.generation = 7;
+    first.diagnostic = "exact process ownership verified";
+    SeatGameState second;
+    second.seatId = 2;
+    second.phase = SeatGamePhase::Idle;
+    second.generation = 3;
+    second.diagnostic = "Seat-local cleanup verified";
+
+    const std::vector<SeatGameState> states{first, second};
+    const auto encoded = encodeSeatGameStates(states);
+    const auto decoded = decodeSeatGameStates(encoded);
+    check(!encoded.empty() && decoded && *decoded == states,
+          "versioned two-Seat lifecycle snapshot round-trips temporary bindings");
+    const std::vector<SeatGameState> reversedStates{second, first};
+    check(encodeSeatGameStates(reversedStates) == encoded,
+          "Seat lifecycle encoding is canonical regardless of caller ordering");
+
+    SeatGameCommandResult result;
+    result.code = SeatGameResultCode::Ok;
+    result.seats = states;
+    result.wholeMachineReturnRequested = false;
+    result.diagnostic = "Seat 1 remains active";
+    const auto resultBytes = encodeSeatGameCommandResult(result);
+    const auto resultDecoded = decodeSeatGameCommandResult(resultBytes);
+    check(!resultBytes.empty() && resultDecoded && resultDecoded->code == result.code &&
+              resultDecoded->seats == states &&
+              !resultDecoded->wholeMachineReturnRequested,
+          "Seat command result preserves reconnect state and global return policy");
+
+    auto contradictoryResult = result;
+    contradictoryResult.wholeMachineReturnRequested = true;
+    check(encodeSeatGameCommandResult(contradictoryResult).empty(),
+          "encoder rejects whole-machine return while any Seat is Playing");
+    auto contradictoryResultBytes = resultBytes;
+    if (contradictoryResultBytes.size() > 1u) {
+        contradictoryResultBytes[1] = static_cast<std::byte>(1u);
+    }
+    check(!decodeSeatGameCommandResult(contradictoryResultBytes),
+          "decoder rejects remote whole-machine return while a Seat is Playing");
+
+    SeatGameCommandResult bothIdle;
+    bothIdle.code = SeatGameResultCode::Ok;
+    bothIdle.seats = {second};
+    bothIdle.wholeMachineReturnRequested = true;
+    check(decodeSeatGameCommandResult(encodeSeatGameCommandResult(bothIdle)).has_value(),
+          "verified all-Idle state may carry the declared return request");
+
+    auto futurePhase = encoded;
+    if (futurePhase.size() > 8u) futurePhase[8] = static_cast<std::byte>(0xffu);
+    check(!decodeSeatGameStates(futurePhase),
+          "future Seat lifecycle phase fails closed");
+
+    auto playingWithoutBinding = encodeSeatGameStates(
+        std::vector<SeatGameState>{second});
+    check(playingWithoutBinding.size() > 8u,
+          "single Idle Seat fixture encodes for malformed-state mutation");
+    if (playingWithoutBinding.size() > 8u) {
+        playingWithoutBinding[8] = static_cast<std::byte>(SeatGamePhase::Playing);
+    }
+    check(!decodeSeatGameStates(playingWithoutBinding),
+          "Playing without a temporary binding fails closed on decode");
+
+    auto idleWithBinding = encodeSeatGameStates(
+        std::vector<SeatGameState>{first});
+    check(idleWithBinding.size() > 8u,
+          "single Playing Seat fixture encodes for malformed-state mutation");
+    if (idleWithBinding.size() > 8u) {
+        idleWithBinding[8] = static_cast<std::byte>(SeatGamePhase::Idle);
+    }
+    check(!decodeSeatGameStates(idleWithBinding),
+          "Idle with a stale temporary binding fails closed on decode");
+
+    auto impossiblePlaying = second;
+    impossiblePlaying.phase = SeatGamePhase::Playing;
+    check(encodeSeatGameStates(std::vector<SeatGameState>{impossiblePlaying}).empty(),
+          "encoder refuses Playing state without a binding");
+    auto impossibleIdle = first;
+    impossibleIdle.phase = SeatGamePhase::Idle;
+    check(encodeSeatGameStates(std::vector<SeatGameState>{impossibleIdle}).empty(),
+          "encoder refuses Idle state with a stale binding");
+
+    auto duplicate = states;
+    duplicate[1].seatId = duplicate[0].seatId;
+    check(encodeSeatGameStates(duplicate).empty(),
+          "duplicate Seat lifecycle identity is not transportable");
+
+    auto tooMany = states;
+    SeatGameState third;
+    third.seatId = 3;
+    tooMany.push_back(third);
+    check(encodeSeatGameStates(tooMany).empty(),
+          "protocol refuses a third v1 active Seat before serialization");
+
+    auto truncated = resultBytes;
+    if (!truncated.empty()) truncated.pop_back();
+    check(!decodeSeatGameCommandResult(truncated),
+          "truncated Seat command result cannot become an inferred success");
+
+    SeatGameCommandPayload assign;
+    assign.seatId = 2;
+    assign.binding = SeatGameBinding{"player-b", "game-b"};
+    const auto decodedAssign = decodeSeatGameCommandPayload(
+        encodeSeatGameCommandPayload(assign));
+    check(decodedAssign && decodedAssign->seatId == 2 &&
+              decodedAssign->binding == assign.binding,
+          "bounded Seat assignment command round-trips temporary identities");
+    SeatGameCommandPayload stop;
+    stop.seatId = 1;
+    const auto decodedStop = decodeSeatGameCommandPayload(
+        encodeSeatGameCommandPayload(stop));
+    check(decodedStop && decodedStop->seatId == 1 && !decodedStop->binding,
+          "Seat-local start/stop command transports only stable Seat identity");
+}
+
 } // namespace
 
 int main() {
     testFrameAndVersionValidation();
     testPayloadRoundTripsAndBounds();
     testProfilePayloadRoundTripAndBounds();
+    testSeatGameStateCodec();
     testTransitionRingOverflow();
     if (failures != 0) {
         std::cerr << failures << " host protocol test(s) failed.\n";

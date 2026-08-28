@@ -43,7 +43,9 @@ public:
 // mutex. No latency-sensitive input callback may call a mutation method.
 class RuntimeHost {
 public:
-    explicit RuntimeHost(std::vector<std::shared_ptr<IRuntimeBackend>> backends = {});
+    explicit RuntimeHost(
+        std::vector<std::shared_ptr<IRuntimeBackend>> backends = {},
+        std::shared_ptr<ISeatGameInstanceFactory> seatGameFactory = {});
     ~RuntimeHost();
 
     RuntimeHost(const RuntimeHost&) = delete;
@@ -66,6 +68,16 @@ public:
     RuntimeCommandResult exitHostWhenIdle(std::uint64_t correlationId);
     RuntimeCommandResult markDegraded(std::string diagnostic,
                                       std::uint64_t correlationId);
+    SeatGameCommandResult assignSeatGame(SeatId seatId, SeatGameBinding binding,
+                                         std::uint64_t correlationId);
+    SeatGameCommandResult startSeatGame(SeatId seatId,
+                                        std::uint64_t correlationId);
+    SeatGameCommandResult stopSeatGame(SeatId seatId,
+                                       std::uint64_t correlationId);
+    SeatGameCommandResult reconcileSeatGames(std::uint64_t correlationId);
+    SeatGameCommandResult observeSeatGameExit(SeatId seatId, bool cleanExit,
+                                              std::string diagnostic,
+                                              std::uint64_t correlationId);
 
     void controlClientConnected();
     void controlClientDisconnected();
@@ -81,6 +93,9 @@ private:
                                       RuntimeResultCode code,
                                       std::string diagnostic,
                                       std::uint64_t correlationId);
+    void recordSeatTransitionLocked(RuntimeCommand command, SeatId seatId,
+                                    const SeatGameCommandResult& result,
+                                    std::uint64_t correlationId);
     void setSessionPhaseLocked(SeatSessionPhase phase, std::string_view diagnostic = {});
     bool rollbackBackends(std::size_t rollbackCount,
                           std::string& diagnostic) noexcept;
@@ -103,6 +118,8 @@ private:
     std::vector<SeatConfig> profile_;
     std::vector<SeatRuntimeState> seats_;
     std::vector<std::shared_ptr<IRuntimeBackend>> backends_;
+    std::shared_ptr<ISeatGameInstanceFactory> seatGameFactory_;
+    std::unique_ptr<SeatGameLifecycle> seatGameLifecycle_;
     std::size_t preparedBackendCount_{0};
     std::size_t startedBackendCount_{0};
     std::optional<RuntimeTransition> lastTransition_;

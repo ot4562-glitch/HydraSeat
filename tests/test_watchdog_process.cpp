@@ -316,7 +316,7 @@ ProcessIdentity processIdentity(std::uint32_t processId) {
 }
 
 RollbackPlanManifest processPlan(const SessionId& sessionId,
-                                 const ProcessIdentity& target,
+                                 std::span<const ProcessIdentity> targets,
                                  std::uint32_t leaseTimeoutMilliseconds) {
     RollbackPlanManifest manifest;
     manifest.lease.sessionId = sessionId;
@@ -324,14 +324,18 @@ RollbackPlanManifest processPlan(const SessionId& sessionId,
     manifest.lease.timeoutMilliseconds = leaseTimeoutMilliseconds;
     manifest.rollbackTimeoutMilliseconds = 2'000;
 
-    RollbackActionDescriptor action;
-    action.actionId = 1;
-    action.kind = RollbackActionKind::TerminateOwnedProcess;
-    action.activationOrdinal = 1;
-    action.timeoutMilliseconds = 1'000;
-    action.generation = 1;
-    action.process = target;
-    manifest.actions.push_back(action);
+    std::uint32_t ordinal = 1;
+    for (const auto& target : targets) {
+        RollbackActionDescriptor action;
+        action.actionId = ordinal;
+        action.kind = RollbackActionKind::TerminateOwnedProcess;
+        action.activationOrdinal = ordinal;
+        action.timeoutMilliseconds = 1'000;
+        action.generation = 1;
+        action.process = target;
+        manifest.actions.push_back(action);
+        ++ordinal;
+    }
     return manifest;
 }
 
@@ -342,7 +346,7 @@ struct WatchdogSession {
     RollbackPlanManifest manifest;
 };
 
-WatchdogSession startWatchdog(const ProcessIdentity& target,
+WatchdogSession startWatchdog(std::span<const ProcessIdentity> targets,
                               std::uint32_t leaseTimeoutMilliseconds,
                               std::uint8_t sessionSeed) {
     SECURITY_ATTRIBUTES security{};
@@ -384,7 +388,7 @@ WatchdogSession startWatchdog(const ProcessIdentity& target,
     controlRead.reset();
     statusWrite.reset();
 
-    auto manifest = processPlan(sessionId, target, leaseTimeoutMilliseconds);
+    auto manifest = processPlan(sessionId, targets, leaseTimeoutMilliseconds);
     check(sendFrame(controlWrite.get(), encodeRegisterPlan(1, manifest)),
           "rollback plan is sent to watchdog");
     WatchdogStatus status;
@@ -395,6 +399,13 @@ WatchdogSession startWatchdog(const ProcessIdentity& target,
 
     return {std::move(controlWrite), std::move(statusRead),
             std::move(watchdog), std::move(manifest)};
+}
+
+WatchdogSession startWatchdog(const ProcessIdentity& target,
+                              std::uint32_t leaseTimeoutMilliseconds,
+                              std::uint8_t sessionSeed) {
+    return startWatchdog(std::span<const ProcessIdentity>(&target, 1u),
+                         leaseTimeoutMilliseconds, sessionSeed);
 }
 
 ChildProcess startTarget() {
@@ -501,9 +512,9 @@ void testProcessIdentityMismatchNeverKillsReusedPid() {
           "test cleans up intentionally preserved target");
 }
 
-void encodeReadyPayload(std::array<std::byte, 16>& payload,
-                        std::uint32_t targetPid,
-                        std::uint64_t targetCreation,
+void encodeReadyPayload(std::array<std::byte, 28>& payload,
+                        const ProcessIdentity& first,
+                        const ProcessIdentity& second,
                         std::uint32_t watchdogPid) {
     const auto put32 = [&payload](std::size_t offset, std::uint32_t value) {
         for (unsigned shift = 0; shift < 32; shift += 8) {
@@ -517,12 +528,14 @@ void encodeReadyPayload(std::array<std::byte, 16>& payload,
                 static_cast<std::byte>((value >> shift) & 0xffu);
         }
     };
-    put32(0, targetPid);
-    put64(4, targetCreation);
-    put32(12, watchdogPid);
+    put32(0, first.processId);
+    put64(4, first.creationTime100ns);
+    put32(12, second.processId);
+    put64(16, second.creationTime100ns);
+    put32(24, watchdogPid);
 }
 
-std::uint32_t get32(const std::array<std::byte, 16>& payload,
+std::uint32_t get32(const std::array<std::byte, 28>& payload,
                     std::size_t offset) {
     std::uint32_t value = 0;
     for (unsigned shift = 0; shift < 32; shift += 8) {
@@ -532,7 +545,7 @@ std::uint32_t get32(const std::array<std::byte, 16>& payload,
     return value;
 }
 
-std::uint64_t get64(const std::array<std::byte, 16>& payload,
+std::uint64_t get64(const std::array<std::byte, 28>& payload,
                     std::size_t offset) {
     std::uint64_t value = 0;
     for (unsigned shift = 0; shift < 64; shift += 8) {
@@ -542,7 +555,7 @@ std::uint64_t get64(const std::array<std::byte, 16>& payload,
     return value;
 }
 
-bool readReady(HANDLE handle, std::array<std::byte, 16>& payload) {
+bool readReady(HANDLE handle, std::array<std::byte, 28>& payload) {
     const auto deadline = std::chrono::steady_clock::now() +
         std::chrono::milliseconds(kTestWaitMilliseconds);
     while (std::chrono::steady_clock::now() < deadline) {
@@ -562,12 +575,15 @@ bool readReady(HANDLE handle, std::array<std::byte, 16>& payload) {
 }
 
 int runHostKillStub(HANDLE readyHandle) {
-    auto target = startTarget();
-    const auto identity = processIdentity(target.processId());
-    auto session = startWatchdog(identity, 5'000, 0x50);
+    auto firstTarget = startTarget();
+    auto secondTarget = startTarget();
+    const std::array identities{
+        processIdentity(firstTarget.processId()),
+        processIdentity(secondTarget.processId())};
+    auto session = startWatchdog(identities, 5'000, 0x50);
 
-    std::array<std::byte, 16> payload{};
-    encodeReadyPayload(payload, target.processId(), identity.creationTime100ns,
+    std::array<std::byte, 28> payload{};
+    encodeReadyPayload(payload, identities[0], identities[1],
                        session.watchdog.processId());
     if (!writeAll(readyHandle, payload.data(), payload.size())) return 21;
     CloseHandle(readyHandle);
@@ -597,22 +613,35 @@ void testHostDeathTriggersIndependentRollback() {
     auto host = launch(modulePath(), arguments, hostHandles);
     readyWrite.reset();
 
-    std::array<std::byte, 16> payload{};
+    std::array<std::byte, 28> payload{};
     check(readReady(readyRead.get(), payload),
-          "host stub reports target/watchdog identities");
-    const auto targetPid = get32(payload, 0);
-    const auto targetCreation = get64(payload, 4);
-    const auto watchdogPid = get32(payload, 12);
-    check(targetPid != 0 && targetCreation != 0 && watchdogPid != 0,
-          "host stub reports nonzero process identities");
+          "host stub reports both target/watchdog identities");
+    const auto firstTargetPid = get32(payload, 0);
+    const auto firstTargetCreation = get64(payload, 4);
+    const auto secondTargetPid = get32(payload, 12);
+    const auto secondTargetCreation = get64(payload, 16);
+    const auto watchdogPid = get32(payload, 24);
+    check(firstTargetPid != 0 && firstTargetCreation != 0 &&
+              secondTargetPid != 0 && secondTargetCreation != 0 &&
+              firstTargetPid != secondTargetPid && watchdogPid != 0,
+          "host stub reports two distinct nonzero process identities");
 
-    const HANDLE rawTarget = OpenProcess(
-        SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, targetPid);
+    const HANDLE rawFirstTarget = OpenProcess(
+        SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, firstTargetPid);
+    const HANDLE rawSecondTarget = OpenProcess(
+        SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, secondTargetPid);
     const HANDLE rawWatchdog = OpenProcess(
         SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, watchdogPid);
-    check(rawTarget != nullptr && rawWatchdog != nullptr,
+    check(rawFirstTarget != nullptr && rawSecondTarget != nullptr &&
+              rawWatchdog != nullptr,
           "parent obtains observation handles before host death");
-    ScopedHandle target(rawTarget);
+    const auto observedFirst = processIdentity(firstTargetPid);
+    const auto observedSecond = processIdentity(secondTargetPid);
+    check(observedFirst.creationTime100ns == firstTargetCreation &&
+              observedSecond.creationTime100ns == secondTargetCreation,
+          "parent verifies both exact target creation identities before host death");
+    ScopedHandle firstTarget(rawFirstTarget);
+    ScopedHandle secondTarget(rawSecondTarget);
     ScopedHandle watchdog(rawWatchdog);
 
     check(host.terminate(kForcedHostExitCode) && host.wait(2'000),
@@ -623,9 +652,11 @@ void testHostDeathTriggersIndependentRollback() {
     check(GetExitCodeProcess(watchdog.get(), &watchdogExit) != FALSE &&
               watchdogExit == 10,
           "host-death watchdog exits rollback-complete");
-    check(WaitForSingleObject(target.get(), kTestWaitMilliseconds) == WAIT_OBJECT_0,
-          "host-death watchdog terminates exact target without UI participation");
-    (void)targetCreation;
+    check(WaitForSingleObject(firstTarget.get(), kTestWaitMilliseconds) ==
+                  WAIT_OBJECT_0 &&
+              WaitForSingleObject(secondTarget.get(), kTestWaitMilliseconds) ==
+                  WAIT_OBJECT_0,
+          "host-death watchdog terminates both exact targets without UI participation");
 }
 
 bool parseInheritedHandle(std::wstring_view text, HANDLE& handle) {

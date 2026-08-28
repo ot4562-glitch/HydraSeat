@@ -60,6 +60,15 @@ public:
         std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
         std::string* error = nullptr,
         std::optional<ErrorPayload>* protocolError = nullptr);
+    std::optional<runtime::SeatGameCommandResult> seatGameCommand(
+        MessageType requestType, const SeatGameCommandPayload& payload,
+        std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
+        std::string* error = nullptr,
+        std::optional<ErrorPayload>* protocolError = nullptr);
+    std::optional<runtime::SeatGameCommandResult> reconcileSeatGames(
+        std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
+        std::string* error = nullptr,
+        std::optional<ErrorPayload>* protocolError = nullptr);
     bool ping(std::uint64_t nonce,
               std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
               std::string* error = nullptr);

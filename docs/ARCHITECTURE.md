@@ -159,6 +159,20 @@ hydra_reset.exe
 
 HydraSeat has two related lifecycle levels.
 
+The P4-SEAT-01 implementation keeps the levels in separate contracts. The
+whole-machine `RuntimeHost` backends continue to own shared split-environment
+prepare/rollback, while `SeatGameLifecycle` owns at most two temporary
+`SeatGameBinding` values and injected Seat-local instances. A Seat-local
+instance may clean only its exact process/window/input/audio/controller
+ownership. Its bounded protocol snapshot contains stable Seat ID, phase,
+temporary Player/Game IDs, generation, and diagnostic; it contains no handles,
+pointers, credentials, or persisted Seat-profile fields. Host protocol v3
+transports bounded Seat commands, reconnect snapshots, and ordered
+Seat-identified mutation events. `RuntimeHost` serializes these mutations with
+whole-machine work and performs Seat-local cleanup before explicit shared
+rollback. This controlled foundation is not a real-game, physical-device, or
+minimal Seat Launcher capability claim.
+
 ### 5.1 Whole-machine host/split state
 
 The host can be running while no game is active. A whole-machine split environment may remain active while one Seat is idle and the other is playing.
@@ -527,6 +541,9 @@ Two-player setup model/planner
 
 hydra_host.exe
   authoritative whole-machine runtime + independent Seat game lifecycle
+
+hydra_hostctl.exe
+  read-only diagnostics + Management-authorized whole-machine/Seat commands
 
 Process/window/display/audio/controller subsystems
   runtime ownership and routing

@@ -43,6 +43,7 @@ struct ControlSurfaceActions {
 struct SeatAssignmentView {
     SeatConfig config;
     std::optional<runtime::SeatRuntimeState> runtime;
+    std::optional<runtime::SeatGameState> game;
 };
 
 struct ControlSurfaceState {
@@ -55,6 +56,7 @@ struct ControlSurfaceState {
     std::optional<runtime::HostLifecyclePhase> hostPhase;
     std::optional<runtime::SeatSessionPhase> sessionPhase;
     std::vector<SeatAssignmentView> seats;
+    bool wholeMachineReturnRequested{false};
     ControlSurfaceActions actions;
     std::string diagnostic;
 };

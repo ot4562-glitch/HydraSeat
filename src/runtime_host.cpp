@@ -19,10 +19,22 @@ void appendDiagnostic(std::string& destination, std::string_view value) {
     destination.append(value.substr(0, remaining));
 }
 
+class UnavailableSeatGameFactory final : public ISeatGameInstanceFactory {
+public:
+    std::unique_ptr<ISeatGameInstance> create(SeatId, std::string& error) override {
+        error = "no validated game launch plan is installed for this host";
+        return {};
+    }
+};
+
 } // namespace
 
-RuntimeHost::RuntimeHost(std::vector<std::shared_ptr<IRuntimeBackend>> backends)
-    : backends_(std::move(backends)) {
+RuntimeHost::RuntimeHost(
+    std::vector<std::shared_ptr<IRuntimeBackend>> backends,
+    std::shared_ptr<ISeatGameInstanceFactory> seatGameFactory)
+    : backends_(std::move(backends)),
+      seatGameFactory_(seatGameFactory ? std::move(seatGameFactory)
+                                       : std::make_shared<UnavailableSeatGameFactory>()) {
     backends_.erase(
         std::remove(backends_.begin(), backends_.end(), nullptr),
         backends_.end());
@@ -33,28 +45,36 @@ RuntimeHost::RuntimeHost(std::vector<std::shared_ptr<IRuntimeBackend>> backends)
 RuntimeHost::~RuntimeHost() {
     std::lock_guard mutationLock(mutationMutex_);
     std::size_t rollbackCount = 0;
+    bool sessionWasIdle = false;
     {
         std::lock_guard lock(mutex_);
-        if (sessionPhase_ == SeatSessionPhase::Idle) {
-            hostPhase_ = HostLifecyclePhase::Stopped;
-            return;
-        }
+        sessionWasIdle = sessionPhase_ == SeatSessionPhase::Idle;
         mutationInProgress_ = true;
         rollbackCount = preparedBackendCount_;
-        setSessionPhaseLocked(SeatSessionPhase::RollingBack,
-                              "host destruction requested rollback");
+        if (!sessionWasIdle) {
+            setSessionPhaseLocked(SeatSessionPhase::RollingBack,
+                                  "host destruction requested rollback");
+        }
     }
 
     std::string diagnostic;
+    bool seatsCleaned = true;
+    if (seatGameLifecycle_) {
+        const auto seatResult = seatGameLifecycle_->shutdown();
+        seatsCleaned = seatResult.succeeded();
+        if (!seatsCleaned) appendDiagnostic(diagnostic, seatResult.diagnostic);
+    }
     const bool rolledBack = rollbackBackends(rollbackCount, diagnostic);
     std::lock_guard lock(mutex_);
-    if (!rolledBack) {
+    if (!seatsCleaned || !rolledBack) {
         setSessionPhaseLocked(SeatSessionPhase::RecoveryRequired, diagnostic);
     } else {
         preparedBackendCount_ = 0;
         startedBackendCount_ = 0;
         setSessionPhaseLocked(SeatSessionPhase::Idle,
-                              "host destruction rollback verified");
+                              sessionWasIdle
+                                  ? "host destruction Seat cleanup verified"
+                                  : "host destruction rollback verified");
     }
     mutationInProgress_ = false;
     hostPhase_ = HostLifecyclePhase::Stopped;
@@ -109,6 +129,19 @@ RuntimeCommandResult RuntimeHost::loadProfile(std::vector<SeatConfig> seats, Sea
                             "profiles may be loaded only while the host is running and idle",
                             correlationId);
     }
+    if (seatGameLifecycle_) {
+        const auto gameStates = seatGameLifecycle_->snapshot();
+        const bool anyBoundOrActive = std::any_of(
+            gameStates.begin(), gameStates.end(), [](const SeatGameState& state) {
+                return state.phase != SeatGamePhase::Idle || state.binding.has_value();
+            });
+        if (anyBoundOrActive) {
+            return finishLocked(RuntimeCommand::LoadProfile, from,
+                                RuntimeResultCode::InvalidState,
+                                "profile replacement requires every Seat game to be Idle",
+                                correlationId);
+        }
+    }
     std::string error;
     if (!validateProfile(seats, error)) {
         return finishLocked(RuntimeCommand::LoadProfile, from,
@@ -127,9 +160,15 @@ RuntimeCommandResult RuntimeHost::loadProfile(std::vector<SeatConfig> seats, Sea
     managementSeatId_ = managementSeatId;
     profile_ = std::move(seats);
     seats_.clear();
+    std::vector<SeatId> activeSeatIds;
     for (const auto& seat : profile_) {
-        if (seat.active) seats_.push_back({seat.seatId, SeatSessionPhase::Idle, {}});
+        if (seat.active) {
+            seats_.push_back({seat.seatId, SeatSessionPhase::Idle, {}});
+            activeSeatIds.push_back(seat.seatId);
+        }
     }
+    seatGameLifecycle_ = std::make_unique<SeatGameLifecycle>(activeSeatIds,
+                                                             seatGameFactory_);
     return finishLocked(RuntimeCommand::LoadProfile, from, RuntimeResultCode::Ok,
                         "validated profile loaded without activating backends",
                         correlationId);
@@ -315,11 +354,21 @@ RuntimeCommandResult RuntimeHost::stopForCommand(RuntimeCommand command,
 
     SeatSessionPhase from = SeatSessionPhase::Idle;
     std::size_t rollbackCount = 0;
+    SeatGameLifecycle* seatLifecycle = nullptr;
+    bool seatGamesWereActive = false;
     {
         std::lock_guard lock(mutex_);
         from = sessionPhase_;
         mutationInProgress_ = true;
-        if (sessionPhase_ == SeatSessionPhase::Idle) {
+        seatLifecycle = seatGameLifecycle_.get();
+        if (seatLifecycle) {
+            const auto states = seatLifecycle->snapshot();
+            seatGamesWereActive = std::any_of(
+                states.begin(), states.end(), [](const SeatGameState& state) {
+                    return state.phase != SeatGamePhase::Idle || state.binding.has_value();
+                });
+        }
+        if (sessionPhase_ == SeatSessionPhase::Idle && !seatGamesWereActive) {
             return finishLocked(command, from,
                                 RuntimeResultCode::AlreadySatisfied,
                                 reconfigure
@@ -341,12 +390,19 @@ RuntimeCommandResult RuntimeHost::stopForCommand(RuntimeCommand command,
     }
 
     std::string diagnostic;
+    bool seatGamesStopped = true;
+    if (seatLifecycle && seatGamesWereActive) {
+        const auto seatResult = seatLifecycle->emergencyStopAll(correlationId);
+        seatGamesStopped = seatResult.succeeded();
+        if (!seatGamesStopped) appendDiagnostic(diagnostic, seatResult.diagnostic);
+    }
     const bool rolledBack = rollbackBackends(rollbackCount, diagnostic);
     std::lock_guard lock(mutex_);
-    if (!rolledBack) {
+    if (!rolledBack || !seatGamesStopped) {
         setSessionPhaseLocked(SeatSessionPhase::RecoveryRequired, diagnostic);
         return finishLocked(command, from,
-                            RuntimeResultCode::RollbackFailure,
+                            seatGamesStopped ? RuntimeResultCode::RollbackFailure
+                                             : RuntimeResultCode::RecoveryRequired,
                             std::move(diagnostic), correlationId);
     }
     preparedBackendCount_ = 0;
@@ -369,21 +425,30 @@ RuntimeCommandResult RuntimeHost::reset(std::uint64_t correlationId) {
 
     SeatSessionPhase from = SeatSessionPhase::Idle;
     std::size_t rollbackCount = 0;
+    SeatGameLifecycle* seatLifecycle = nullptr;
     {
         std::lock_guard lock(mutex_);
         from = sessionPhase_;
         mutationInProgress_ = true;
         rollbackCount = preparedBackendCount_;
+        seatLifecycle = seatGameLifecycle_.get();
         setSessionPhaseLocked(SeatSessionPhase::RollingBack, "verified reset started");
     }
 
     std::string diagnostic;
+    bool seatGamesStopped = true;
+    if (seatLifecycle) {
+        const auto seatResult = seatLifecycle->emergencyStopAll(correlationId);
+        seatGamesStopped = seatResult.succeeded();
+        if (!seatGamesStopped) appendDiagnostic(diagnostic, seatResult.diagnostic);
+    }
     const bool rolledBack = rollbackBackends(rollbackCount, diagnostic);
     std::lock_guard lock(mutex_);
-    if (!rolledBack) {
+    if (!rolledBack || !seatGamesStopped) {
         setSessionPhaseLocked(SeatSessionPhase::RecoveryRequired, diagnostic);
         return finishLocked(RuntimeCommand::Reset, from,
-                            RuntimeResultCode::RollbackFailure,
+                            seatGamesStopped ? RuntimeResultCode::RollbackFailure
+                                             : RuntimeResultCode::RecoveryRequired,
                             std::move(diagnostic), correlationId);
     }
     preparedBackendCount_ = 0;
@@ -404,10 +469,18 @@ RuntimeCommandResult RuntimeHost::exitHostWhenIdle(std::uint64_t correlationId) 
     std::lock_guard lock(mutex_);
     const auto from = sessionPhase_;
     mutationInProgress_ = true;
-    if (sessionPhase_ != SeatSessionPhase::Idle) {
+    bool seatGameActive = false;
+    if (seatGameLifecycle_) {
+        const auto states = seatGameLifecycle_->snapshot();
+        seatGameActive = std::any_of(states.begin(), states.end(),
+                                     [](const SeatGameState& state) {
+            return state.phase != SeatGamePhase::Idle || state.binding.has_value();
+        });
+    }
+    if (sessionPhase_ != SeatSessionPhase::Idle || seatGameActive) {
         return finishLocked(RuntimeCommand::ExitHostWhenIdle, from,
                             RuntimeResultCode::InvalidState,
-                            "active or prepared sessions must stop before host exit",
+                            "active/prepared session or Seat game must stop before host exit",
                             correlationId);
     }
     if (hostPhase_ == HostLifecyclePhase::ExitRequested) {
@@ -441,6 +514,104 @@ RuntimeCommandResult RuntimeHost::markDegraded(std::string diagnostic,
                             ? RuntimeResultCode::AlreadySatisfied
                             : RuntimeResultCode::Ok,
                         std::move(diagnostic), correlationId);
+}
+
+SeatGameCommandResult RuntimeHost::assignSeatGame(
+    SeatId seatId, SeatGameBinding binding, std::uint64_t correlationId) {
+    std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
+    if (!mutationLock.owns_lock()) {
+        return {SeatGameResultCode::Busy, {}, false,
+                "another runtime mutation is in progress"};
+    }
+    std::lock_guard lock(mutex_);
+    if (!seatGameLifecycle_) {
+        return {SeatGameResultCode::InvalidState, {}, false,
+                "a validated active-Seat profile is required"};
+    }
+    auto result = seatGameLifecycle_->assign(seatId, std::move(binding), correlationId);
+    recordSeatTransitionLocked(RuntimeCommand::AssignSeatGame, seatId, result,
+                               correlationId);
+    return result;
+}
+
+SeatGameCommandResult RuntimeHost::startSeatGame(SeatId seatId,
+                                                  std::uint64_t correlationId) {
+    std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
+    if (!mutationLock.owns_lock()) {
+        return {SeatGameResultCode::Busy, {}, false,
+                "another runtime mutation is in progress"};
+    }
+    std::lock_guard lock(mutex_);
+    if (!seatGameLifecycle_) {
+        return {SeatGameResultCode::InvalidState, {}, false,
+                "a validated active-Seat profile is required"};
+    }
+    if (sessionPhase_ != SeatSessionPhase::Active &&
+        sessionPhase_ != SeatSessionPhase::Degraded) {
+        return {SeatGameResultCode::InvalidState,
+                seatGameLifecycle_->snapshot(),
+                seatGameLifecycle_->wholeMachineReturnRequested(),
+                "Seat game start requires an active prepared whole-machine runtime"};
+    }
+    auto result = seatGameLifecycle_->start(seatId, correlationId);
+    recordSeatTransitionLocked(RuntimeCommand::StartSeatGame, seatId, result,
+                               correlationId);
+    return result;
+}
+
+SeatGameCommandResult RuntimeHost::stopSeatGame(SeatId seatId,
+                                                 std::uint64_t correlationId) {
+    std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
+    if (!mutationLock.owns_lock()) {
+        return {SeatGameResultCode::Busy, {}, false,
+                "another runtime mutation is in progress"};
+    }
+    std::lock_guard lock(mutex_);
+    if (!seatGameLifecycle_) {
+        return {SeatGameResultCode::InvalidState, {}, false,
+                "a validated active-Seat profile is required"};
+    }
+    auto result = seatGameLifecycle_->stop(seatId, correlationId);
+    recordSeatTransitionLocked(RuntimeCommand::StopSeatGame, seatId, result,
+                               correlationId);
+    return result;
+}
+
+SeatGameCommandResult RuntimeHost::reconcileSeatGames(std::uint64_t correlationId) {
+    std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
+    if (!mutationLock.owns_lock()) {
+        return {SeatGameResultCode::Busy, {}, false,
+                "another runtime mutation is in progress"};
+    }
+    std::lock_guard lock(mutex_);
+    if (!seatGameLifecycle_) {
+        return {SeatGameResultCode::InvalidState, {}, false,
+                "a validated active-Seat profile is required"};
+    }
+    auto result = seatGameLifecycle_->reconcile(correlationId);
+    recordSeatTransitionLocked(RuntimeCommand::ReconcileSeatGames, 0, result,
+                               correlationId);
+    return result;
+}
+
+SeatGameCommandResult RuntimeHost::observeSeatGameExit(
+    SeatId seatId, bool cleanExit, std::string diagnostic,
+    std::uint64_t correlationId) {
+    std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
+    if (!mutationLock.owns_lock()) {
+        return {SeatGameResultCode::Busy, {}, false,
+                "another runtime mutation is in progress"};
+    }
+    std::lock_guard lock(mutex_);
+    if (!seatGameLifecycle_) {
+        return {SeatGameResultCode::InvalidState, {}, false,
+                "a validated active-Seat profile is required"};
+    }
+    auto result = seatGameLifecycle_->observeTargetExit(
+        seatId, cleanExit, std::move(diagnostic), correlationId);
+    recordSeatTransitionLocked(RuntimeCommand::ObserveSeatGameExit, seatId,
+                               result, correlationId);
+    return result;
 }
 
 void RuntimeHost::controlClientConnected() {
@@ -494,6 +665,38 @@ RuntimeCommandResult RuntimeHost::finishLocked(RuntimeCommand command,
     return result;
 }
 
+void RuntimeHost::recordSeatTransitionLocked(
+    RuntimeCommand command, SeatId seatId, const SeatGameCommandResult& result,
+    std::uint64_t correlationId) {
+    RuntimeTransition transition;
+    transition.sequence = ++transitionSequence_;
+    transition.correlationId = correlationId;
+    transition.command = command;
+    transition.from = sessionPhase_;
+    transition.to = sessionPhase_;
+    transition.seatId = seatId;
+    switch (result.code) {
+        case SeatGameResultCode::Ok: transition.result = RuntimeResultCode::Ok; break;
+        case SeatGameResultCode::AlreadySatisfied:
+            transition.result = RuntimeResultCode::AlreadySatisfied; break;
+        case SeatGameResultCode::Busy: transition.result = RuntimeResultCode::Busy; break;
+        case SeatGameResultCode::InvalidSeat:
+        case SeatGameResultCode::InvalidState:
+        case SeatGameResultCode::InvalidBinding:
+        case SeatGameResultCode::DuplicateCorrelation:
+        case SeatGameResultCode::V1SeatLimitExceeded:
+            transition.result = RuntimeResultCode::InvalidState; break;
+        case SeatGameResultCode::BackendFailure:
+            transition.result = RuntimeResultCode::BackendFailure; break;
+        case SeatGameResultCode::RecoveryRequired:
+            transition.result = RuntimeResultCode::RecoveryRequired; break;
+    }
+    transition.diagnostic = result.diagnostic.substr(0, kMaximumDiagnosticBytes);
+    transitionEvents_.push_back(transition);
+    if (transitionEvents_.size() > 128u) transitionEvents_.pop_front();
+    lastTransition_ = std::move(transition);
+}
+
 void RuntimeHost::setSessionPhaseLocked(SeatSessionPhase phase,
                                         std::string_view diagnostic) {
     sessionPhase_ = phase;
@@ -543,6 +746,11 @@ HostRuntimeSnapshot RuntimeHost::snapshotLocked() const {
     snapshot.profileLoaded = !profile_.empty();
     snapshot.mutationInProgress = mutationInProgress_;
     snapshot.seats = seats_;
+    if (seatGameLifecycle_) {
+        snapshot.seatGames = seatGameLifecycle_->snapshot();
+        snapshot.wholeMachineReturnRequested =
+            seatGameLifecycle_->wholeMachineReturnRequested();
+    }
     snapshot.configuredSeats = profile_;
     snapshot.lastTransition = lastTransition_;
     snapshot.diagnostic = diagnostic_;
@@ -556,13 +764,13 @@ bool RuntimeHost::validateProfile(std::span<const SeatConfig> seats,
         return false;
     }
     std::unordered_set<SeatId> ids;
-    bool active = false;
+    std::size_t activeCount = 0;
     for (const auto& seat : seats) {
         if (seat.seatId == 0 || !ids.insert(seat.seatId).second) {
             error = "Seat identifiers must be nonzero and unique";
             return false;
         }
-        active = active || seat.active;
+        if (seat.active) ++activeCount;
         if (seat.primaryDisplayId &&
             std::find(seat.displayIds.begin(), seat.displayIds.end(),
                       *seat.primaryDisplayId) == seat.displayIds.end()) {
@@ -570,8 +778,12 @@ bool RuntimeHost::validateProfile(std::span<const SeatConfig> seats,
             return false;
         }
     }
-    if (!active) {
+    if (activeCount == 0u) {
         error = "profile must contain at least one active Seat";
+        return false;
+    }
+    if (activeCount > kV1MaximumActiveSeats) {
+        error = "HydraSeat v1 rejects profiles with more than two active Seats";
         return false;
     }
     return true;
