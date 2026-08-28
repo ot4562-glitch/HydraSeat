@@ -946,7 +946,11 @@ Automated process tests and manual Windows crash acceptance both pass.
 
 ## P3-D-02 — Guarded HidHide session-cloak lab
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
+
+**D-051 automated-development rule**
+
+The implementation may proceed before P3-HW-01 physical acceptance so the transaction model, fake backend, bounded state contract, dry-run/preflight, rollback, watchdog integration, and disabled native path can be completed automatically. Until the declared physical gate is recorded, native device-cloak mutation must remain disabled by default and this packet cannot be marked `VALIDATED` or used to advertise `PhysicalDeviceCloaking`.
 
 **Goal**
 
@@ -994,6 +998,17 @@ Required with spare recovery input and visible countdown.
 **Done when**
 
 `PhysicalDeviceCloaking` may be advertised for the tested matrix. `PhysicalInputSuppression` remains separate unless the complete input-path test proves it.
+
+**Automated implementation completion — 2026-08-28**
+
+- Added a portable `HidHideSessionTransaction` with bounded explicit device/application identities, monotonic expiry, exact before/applied snapshots, prepare-without-mutation, apply verification, idempotent expiry/rollback, and fail-closed external-drift detection.
+- Native mutation is structurally gated: activation performs zero writes unless physical acceptance is recorded, explicit high-risk approval is present, and the selected platform advertises mutation support. The automated lab intentionally provides no native cloak command.
+- Failure handling assumes a backend may partially mutate before returning failure. The transaction retains its exact snapshots and enters verified rollback/recovery rather than treating the failed write as side-effect free; stale snapshot restore is refused if HidHide state changed outside the owned transaction.
+- The guarded native boundary implements the bounded HidHide state snapshot/application contract and process-lifetime session blacklist behind the physical-acceptance + explicit-approval gate; HydraSeat session devices are never appended to the persistent blacklist.
+- A durable generation/resource-bound recovery snapshot is written before activation can be authorized. `GuardedHidHideSession` requires the exact watchdog rollback descriptor to be armed before mutation, and watchdog/reset use a narrow `RestoreSnapshotState` executor that refuses stale generation or third-party state drift.
+- `hydra_hidhide_session_lab --status` is read-only and reports the physical claim as unvalidated; `--self-test` proves the synthetic plan is blocked at the physical gate and can be cancelled without mutation.
+- Focused `P3-D-02` tests pass 3/3 on MSVC x64, Win32/x86, and strict MinGW. Full Windows CTest passes 75/75 on both x64 and x86 with backend, lab, and durable-recovery tests included.
+- `CODE_COMPLETE` does not mean physical cloaking works on the user's hardware. Real device cloaking, spare-input/countdown acceptance, composite HID behavior, owning/non-owning process visibility, and forced physical recovery remain deferred manual evidence and are required before `VALIDATED` or any `PhysicalDeviceCloaking` claim.
 
 **Suggested commit**
 

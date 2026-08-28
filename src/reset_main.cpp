@@ -1,3 +1,4 @@
+#include "hydra/hidhide_session_recovery.hpp"
 #include "hydra/reset_actions.hpp"
 
 #include <algorithm>
@@ -379,7 +380,8 @@ int main(int argc, char** argv) {
         return kExitUsage;
     }
 
-    hydra::watchdog::DefaultRollbackExecutor executor;
+    hydra::HidHideSessionRollbackExecutor executor(
+        recoveryDirectory, hydra::makeNativeHidHideSessionPlatform());
     const auto report = hydra::reset::executeVerifiedReset(
         journalStore, registrationStore, executor, expectedSession);
     if (options.json) printExecutionJson(report);
