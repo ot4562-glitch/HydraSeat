@@ -124,7 +124,7 @@ Physical audible two-output routing remains deferred manual evidence. `CODE_COMP
 
 ## P5-CTRL-01 — Production controller source and per-process routing
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **D-051 automated-development rule**
 
@@ -160,11 +160,28 @@ Move controller compatibility from controlled Phase 3 models into the production
 
 The chosen MVP controller scenarios demonstrate correct Seat ownership/state/vibration where applicable with zero cross-Seat receiver evidence.
 
+**Automated implementation evidence — 2026-08-28**
+
+- `hydra_controller_runtime` separates bounded source polling from the Raw Input callback path, tracks deterministic source snapshots, and advances a source generation on disconnect/reconnect or runtime-route change so stale controller state cannot silently resurrect.
+- XInput slot numbers are explicitly `RuntimeOnly` hints. They can be selected only as an explicit current-session mapping and are never promoted to a persistent controller ID by this layer. DirectInput attached game-controller instance GUIDs are exposed as stable API-specific identities; a future optional GameInput backend can supply its stronger device identity through the same source interface without changing the Seat contract.
+- Binding plans enforce exactly two v1 Seats, reject duplicate/ambiguous/shared exclusive sources, keep API surfaces distinct, and refuse a DirectInput source to masquerade as XInput state.
+- `SeatControllerRuntime` feeds selected normalized XInput state/capabilities/battery into independent process-local `VirtualXInputContext`s and owns the entire vibration request sequence. Vibration is emitted only after current Seat binding, source key, source generation, mapping generation, and API capability all agree.
+- Controlled tests prove two Seat contexts retain distinct state, Seat 1 vibration cannot be replayed onto Seat 2, disconnect clears state with the old exact generation, reconnect requires a newer generation, and post-reconnect vibration is regenerated from the current mapping.
+- The native backend read-only scan uses XInput for four runtime slots and DirectInput for stable attached-controller GUID inventory. `hydra_controller_diag --list` on the current development PC reports all four XInput slots as `runtime-only / disconnected`, which is truthful native integration evidence rather than a fabricated physical-controller pass.
+- Microsoft GameInput was reviewed for a future stable-ID backend. Current public device information includes `deviceId`/`deviceRootId`/`containerId`, but the latest PC deployment model adds a redistributable dependency; P5-CTRL-01 therefore keeps that backend optional rather than making it a v1 core prerequisite.
+- MSVC x64 and Win32/x86 full suites pass 80/80. Focused P5-CTRL-01 tests pass 2/2 on x64, x86, and strict MinGW with no strict-warning output after cleanup.
+
+Physical controller connection/reconnect and physical vibration observation remain deferred manual evidence before `VALIDATED` or a compatibility claim for a concrete controller/game path.
+
 ---
 
 ## P5-LAUNCH-01 — Minimal two-Seat launch plan and activation transaction
 
-**State:** BLOCKED
+**State:** READY
+
+**D-051 automated-development rule**
+
+P3-CLOSE-01 remains blocked by deferred physical/game evidence, but the immutable plan compiler, fake/controlled resource backends, activation/rollback ordering, exact two-Seat bound, and controlled-target integration can proceed to `CODE_COMPLETE`. No missing physical Phase 3 evidence may be re-labelled as validated by this packet.
 
 **Goal**
 
