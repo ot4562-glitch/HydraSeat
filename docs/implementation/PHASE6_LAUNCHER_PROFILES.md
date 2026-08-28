@@ -89,7 +89,7 @@ Round-trip, malformed, migration-boundary, Unicode/path, maximum-size, unknown-v
 
 ## P6-MIG-01 — Transactional profile migration and backup
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -112,11 +112,23 @@ Migrate legacy Seat/workspace data into the separated v1 model without destroyin
 
 Legacy fixture profiles migrate deterministically and injected write/validation failures leave the original profile usable byte-for-byte where declared.
 
+**Automated implementation evidence — 2026-08-28**
+
+- `hydra_profile_migration` first parses the bounded legacy schema-version-2 workspace bytes into a temporary model and does not open the source for writing, rename it, truncate it, or modify it during planning/commit.
+- Migration emits a deterministic separated bundle containing `seat_config.v1.json`, empty versioned Player/Game/TwoPlayerSetup stores, `migration_report.v1.json`, and an exact byte-preserving `workspace_config.legacy-v2.backup.json`.
+- Legacy `target_hwnd` values are explicitly reported and excluded from stable Seat output. Unknown root/Seat values and legacy shareable-resource declarations are retained as bounded canonical JSON diagnostics rather than silently interpreted; the complete source remains in the exact backup.
+- Cross-Seat duplicate legacy resources fail closed unless the corresponding legacy shareable declaration exists. A third Seat, malformed/unknown schema, invalid references, oversized source, and oversized diagnostic values fail without replacing a previously valid migration plan.
+- All files are durably written under a sibling staging directory, compared against deterministic planned bytes, decoded through the v1 schema validators, and checked against the exact backup before directory commit. Existing v1 output is replaced only with explicit authorization and is moved to a rollback directory until post-commit validation succeeds.
+- Focused tests inject write failure, staged-document corruption, commit failure after moving the old destination, and post-commit validation failure; every case keeps the legacy source byte-for-byte unchanged, restores the complete previous v1 bundle, and removes migration-owned staging/rollback paths.
+- Strict Windows x64 MinGW build completed without packet warnings and `profile_migration_tests.exe` passed. Broader physical/game validation remains unrelated and deferred under D-051.
+
+`CODE_COMPLETE` covers the legacy-to-v1 migration engine and deterministic failure recovery. Wiring migration into installer/first-run UI and production profile-root selection belongs to later packets.
+
 ---
 
 ## P6-CATALOG-01 — Provider-neutral local game catalog
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 

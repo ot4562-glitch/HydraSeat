@@ -479,6 +479,20 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P6-MIG-01 read-only legacy parser plus staged, byte-preserving backup and
+# directory-level transactional commit/rollback for the separated v1 stores.
+add_library(hydra_profile_migration STATIC
+    src/profile_migration.cpp
+    include/hydra/profile_migration.hpp
+)
+target_link_libraries(hydra_profile_migration PUBLIC hydra_profile_schema)
+if(MSVC)
+    target_compile_options(hydra_profile_migration PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_profile_migration PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P8-WATCH-01 versioned lease/rollback protocol and idempotent rollback registry.
 # The portable core contains no arbitrary command execution or persistent-state I/O.
 add_library(hydra_watchdog_core STATIC
@@ -1644,6 +1658,19 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME ProfileSchemaTests COMMAND profile_schema_tests)
 set_tests_properties(ProfileSchemaTests PROPERTIES LABELS "P6-SCHEMA-01")
+
+# P6-MIG-01 deterministic conversion/report/backup plus injected write,
+# staged-validation, commit, and post-commit rollback tests.
+add_executable(profile_migration_tests tests/test_profile_migration.cpp)
+target_link_libraries(profile_migration_tests PRIVATE hydra_profile_migration)
+if(MSVC)
+    target_compile_options(profile_migration_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(profile_migration_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ProfileMigrationTests COMMAND profile_migration_tests)
+set_tests_properties(ProfileMigrationTests PROPERTIES LABELS "P6-MIG-01")
 
 # P3-HW-01 acceptance tooling is CI-tested without claiming physical acceptance.
 # Python parses bounded synthetic evidence; Windows additionally checks that the
