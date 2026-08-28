@@ -100,8 +100,8 @@ The following work is permitted early as independently testable infrastructure. 
 | P4-IDD-01 | DEFERRED | Custom IDD/IddCx driver deferred unless a measured post-v1/v1 requirement justifies cost |
 | P4-CTRL-01 | CODE_COMPLETE | Management/control model + GUI integration pass local x64/x86 70/70; real Management display placement acceptance pending |
 | P4-CTRL-02 | CODE_COMPLETE | Return/reconfigure transition foundation passes local x64/x86 70/70; independent Seat game lifecycle remains separate P4-SEAT-01 |
-| P4-SEAT-01 | BLOCKED | Must implement independent per-Seat game lifecycle and reject a third active v1 Seat after prerequisites are integrated |
-| P4-REC-01 | BLOCKED | Requires P4-SEAT-01 plus physical display/recovery matrix |
+| P4-SEAT-01 | CODE_COMPLETE | Independent two-Seat lifecycle integrated with RuntimeHost/protocol v3/IPC/events/reconnect; x64/x86 72/72 and controlled Job Object independence pass; real-game/physical recovery remains separate |
+| P4-REC-01 | CODE_COMPLETE | Controlled x64/x86 Seat/Host crash, UI reconnect, two-target watchdog, restart/global-return, and no-orphan matrix passes; production launch integration and physical display/session acceptance remain |
 | P4-CLOSE-01 | BLOCKED | Dedicated Phase 4 close verification after all non-deferred required gates |
 
 ### 2026-08-27 — Phase 4 accumulated local foundation verification
@@ -123,6 +123,51 @@ Known product gap exposed by the roadmap rewrite:
 - the current host/session control foundation still centers several operations around a whole-session command model;
 - v1 requires the additional P4-SEAT-01 per-Seat lifecycle so `Seat 1 = Playing, Seat 2 = Idle` is a normal healthy state and one Seat can stop/change games without stopping the other;
 - this is documented as a required future packet rather than falsely claimed as already implemented.
+
+### 2026-08-28 — P4-SEAT-01 controlled implementation complete
+
+State: `CODE_COMPLETE` — declared automated implementation and controlled-process evidence pass; real-game/physical recovery gates remain separate.
+Branch: `feat/p4-seat-lifecycle`; implementation commit and exact remote CI run are recorded after fork validation.
+Automated evidence:
+
+- MSVC x64 full build and CTest pass **72/72**, including `SeatGameLifecycleTests`, `HostProtocolTests`, and `SeatGameProcessLifecycleTests`;
+- MSVC Win32/x86 full build and CTest pass **72/72** with the same lifecycle/protocol/real controlled-process coverage;
+- MinGW strict portable `SeatGameLifecycleTests` pass with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion`;
+- controlled process evidence uses exact Seat-owned Job Object process trees and confirms Seat 1 remains the same live process instance while Seat 2 stops and restarts.
+- authoritative `RuntimeHost` integration requires an active prepared whole-machine runtime before Seat start, performs Seat-local cleanup before global rollback/reset, and rejects profile replacement/host exit while Seat-local work remains;
+- factory/start exceptions are contained as Seat-local backend failures; an unverified partial-start cleanup retains the exact Seat-local instance in `RecoveryRequired`, and focused failure-injection tests prove a later Seat-local stop retries and verifies cleanup rather than losing process/backend ownership;
+- invalid lifecycle construction now fails closed with the exact cause across every mutation path: empty/duplicate Seat configuration reports `InvalidSeat`, a third active Seat reports `V1SeatLimitExceeded`, and a missing instance factory reports `BackendFailure`; none can falsely request whole-machine return readiness;
+- host protocol v3 and real host-process IPC cover canonical Seat-ID-ordered snapshots, bounded assign/start/stop/reconcile commands, Seat-identified ordered events, UI-style reconnect, malformed/unavailable-plan failure, impossible phase/binding and contradictory whole-machine-return rejection, and unknown third-Seat rejection.
+- `hydra_hostctl` exposes bounded Seat assign/start/stop/reconcile commands and per-Seat text/JSON state, discovers non-default Management Seat authority, and uses per-client OS-random correlation seeds so separate CLI/UI processes do not collide in the authoritative lifecycle deduplication window.
+
+Known limits:
+
+- the controlled fixture is not real-game, physical input, display, audio, controller, or physical zero-bleed evidence;
+- the minimal idle Seat Launcher UI is owned by Phase 7 and is not implied by the Idle runtime state;
+- P3-HW-01 and all physical/manual gates remain pending and unchanged.
+
+Next dependency: P4-REC-01 controlled automation is code-complete, but production launch integration and physical display/session acceptance remain pending before validation/closure.
+
+### 2026-08-28 — P4-REC-01 controlled recovery implementation complete
+
+State: `CODE_COMPLETE` — declared controlled automation is implemented and passing; required production integration/manual evidence is incomplete.
+Branch: `feat/p4-seat-lifecycle`; implementation commit and exact remote CI run are recorded after fork validation.
+Automated evidence:
+
+- MSVC x64 and Win32/x86 full builds and CTest pass **72/72**;
+- an authoritative `RuntimeHost` owns two real controlled Job Object process trees, preserves Seat 1's exact PID/creation identity after a forced Seat 2 exit, acknowledges only the failed Seat, completes ten Seat 2 stop/restart cycles, and completes three full two-Seat/explicit-return cycles without exact-root leaks;
+- forced global reset removes both exact roots, Host destruction leaves zero exact owned process orphans, and a unit test verifies Seat-local teardown precedes shared-backend rollback;
+- a separate authoritative Host fixture is forcibly terminated without destructors after both Seat trees become live; Job Object handle closure removes both exact roots on x64 and x86;
+- a separate read-only UI-style client is forcibly terminated while both controlled Seats are Playing; a fresh client reconnects and resnapshots both authoritative Playing states while both process trees remain live;
+- the production control-surface model and Win32 status line display authoritative per-Seat phases, surface one-Seat degradation without hiding the healthy Seat, project Seat recovery into a reset-only fail-closed action, show the both-ended return request explicitly, and reject a third inactive GUI Seat configuration before Host mutation;
+- the watchdog Host-death fixture now registers two distinct PID/creation-time identities, forcibly terminates the owner without destructors, and verifies both reverse rollback actions complete independently on x64/x86;
+- existing watchdog/reset, display-recovery, process-group, and window-tracker suites retain coverage of the independent recovery mechanisms and stale PID/HWND rejection.
+
+Remaining evidence:
+
+- actual HydraSeat GUI crash/reopen over real games and end-to-end watchdog relaunch over the new Seat lifecycle;
+- physical display unplug/replug, sign-out/restart, and ordinary-Windows postcondition acceptance;
+- real-game/input/audio/controller/window-helper ownership remains outside the controlled synthetic fixture.
 
 ## Manual/physical gates still pending
 

@@ -237,7 +237,7 @@ bool readOptionalWide(Reader& reader, std::optional<std::wstring>& value) {
 
 bool validMessageType(std::uint16_t raw) {
     return raw >= static_cast<std::uint16_t>(MessageType::Hello) &&
-           raw <= static_cast<std::uint16_t>(MessageType::ApplyProfileResult);
+           raw <= static_cast<std::uint16_t>(MessageType::ReconcileSeatGamesResult);
 }
 
 bool validHostPhase(std::uint8_t raw) {
@@ -248,8 +248,43 @@ bool validSessionPhase(std::uint8_t raw) {
     return raw <= static_cast<std::uint8_t>(runtime::SeatSessionPhase::RecoveryRequired);
 }
 
+bool validSeatGamePhase(std::uint8_t raw) {
+    return raw <= static_cast<std::uint8_t>(runtime::SeatGamePhase::RecoveryRequired);
+}
+
+bool validSeatGameResult(std::uint8_t raw) {
+    return raw <= static_cast<std::uint8_t>(runtime::SeatGameResultCode::V1SeatLimitExceeded);
+}
+
+bool validSeatGameStateShape(runtime::SeatGamePhase phase, bool hasBinding) {
+    switch (phase) {
+        case runtime::SeatGamePhase::Idle:
+        case runtime::SeatGamePhase::Degraded:
+            return !hasBinding;
+        case runtime::SeatGamePhase::Planning:
+        case runtime::SeatGamePhase::Starting:
+        case runtime::SeatGamePhase::Playing:
+        case runtime::SeatGamePhase::Stopping:
+            return hasBinding;
+        case runtime::SeatGamePhase::RecoveryRequired:
+            // Recovery may retain an active binding after stop failure or have
+            // no binding after a failed partial-start cleanup.
+            return true;
+    }
+    return false;
+}
+
+bool validWholeMachineReturnPolicy(
+    std::span<const runtime::SeatGameState> states, bool requested) {
+    if (!requested) return true;
+    return !states.empty() &&
+           std::all_of(states.begin(), states.end(), [](const auto& state) {
+               return state.phase == runtime::SeatGamePhase::Idle;
+           });
+}
+
 bool validRuntimeCommand(std::uint8_t raw) {
-    return raw <= static_cast<std::uint8_t>(runtime::RuntimeCommand::BeginReconfigure);
+    return raw <= static_cast<std::uint8_t>(runtime::RuntimeCommand::ObserveSeatGameExit);
 }
 
 bool validRuntimeResult(std::uint8_t raw) {
@@ -264,6 +299,21 @@ bool validError(std::uint16_t raw) {
     return raw <= static_cast<std::uint16_t>(ErrorCode::InternalError);
 }
 
+bool seatGameStatesMatchProfile(
+    std::span<const runtime::SeatGameState> states,
+    std::span<const SeatConfig> configuredSeats) {
+    std::vector<SeatId> activeIds;
+    for (const auto& seat : configuredSeats) {
+        if (seat.active) activeIds.push_back(seat.seatId);
+    }
+    std::vector<SeatId> stateIds;
+    stateIds.reserve(states.size());
+    for (const auto& state : states) stateIds.push_back(state.seatId);
+    std::sort(activeIds.begin(), activeIds.end());
+    std::sort(stateIds.begin(), stateIds.end());
+    return activeIds == stateIds;
+}
+
 std::vector<std::byte> encodeTransitionBody(const runtime::RuntimeTransition& transition) {
     Writer writer;
     writer.u64(transition.sequence);
@@ -272,6 +322,7 @@ std::vector<std::byte> encodeTransitionBody(const runtime::RuntimeTransition& tr
     writer.u8(static_cast<std::uint8_t>(transition.from));
     writer.u8(static_cast<std::uint8_t>(transition.to));
     writer.u8(static_cast<std::uint8_t>(transition.result));
+    writer.u32(transition.seatId);
     writer.string(transition.diagnostic);
     return writer.take();
 }
@@ -283,7 +334,7 @@ std::optional<runtime::RuntimeTransition> decodeTransitionBody(
     std::uint8_t command = 0, from = 0, to = 0, result = 0;
     if (!reader.u64(value.sequence) || !reader.u64(value.correlationId) ||
         !reader.u8(command) || !reader.u8(from) || !reader.u8(to) ||
-        !reader.u8(result) || !validRuntimeCommand(command) ||
+        !reader.u8(result) || !reader.u32(value.seatId) || !validRuntimeCommand(command) ||
         !validSessionPhase(from) || !validSessionPhase(to) ||
         !validRuntimeResult(result) || !reader.string(value.diagnostic) ||
         !reader.done()) {
@@ -324,6 +375,14 @@ std::string_view messageTypeName(MessageType type) noexcept {
         case MessageType::Error: return "error";
         case MessageType::ApplyProfile: return "apply-profile";
         case MessageType::ApplyProfileResult: return "apply-profile-result";
+        case MessageType::AssignSeatGame: return "assign-seat-game";
+        case MessageType::AssignSeatGameResult: return "assign-seat-game-result";
+        case MessageType::StartSeatGame: return "start-seat-game";
+        case MessageType::StartSeatGameResult: return "start-seat-game-result";
+        case MessageType::StopSeatGame: return "stop-seat-game";
+        case MessageType::StopSeatGameResult: return "stop-seat-game-result";
+        case MessageType::ReconcileSeatGames: return "reconcile-seat-games";
+        case MessageType::ReconcileSeatGamesResult: return "reconcile-seat-games-result";
     }
     return "unknown";
 }
@@ -522,13 +581,200 @@ std::optional<ProfilePayload> decodeProfilePayload(std::span<const std::byte> pa
     return profile;
 }
 
+std::vector<std::byte> encodeSeatGameStates(
+    std::span<const runtime::SeatGameState> states) {
+    if (states.size() > runtime::kV1MaximumActiveSeats) return {};
+    std::vector<runtime::SeatGameState> ordered(states.begin(), states.end());
+    std::sort(ordered.begin(), ordered.end(), [](const auto& left, const auto& right) {
+        return left.seatId < right.seatId;
+    });
+    if (std::adjacent_find(ordered.begin(), ordered.end(),
+                           [](const auto& left, const auto& right) {
+                               return left.seatId == right.seatId;
+                           }) != ordered.end()) return {};
+    Writer writer;
+    writer.u16(1u); // Seat lifecycle payload version.
+    writer.u16(static_cast<std::uint16_t>(ordered.size()));
+    for (const auto& state : ordered) {
+        const auto rawPhase = static_cast<std::uint8_t>(state.phase);
+        if (state.seatId == 0 || !validSeatGamePhase(rawPhase) ||
+            !validSeatGameStateShape(state.phase, state.binding.has_value()) ||
+            state.diagnostic.size() > kHostProtocolMaxStringBytes ||
+            state.diagnostic.find('\0') != std::string::npos) return {};
+        if (state.binding &&
+            (state.binding->playerId.empty() || state.binding->gameId.empty() ||
+             state.binding->playerId.size() > 256u || state.binding->gameId.size() > 256u ||
+             state.binding->playerId.find('\0') != std::string::npos ||
+             state.binding->gameId.find('\0') != std::string::npos)) return {};
+        writer.u32(state.seatId);
+        writer.u8(rawPhase);
+        writer.u8(state.binding ? 1u : 0u);
+        writer.u16(0u);
+        writer.u64(state.generation);
+        if (state.binding) {
+            writer.string(state.binding->playerId);
+            writer.string(state.binding->gameId);
+        }
+        writer.string(state.diagnostic);
+    }
+    auto bytes = writer.take();
+    if (bytes.size() > kHostProtocolMaxPayloadBytes) return {};
+    return bytes;
+}
+
+std::optional<std::vector<runtime::SeatGameState>> decodeSeatGameStates(
+    std::span<const std::byte> payload) {
+    Reader reader(payload);
+    std::uint16_t version = 0;
+    std::uint16_t count = 0;
+    if (!reader.u16(version) || version != 1u || !reader.u16(count) ||
+        count > runtime::kV1MaximumActiveSeats) {
+        return std::nullopt;
+    }
+    std::vector<runtime::SeatGameState> states;
+    states.reserve(count);
+    for (std::uint16_t index = 0; index < count; ++index) {
+        runtime::SeatGameState state;
+        std::uint8_t phase = 0;
+        std::uint8_t hasBinding = 0;
+        std::uint16_t reserved = 0;
+        if (!reader.u32(state.seatId) || state.seatId == 0 ||
+            !reader.u8(phase) || !validSeatGamePhase(phase) ||
+            !reader.u8(hasBinding) || hasBinding > 1u ||
+            !reader.u16(reserved) || reserved != 0 ||
+            !reader.u64(state.generation)) {
+            return std::nullopt;
+        }
+        state.phase = static_cast<runtime::SeatGamePhase>(phase);
+        if (hasBinding != 0u) {
+            runtime::SeatGameBinding binding;
+            if (!reader.string(binding.playerId) || !reader.string(binding.gameId) ||
+                binding.playerId.empty() || binding.gameId.empty() ||
+                binding.playerId.size() > 256u || binding.gameId.size() > 256u ||
+                binding.playerId.find('\0') != std::string::npos ||
+                binding.gameId.find('\0') != std::string::npos) {
+                return std::nullopt;
+            }
+            state.binding = std::move(binding);
+        }
+        if (!reader.string(state.diagnostic)) return std::nullopt;
+        if (!validSeatGameStateShape(state.phase, state.binding.has_value())) {
+            return std::nullopt;
+        }
+        states.push_back(std::move(state));
+    }
+    if (!reader.done()) return std::nullopt;
+    std::sort(states.begin(), states.end(), [](const auto& left, const auto& right) {
+        return left.seatId < right.seatId;
+    });
+    if (std::adjacent_find(states.begin(), states.end(), [](const auto& left, const auto& right) {
+            return left.seatId == right.seatId;
+        }) != states.end()) {
+        return std::nullopt;
+    }
+    return states;
+}
+
+std::vector<std::byte> encodeSeatGameCommandResult(
+    const runtime::SeatGameCommandResult& result) {
+    if (!validSeatGameResult(static_cast<std::uint8_t>(result.code)) ||
+        !validWholeMachineReturnPolicy(result.seats,
+                                       result.wholeMachineReturnRequested) ||
+        result.diagnostic.size() > kHostProtocolMaxStringBytes ||
+        result.diagnostic.find('\0') != std::string::npos) return {};
+    const auto states = encodeSeatGameStates(result.seats);
+    if (states.empty() && !result.seats.empty()) return {};
+    Writer writer;
+    writer.u8(static_cast<std::uint8_t>(result.code));
+    writer.u8(result.wholeMachineReturnRequested ? 1u : 0u);
+    writer.u16(0u);
+    writer.u32(static_cast<std::uint32_t>(states.size()));
+    writer.raw(states);
+    writer.string(result.diagnostic);
+    auto bytes = writer.take();
+    if (bytes.size() > kHostProtocolMaxPayloadBytes) return {};
+    return bytes;
+}
+
+std::optional<runtime::SeatGameCommandResult> decodeSeatGameCommandResult(
+    std::span<const std::byte> payload) {
+    Reader reader(payload);
+    runtime::SeatGameCommandResult result;
+    std::uint8_t code = 0;
+    std::uint8_t returnRequested = 0;
+    std::uint16_t reserved = 0;
+    std::uint32_t length = 0;
+    std::vector<std::byte> statesBytes;
+    if (!reader.u8(code) || !validSeatGameResult(code) ||
+        !reader.u8(returnRequested) || returnRequested > 1u ||
+        !reader.u16(reserved) || reserved != 0 ||
+        !reader.u32(length) || length > kHostProtocolMaxPayloadBytes ||
+        !reader.rawVector(length, statesBytes) || !reader.string(result.diagnostic) ||
+        !reader.done()) {
+        return std::nullopt;
+    }
+    const auto states = decodeSeatGameStates(statesBytes);
+    if (!states || !validWholeMachineReturnPolicy(*states,
+                                                   returnRequested != 0u)) {
+        return std::nullopt;
+    }
+    result.code = static_cast<runtime::SeatGameResultCode>(code);
+    result.wholeMachineReturnRequested = returnRequested != 0u;
+    result.seats = *states;
+    return result;
+}
+
+std::vector<std::byte> encodeSeatGameCommandPayload(
+    const SeatGameCommandPayload& payload) {
+    if (payload.seatId == 0) return {};
+    Writer writer;
+    writer.u32(payload.seatId);
+    writer.u8(payload.binding ? 1u : 0u);
+    writer.u8(0u); writer.u16(0u);
+    if (payload.binding) {
+        if (payload.binding->playerId.empty() || payload.binding->gameId.empty() ||
+            payload.binding->playerId.size() > 256u || payload.binding->gameId.size() > 256u ||
+            payload.binding->playerId.find('\0') != std::string::npos ||
+            payload.binding->gameId.find('\0') != std::string::npos) return {};
+        writer.string(payload.binding->playerId);
+        writer.string(payload.binding->gameId);
+    }
+    return writer.take();
+}
+
+std::optional<SeatGameCommandPayload> decodeSeatGameCommandPayload(
+    std::span<const std::byte> payload) {
+    Reader reader(payload);
+    SeatGameCommandPayload result;
+    std::uint8_t hasBinding = 0, reserved8 = 0;
+    std::uint16_t reserved16 = 0;
+    if (!reader.u32(result.seatId) || result.seatId == 0 ||
+        !reader.u8(hasBinding) || hasBinding > 1u || !reader.u8(reserved8) ||
+        !reader.u16(reserved16) || reserved8 != 0 || reserved16 != 0) return std::nullopt;
+    if (hasBinding != 0u) {
+        runtime::SeatGameBinding binding;
+        if (!reader.string(binding.playerId) || !reader.string(binding.gameId) ||
+            binding.playerId.empty() || binding.gameId.empty() ||
+            binding.playerId.size() > 256u || binding.gameId.size() > 256u ||
+            binding.playerId.find('\0') != std::string::npos ||
+            binding.gameId.find('\0') != std::string::npos) return std::nullopt;
+        result.binding = std::move(binding);
+    }
+    if (!reader.done()) return std::nullopt;
+    return result;
+}
+
 std::vector<std::byte> encodeSnapshot(const runtime::HostRuntimeSnapshot& snapshot) {
     if (snapshot.seats.size() > kHostProtocolMaxSeats ||
-        snapshot.configuredSeats.size() > kHostProtocolMaxSeats) {
+        snapshot.configuredSeats.size() > kHostProtocolMaxSeats ||
+        !validWholeMachineReturnPolicy(snapshot.seatGames,
+                                       snapshot.wholeMachineReturnRequested)) {
         return {};
     }
     std::vector<std::byte> configuredProfile;
     if (snapshot.profileLoaded) {
+        if (!seatGameStatesMatchProfile(snapshot.seatGames,
+                                        snapshot.configuredSeats)) return {};
         configuredProfile = encodeProfilePayload(
             ProfilePayload{snapshot.managementSeatId, snapshot.configuredSeats});
         if (configuredProfile.empty()) return {};
@@ -557,6 +803,12 @@ std::vector<std::byte> encodeSnapshot(const runtime::HostRuntimeSnapshot& snapsh
         writer.u8(0); writer.u8(0); writer.u8(0);
         writer.string(seat.diagnostic);
     }
+    const auto seatGames = encodeSeatGameStates(snapshot.seatGames);
+    if (seatGames.empty() && !snapshot.seatGames.empty()) return {};
+    writer.u8(snapshot.wholeMachineReturnRequested ? 1u : 0u);
+    writer.u8(0u); writer.u16(0u);
+    writer.u32(static_cast<std::uint32_t>(seatGames.size()));
+    writer.raw(seatGames);
     writer.u32(static_cast<std::uint32_t>(configuredProfile.size()));
     writer.raw(configuredProfile);
     if (snapshot.lastTransition) {
@@ -583,7 +835,7 @@ std::optional<runtime::HostRuntimeSnapshot> decodeSnapshot(
         !reader.raw(std::as_writable_bytes(std::span(snapshot.sessionId.bytes))) ||
         !reader.u64(snapshot.generation) || !reader.u64(snapshot.transitionSequence) ||
         !reader.u32(snapshot.connectedControlClients) || !reader.u32(snapshot.managementSeatId) ||
-        snapshot.managementSeatId == 0 || snapshot.schemaVersion != 2u || !reader.u8(profile) ||
+        snapshot.managementSeatId == 0 || snapshot.schemaVersion != 3u || !reader.u8(profile) ||
         !reader.u8(mutation) || !reader.u8(hasLast) || !reader.u8(reservedByte) ||
         profile > 1u || mutation > 1u || hasLast > 1u || reservedByte != 0 ||
         !reader.u32(seatCount) || seatCount > kHostProtocolMaxSeats ||
@@ -607,6 +859,22 @@ std::optional<runtime::HostRuntimeSnapshot> decodeSnapshot(
         seat.phase = static_cast<runtime::SeatSessionPhase>(phase);
         snapshot.seats.push_back(std::move(seat));
     }
+    std::uint8_t returnRequested = 0, lifecycleReserved8 = 0;
+    std::uint16_t lifecycleReserved16 = 0;
+    std::uint32_t lifecycleLength = 0;
+    std::vector<std::byte> lifecycleBytes;
+    if (!reader.u8(returnRequested) || returnRequested > 1u ||
+        !reader.u8(lifecycleReserved8) || !reader.u16(lifecycleReserved16) ||
+        lifecycleReserved8 != 0 || lifecycleReserved16 != 0 ||
+        !reader.u32(lifecycleLength) || lifecycleLength > kHostProtocolMaxPayloadBytes ||
+        !reader.rawVector(lifecycleLength, lifecycleBytes)) return std::nullopt;
+    const auto seatGames = decodeSeatGameStates(lifecycleBytes);
+    if (!seatGames || !validWholeMachineReturnPolicy(*seatGames,
+                                                      returnRequested != 0u)) {
+        return std::nullopt;
+    }
+    snapshot.seatGames = *seatGames;
+    snapshot.wholeMachineReturnRequested = returnRequested != 0u;
     std::uint32_t configuredLength = 0;
     std::vector<std::byte> configuredBytes;
     if (!reader.u32(configuredLength) || configuredLength > kHostProtocolMaxPayloadBytes ||
@@ -619,6 +887,10 @@ std::optional<runtime::HostRuntimeSnapshot> decodeSnapshot(
             return std::nullopt;
         }
         snapshot.configuredSeats = configured->seats;
+        if (!seatGameStatesMatchProfile(snapshot.seatGames,
+                                        snapshot.configuredSeats)) {
+            return std::nullopt;
+        }
     } else if (configuredLength != 0u) {
         return std::nullopt;
     }
@@ -745,6 +1017,10 @@ bool isMutatingRequest(MessageType type) noexcept {
         case MessageType::ExitHostWhenIdle:
         case MessageType::EmergencyReset:
         case MessageType::ApplyProfile:
+        case MessageType::AssignSeatGame:
+        case MessageType::StartSeatGame:
+        case MessageType::StopSeatGame:
+        case MessageType::ReconcileSeatGames:
             return true;
         default:
             return false;
@@ -762,6 +1038,10 @@ MessageType responseTypeFor(MessageType request) noexcept {
         case MessageType::ExitHostWhenIdle: return MessageType::ExitResult;
         case MessageType::EmergencyReset: return MessageType::ResetResult;
         case MessageType::ApplyProfile: return MessageType::ApplyProfileResult;
+        case MessageType::AssignSeatGame: return MessageType::AssignSeatGameResult;
+        case MessageType::StartSeatGame: return MessageType::StartSeatGameResult;
+        case MessageType::StopSeatGame: return MessageType::StopSeatGameResult;
+        case MessageType::ReconcileSeatGames: return MessageType::ReconcileSeatGamesResult;
         case MessageType::SubscribeEvents: return MessageType::SubscribeAck;
         case MessageType::Ping: return MessageType::Pong;
         default: return MessageType::Error;

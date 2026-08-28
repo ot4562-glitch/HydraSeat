@@ -127,8 +127,10 @@ endif()
 add_library(hydra_runtime STATIC
     src/runtime_state.cpp
     src/runtime_host.cpp
+    src/seat_game_lifecycle.cpp
     include/hydra/runtime_state.hpp
     include/hydra/runtime_host.hpp
+    include/hydra/seat_game_lifecycle.hpp
 )
 target_link_libraries(hydra_runtime PUBLIC Threads::Threads)
 if(MSVC)
@@ -158,7 +160,7 @@ add_library(hydra_host_transport STATIC
 )
 target_link_libraries(hydra_host_transport PUBLIC hydra_host_protocol)
 if(WIN32)
-    target_link_libraries(hydra_host_transport PRIVATE Advapi32.lib)
+    target_link_libraries(hydra_host_transport PRIVATE Advapi32.lib Bcrypt.lib)
 endif()
 if(MSVC)
     target_compile_options(hydra_host_transport PRIVATE /W4 /permissive-)
@@ -866,6 +868,20 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 add_test(NAME RuntimeHostTests COMMAND runtime_host_tests)
+
+# P4-SEAT-01 authoritative per-Seat game lifecycle model. These tests use
+# deterministic owned-instance fakes and prove independent start/stop/restart,
+# failure isolation, duplicate/concurrent command rejection, and the v1 limit.
+add_executable(seat_game_lifecycle_tests tests/test_seat_game_lifecycle.cpp)
+target_link_libraries(seat_game_lifecycle_tests PRIVATE hydra_runtime Threads::Threads)
+if(MSVC)
+    target_compile_options(seat_game_lifecycle_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(seat_game_lifecycle_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SeatGameLifecycleTests COMMAND seat_game_lifecycle_tests)
+
 add_test(NAME RuntimeHostProcessSelfTest COMMAND hydra_host --self-test)
 
 add_executable(host_protocol_tests tests/test_host_protocol.cpp)
@@ -888,6 +904,8 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 add_test(NAME HostIpcProcessTests COMMAND host_ipc_process_tests)
+set_tests_properties(HostIpcProcessTests PROPERTIES
+    LABELS "P4-IPC-01;P4-SEAT-01")
 
 add_executable(hydra_process_tree_child tests/process_tree_child.cpp)
 if(MSVC)
@@ -895,6 +913,26 @@ if(MSVC)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_process_tree_child PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+if(WIN32)
+    add_executable(seat_game_process_lifecycle_tests
+        tests/test_seat_game_process_lifecycle.cpp)
+    target_link_libraries(seat_game_process_lifecycle_tests PRIVATE
+        hydra_runtime hydra_process hydra_host_protocol hydra_host_transport
+        Threads::Threads)
+    add_dependencies(seat_game_process_lifecycle_tests hydra_process_tree_child)
+    if(MSVC)
+        target_compile_options(seat_game_process_lifecycle_tests PRIVATE /W4 /permissive-)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(seat_game_process_lifecycle_tests PRIVATE
+            -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    endif()
+    add_test(NAME SeatGameProcessLifecycleTests
+             COMMAND seat_game_process_lifecycle_tests)
+    set_tests_properties(SeatGameProcessLifecycleTests PROPERTIES
+        TIMEOUT 45
+        LABELS "P4-SEAT-01;P4-REC-01")
 endif()
 
 add_executable(process_group_tests tests/test_process_group.cpp)
@@ -1018,6 +1056,8 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 add_test(NAME ControlSurfaceModelTests COMMAND control_surface_model_tests)
+set_tests_properties(ControlSurfaceModelTests PROPERTIES
+    LABELS "P4-CTRL-01;P4-REC-01;P4-SEAT-01")
 
 # Pure Phase 1 identity checks: deterministic and independent of attached hardware.
 add_executable(hardware_identity_tests
@@ -1084,7 +1124,9 @@ if(WIN32)
         target_compile_options(watchdog_process_tests PRIVATE /W4 /permissive-)
     endif()
     add_test(NAME WatchdogProcessFaultTests COMMAND watchdog_process_tests)
-    set_tests_properties(WatchdogProcessFaultTests PROPERTIES TIMEOUT 60)
+    set_tests_properties(WatchdogProcessFaultTests PROPERTIES
+        TIMEOUT 60
+        LABELS "P4-REC-01;P8-WATCH-01")
 endif()
 
 # P8-JOURNAL-01 fixed-width codec/state-machine, storage, corruption, rotation,

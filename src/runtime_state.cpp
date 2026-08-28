@@ -47,6 +47,11 @@ std::string_view runtimeCommandName(RuntimeCommand command) noexcept {
         case RuntimeCommand::ExitHostWhenIdle: return "exit-host-when-idle";
         case RuntimeCommand::MarkDegraded: return "mark-degraded";
         case RuntimeCommand::BeginReconfigure: return "begin-reconfigure";
+        case RuntimeCommand::AssignSeatGame: return "assign-seat-game";
+        case RuntimeCommand::StartSeatGame: return "start-seat-game";
+        case RuntimeCommand::StopSeatGame: return "stop-seat-game";
+        case RuntimeCommand::ReconcileSeatGames: return "reconcile-seat-games";
+        case RuntimeCommand::ObserveSeatGameExit: return "observe-seat-game-exit";
     }
     return "unknown";
 }

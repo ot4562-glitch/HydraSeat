@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hydra/workspace_manager.hpp"
+#include "hydra/seat_game_lifecycle.hpp"
 
 #include <array>
 #include <cstdint>
@@ -39,7 +40,12 @@ enum class RuntimeCommand : std::uint8_t {
     Reset = 5,
     ExitHostWhenIdle = 6,
     MarkDegraded = 7,
-    BeginReconfigure = 8
+    BeginReconfigure = 8,
+    AssignSeatGame = 9,
+    StartSeatGame = 10,
+    StopSeatGame = 11,
+    ReconcileSeatGames = 12,
+    ObserveSeatGameExit = 13
 };
 
 enum class RuntimeResultCode : std::uint8_t {
@@ -75,13 +81,14 @@ struct RuntimeTransition {
     SeatSessionPhase from{SeatSessionPhase::Idle};
     SeatSessionPhase to{SeatSessionPhase::Idle};
     RuntimeResultCode result{RuntimeResultCode::Ok};
+    SeatId seatId{0}; // Zero for whole-machine transitions.
     std::string diagnostic;
 
     bool operator==(const RuntimeTransition&) const = default;
 };
 
 struct HostRuntimeSnapshot {
-    std::uint32_t schemaVersion{2};
+    std::uint32_t schemaVersion{3};
     HostLifecyclePhase hostPhase{HostLifecyclePhase::Starting};
     SeatSessionPhase sessionPhase{SeatSessionPhase::Idle};
     RuntimeSessionId sessionId{};
@@ -92,6 +99,8 @@ struct HostRuntimeSnapshot {
     bool profileLoaded{false};
     bool mutationInProgress{false};
     std::vector<SeatRuntimeState> seats;
+    std::vector<SeatGameState> seatGames;
+    bool wholeMachineReturnRequested{false};
     std::vector<SeatConfig> configuredSeats;
     std::optional<RuntimeTransition> lastTransition;
     std::string diagnostic;

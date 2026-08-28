@@ -63,6 +63,11 @@ static const wchar_t* runtimeModeText(control::RuntimeDisplayMode mode) noexcept
     return L"Unknown";
 }
 
+static std::wstring seatGamePhaseText(runtime::SeatGamePhase phase) {
+    const auto text = runtime::seatGamePhaseName(phase);
+    return std::wstring(text.begin(), text.end());
+}
+
 // Check if a raw input device type is compatible with a tile's device category
 static bool isTypeCompatible(DWORD rawDevType, gui::DeviceCategory tileCat) {
     if (rawDevType == RIM_TYPEKEYBOARD) {
@@ -1122,6 +1127,16 @@ void Win32App::updateControlSurfaceUi() {
         label += runtimeModeText(state.runtimeMode);
         label += L" | Management Seat ";
         label += std::to_wstring(state.managementSeatId);
+        for (const auto& seat : state.seats) {
+            if (!seat.game) continue;
+            label += L" | Seat ";
+            label += std::to_wstring(seat.config.seatId);
+            label += L": ";
+            label += seatGamePhaseText(seat.game->phase);
+        }
+        if (state.wholeMachineReturnRequested) {
+            label += L" | both Seat games ended";
+        }
         if (!state.hostConnected) label += L" | disconnected";
         SetWindowTextW(m_runtimeStatusLabel, label.c_str());
     }

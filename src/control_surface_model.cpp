@@ -14,6 +14,10 @@ bool validConfigurationShape(SeatId managementSeatId,
         if (error) *error = "validated control configuration requires a Management Seat and Seats";
         return false;
     }
+    if (seats.size() > runtime::kV1MaximumActiveSeats) {
+        if (error) *error = "HydraSeat v1 control configuration rejects more than two active Seats";
+        return false;
+    }
     std::set<SeatId> ids;
     bool managementPresent = false;
     for (const auto& seat : seats) {
@@ -37,6 +41,16 @@ std::optional<runtime::SeatRuntimeState> runtimeFor(
                                         return seat.seatId == seatId;
                                     });
     if (found == snapshot.seats.end()) return std::nullopt;
+    return *found;
+}
+
+std::optional<runtime::SeatGameState> gameFor(
+    const runtime::HostRuntimeSnapshot& snapshot, SeatId seatId) {
+    const auto found = std::find_if(snapshot.seatGames.begin(), snapshot.seatGames.end(),
+                                    [seatId](const auto& seat) {
+                                        return seat.seatId == seatId;
+                                    });
+    if (found == snapshot.seatGames.end()) return std::nullopt;
     return *found;
 }
 
@@ -83,6 +97,35 @@ RuntimeDisplayMode ControlSurfaceModel::modeFor(
         snapshot.hostPhase == runtime::HostLifecyclePhase::Stopped) {
         return RuntimeDisplayMode::HostExitRequested;
     }
+    if (snapshot.sessionPhase == runtime::SeatSessionPhase::RecoveryRequired) {
+        return RuntimeDisplayMode::RecoveryRequired;
+    }
+    if (snapshot.sessionPhase == runtime::SeatSessionPhase::Planning ||
+        snapshot.sessionPhase == runtime::SeatSessionPhase::Prepared ||
+        snapshot.sessionPhase == runtime::SeatSessionPhase::Starting ||
+        snapshot.sessionPhase == runtime::SeatSessionPhase::Stopping ||
+        snapshot.sessionPhase == runtime::SeatSessionPhase::RollingBack) {
+        return RuntimeDisplayMode::Transitioning;
+    }
+    if (std::any_of(snapshot.seatGames.begin(), snapshot.seatGames.end(),
+                    [](const auto& seat) {
+                        return seat.phase == runtime::SeatGamePhase::RecoveryRequired;
+                    })) {
+        return RuntimeDisplayMode::RecoveryRequired;
+    }
+    if (std::any_of(snapshot.seatGames.begin(), snapshot.seatGames.end(),
+                    [](const auto& seat) {
+                        return seat.phase == runtime::SeatGamePhase::Degraded;
+                    })) {
+        return RuntimeDisplayMode::Degraded;
+    }
+    if (std::any_of(snapshot.seatGames.begin(), snapshot.seatGames.end(),
+                    [](const auto& seat) {
+                        return seat.phase == runtime::SeatGamePhase::Starting ||
+                               seat.phase == runtime::SeatGamePhase::Stopping;
+                    })) {
+        return RuntimeDisplayMode::Transitioning;
+    }
     switch (snapshot.sessionPhase) {
         case runtime::SeatSessionPhase::Idle:
             return RuntimeDisplayMode::BackgroundIdle;
@@ -116,7 +159,7 @@ void ControlSurfaceModel::rebuild() {
         if (!validatedSeats_.empty()) {
             next.assignmentSource = AssignmentSource::ValidatedInactiveConfiguration;
             for (const auto& seat : validatedSeats_) {
-                next.seats.push_back(SeatAssignmentView{seat, std::nullopt});
+                next.seats.push_back(SeatAssignmentView{seat, std::nullopt, std::nullopt});
             }
         }
         state_ = std::move(next);
@@ -128,18 +171,23 @@ void ControlSurfaceModel::rebuild() {
     next.sessionPhase = snapshot_->sessionPhase;
     next.managementSeatId = snapshot_->managementSeatId;
     next.runtimeMode = modeFor(*snapshot_);
+    next.wholeMachineReturnRequested = snapshot_->wholeMachineReturnRequested;
     next.diagnostic = snapshot_->diagnostic;
 
     if (!snapshot_->configuredSeats.empty()) {
         next.assignmentSource = AssignmentSource::AuthoritativeHost;
         for (const auto& config : snapshot_->configuredSeats) {
-            next.seats.push_back(SeatAssignmentView{config, runtimeFor(*snapshot_, config.seatId)});
+            next.seats.push_back(SeatAssignmentView{
+                config, runtimeFor(*snapshot_, config.seatId),
+                gameFor(*snapshot_, config.seatId)});
         }
     } else if (snapshot_->sessionPhase == runtime::SeatSessionPhase::Idle &&
                !validatedSeats_.empty()) {
         next.assignmentSource = AssignmentSource::ValidatedInactiveConfiguration;
         for (const auto& config : validatedSeats_) {
-            next.seats.push_back(SeatAssignmentView{config, runtimeFor(*snapshot_, config.seatId)});
+            next.seats.push_back(SeatAssignmentView{
+                config, runtimeFor(*snapshot_, config.seatId),
+                gameFor(*snapshot_, config.seatId)});
         }
     }
 
@@ -151,6 +199,12 @@ void ControlSurfaceModel::rebuild() {
     const bool allowed = permission.permitsGlobalMutation();
 
     if (!allowed || snapshot_->hostPhase != runtime::HostLifecyclePhase::Running) {
+        state_ = std::move(next);
+        return;
+    }
+
+    if (next.runtimeMode == RuntimeDisplayMode::RecoveryRequired) {
+        next.actions.emergencyReset = true;
         state_ = std::move(next);
         return;
     }

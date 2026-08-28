@@ -1,5 +1,6 @@
 #include "hydra/runtime_host.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -103,6 +104,34 @@ struct FakeBackend final : IRuntimeBackend {
         std::lock_guard lock(blockMutex);
         prepareReleased = true;
         blockCv.notify_all();
+    }
+};
+
+struct FakeSeatInstance final : ISeatGameInstance {
+    FakeSeatInstance(std::shared_ptr<bool> liveState, std::vector<std::string>* eventLog)
+        : live(std::move(liveState)), log(eventLog) {}
+    bool start(const SeatGameBinding&, std::string&) override { *live = true; return true; }
+    bool stop(std::string&) noexcept override {
+        if (log) log->push_back("seat-stop");
+        *live = false;
+        return true;
+    }
+    bool verifyStopped(std::string& error) noexcept override {
+        if (*live) { error = "still live"; return false; }
+        return true;
+    }
+    bool running() const noexcept override { return *live; }
+    std::shared_ptr<bool> live;
+    std::vector<std::string>* log{nullptr};
+};
+
+struct FakeSeatFactory final : ISeatGameInstanceFactory {
+    std::vector<std::shared_ptr<bool>> live;
+    std::vector<std::string>* log{nullptr};
+    std::unique_ptr<ISeatGameInstance> create(hydra::SeatId, std::string&) override {
+        auto state = std::make_shared<bool>(false);
+        live.push_back(state);
+        return std::make_unique<FakeSeatInstance>(state, log);
     }
 };
 
@@ -350,7 +379,7 @@ void testConcurrentMutationRejectionAndReaders() {
         readers.emplace_back([&] {
             for (int count = 0; count < 100; ++count) {
                 const auto snapshot = host.snapshot();
-                if (snapshot.schemaVersion != 2 || snapshot.seats.size() != 2u ||
+                if (snapshot.schemaVersion != 3 || snapshot.seats.size() != 2u ||
                     snapshot.managementSeatId != 1) {
                     readersValid.store(false, std::memory_order_relaxed);
                 }
@@ -365,6 +394,71 @@ void testConcurrentMutationRejectionAndReaders() {
           "snapshot readers observe coherent bounded state");
 }
 
+void testAuthoritativeSeatGameLifecycleSnapshot() {
+    auto factory = std::make_shared<FakeSeatFactory>();
+    RuntimeHost host({}, factory);
+    check(host.loadProfile(validSeats(), 1).succeeded(),
+          "Seat lifecycle host loads two active Seats");
+    check(host.plan(2).succeeded() && host.prepare(3).succeeded() &&
+              host.start(4).succeeded(),
+          "whole-machine runtime is prepared before Seat game activation");
+    check(host.assignSeatGame(1, {"player-a", "game-a"}, 100).succeeded() &&
+              host.startSeatGame(1, 101).succeeded(),
+          "host starts Seat 1 through temporary runtime binding");
+    const auto onePlaying = host.snapshot();
+    check(onePlaying.seatGames.size() == 2u &&
+              onePlaying.seatGames[0].phase == SeatGamePhase::Playing &&
+              onePlaying.seatGames[1].phase == SeatGamePhase::Idle &&
+              !onePlaying.wholeMachineReturnRequested,
+          "authoritative snapshot separates Seat game state from whole session state");
+    check(host.assignSeatGame(2, {"player-b", "game-b"}, 102).succeeded() &&
+              host.startSeatGame(2, 103).succeeded(),
+          "host starts Seat 2 without restarting Seat 1");
+    check(host.stopSeatGame(2, 104).succeeded() && *factory->live[0] &&
+              !*factory->live[1],
+          "host Seat-local stop preserves the other exact instance");
+    const auto bothEnded = host.stopSeatGame(1, 105);
+    check(bothEnded.succeeded() && bothEnded.wholeMachineReturnRequested &&
+              host.snapshot().wholeMachineReturnRequested,
+          "host publishes both-ended whole-machine return policy");
+    check(host.stopAndReturnToWindows(106).succeeded() &&
+              host.snapshot().sessionPhase == SeatSessionPhase::Idle,
+          "explicit Management return rolls shared runtime back after both Seats end");
+
+    auto three = validSeats();
+    hydra::SeatConfig third;
+    third.seatId = 3;
+    third.name = L"Seat 3";
+    three.push_back(third);
+    RuntimeHost limited;
+    check(limited.loadProfile(three, 107).code == RuntimeResultCode::InvalidProfile,
+          "RuntimeHost rejects a third active v1 Seat before backend activation");
+}
+
+void testHostDestructionCleansSeatsBeforeSharedBackends() {
+    std::vector<std::string> log;
+    auto backend = std::make_shared<FakeBackend>();
+    backend->backendName = "shared";
+    backend->log = &log;
+    auto factory = std::make_shared<FakeSeatFactory>();
+    factory->log = &log;
+    {
+        RuntimeHost host({backend}, factory);
+        check(host.loadProfile(validSeats(), 1).succeeded() &&
+                  host.plan(2).succeeded() && host.prepare(3).succeeded() &&
+                  host.start(4).succeeded(),
+              "destruction-order fixture activates shared runtime");
+        check(host.assignSeatGame(1, {"player-a", "game-a"}, 200).succeeded() &&
+                  host.startSeatGame(1, 201).succeeded(),
+              "destruction-order fixture activates Seat ownership");
+    }
+    const auto seatStop = std::find(log.begin(), log.end(), "seat-stop");
+    const auto backendRollback = std::find(log.begin(), log.end(), "rollback:shared");
+    check(seatStop != log.end() && backendRollback != log.end() &&
+              seatStop < backendRollback,
+          "host destruction cleans Seat-local ownership before shared backend rollback");
+}
+
 } // namespace
 
 int main() {
@@ -374,6 +468,8 @@ int main() {
     testPartialFailureAndRecoveryRequired();
     testDiagnosticBounds();
     testConcurrentMutationRejectionAndReaders();
+    testAuthoritativeSeatGameLifecycleSnapshot();
+    testHostDestructionCleansSeatsBeforeSharedBackends();
 
     if (failures != 0) {
         std::cerr << failures << " runtime host test(s) failed.\n";

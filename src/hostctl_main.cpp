@@ -1,7 +1,10 @@
 #include "hydra/host_transport.hpp"
 
+#include <charconv>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -10,6 +13,7 @@ namespace {
 using hydra::hostipc::ClientRole;
 using hydra::hostipc::HostControlClient;
 using hydra::hostipc::MessageType;
+using hydra::SeatId;
 
 std::string jsonEscape(std::string_view value) {
     std::string result;
@@ -46,6 +50,19 @@ void printSnapshot(const hydra::runtime::HostRuntimeSnapshot& snapshot, bool jso
                   << ",\"connected_control_clients\":"
                   << snapshot.connectedControlClients
                   << ",\"seat_count\":" << snapshot.seats.size()
+                  << ",\"whole_machine_return_requested\":"
+                  << (snapshot.wholeMachineReturnRequested ? "true" : "false")
+                  << ",\"seat_games\":[";
+        for (std::size_t index = 0; index < snapshot.seatGames.size(); ++index) {
+            const auto& seat = snapshot.seatGames[index];
+            if (index != 0u) std::cout << ',';
+            std::cout << "{\"seat_id\":" << seat.seatId
+                      << ",\"phase\":\""
+                      << hydra::runtime::seatGamePhaseName(seat.phase)
+                      << "\",\"generation\":" << seat.generation
+                      << ",\"diagnostic\":\"" << jsonEscape(seat.diagnostic) << "\"}";
+        }
+        std::cout << ']'
                   << ",\"diagnostic\":\"" << jsonEscape(snapshot.diagnostic) << "\"}\n";
         return;
     }
@@ -56,7 +73,46 @@ void printSnapshot(const hydra::runtime::HostRuntimeSnapshot& snapshot, bool jso
               << " seq=" << snapshot.transitionSequence
               << " seats=" << snapshot.seats.size()
               << " clients=" << snapshot.connectedControlClients;
+    for (const auto& seat : snapshot.seatGames) {
+        std::cout << " seat" << seat.seatId << '='
+                  << hydra::runtime::seatGamePhaseName(seat.phase);
+    }
+    if (snapshot.wholeMachineReturnRequested) {
+        std::cout << " whole-machine-return=requested";
+    }
     if (!snapshot.diagnostic.empty()) std::cout << " diagnostic=\"" << snapshot.diagnostic << '"';
+    std::cout << '\n';
+}
+
+void printSeatResult(const hydra::runtime::SeatGameCommandResult& result, bool json) {
+    if (json) {
+        std::cout << "{\"result\":\""
+                  << hydra::runtime::seatGameResultCodeName(result.code)
+                  << "\",\"whole_machine_return_requested\":"
+                  << (result.wholeMachineReturnRequested ? "true" : "false")
+                  << ",\"diagnostic\":\"" << jsonEscape(result.diagnostic)
+                  << "\",\"seats\":[";
+        for (std::size_t index = 0; index < result.seats.size(); ++index) {
+            const auto& seat = result.seats[index];
+            if (index != 0u) std::cout << ',';
+            std::cout << "{\"seat_id\":" << seat.seatId
+                      << ",\"phase\":\""
+                      << hydra::runtime::seatGamePhaseName(seat.phase)
+                      << "\",\"generation\":" << seat.generation
+                      << ",\"diagnostic\":\"" << jsonEscape(seat.diagnostic) << "\"}";
+        }
+        std::cout << "]}\n";
+        return;
+    }
+    std::cout << hydra::runtime::seatGameResultCodeName(result.code)
+              << ": " << result.diagnostic;
+    for (const auto& seat : result.seats) {
+        std::cout << " seat" << seat.seatId << '='
+                  << hydra::runtime::seatGamePhaseName(seat.phase);
+    }
+    if (result.wholeMachineReturnRequested) {
+        std::cout << " whole-machine-return=requested";
+    }
     std::cout << '\n';
 }
 
@@ -86,8 +142,28 @@ void printResult(const hydra::runtime::RuntimeCommandResult& result, bool json) 
 void usage() {
     std::cout
         << "HydraSeat host control client\n\n"
-        << "Usage: hydra_hostctl [--json] <command>\n"
-        << "Commands: snapshot, plan, start, stop, reconfigure, reset, exit, ping, watch\n";
+        << "Usage: hydra_hostctl [--json] <command> [arguments]\n"
+        << "Commands:\n"
+        << "  snapshot | plan | start | stop | reconfigure | reset | exit | ping | watch\n"
+        << "  seat-assign <seat-id> <player-id> <game-id>\n"
+        << "  seat-start <seat-id> | seat-stop <seat-id> | seat-reconcile\n";
+}
+
+std::optional<MessageType> seatMutationFor(std::string_view command) {
+    if (command == "seat-assign") return MessageType::AssignSeatGame;
+    if (command == "seat-start") return MessageType::StartSeatGame;
+    if (command == "seat-stop") return MessageType::StopSeatGame;
+    return std::nullopt;
+}
+
+std::optional<SeatId> parseSeatId(std::string_view text) {
+    std::uint64_t value = 0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (text.empty() || parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() ||
+        value == 0 || value > std::numeric_limits<SeatId>::max()) {
+        return std::nullopt;
+    }
+    return static_cast<SeatId>(value);
 }
 
 std::optional<MessageType> mutationFor(std::string_view command) {
@@ -109,21 +185,57 @@ int main(int argc, char** argv) {
         json = true;
         ++index;
     }
-    if (index >= argc || index + 1 != argc) {
+    if (index >= argc) {
         usage();
         return EXIT_FAILURE;
     }
     const std::string_view command(argv[index]);
-    const bool mutating = mutationFor(command).has_value();
-    if (!mutating && command != "snapshot" && command != "ping" && command != "watch") {
+    const auto globalMutation = mutationFor(command);
+    const auto seatMutation = seatMutationFor(command);
+    const bool reconcile = command == "seat-reconcile";
+    const bool mutating = globalMutation.has_value() || seatMutation.has_value() || reconcile;
+    const int argumentCount = argc - index - 1;
+    const bool validArguments = command == "seat-assign" ? argumentCount == 3
+        : (command == "seat-start" || command == "seat-stop") ? argumentCount == 1
+        : argumentCount == 0;
+    if (!validArguments ||
+        (!mutating && command != "snapshot" && command != "ping" && command != "watch")) {
         usage();
         return EXIT_FAILURE;
     }
 
+    SeatId seatId = 0;
+    if (seatMutation) {
+        const auto parsed = parseSeatId(argv[index + 1]);
+        if (!parsed) {
+            std::cerr << "invalid nonzero Seat ID\n";
+            return EXIT_FAILURE;
+        }
+        seatId = *parsed;
+    }
+
     HostControlClient client;
     std::string error;
-    if (!client.connect(mutating ? ClientRole::Control : ClientRole::ReadOnly,
-                        hydra::hostipc::kDefaultHostIpcTimeoutMs, &error)) {
+    if (mutating) {
+        if (!client.connect(ClientRole::ReadOnly,
+                            hydra::hostipc::kDefaultHostIpcTimeoutMs, &error)) {
+            std::cerr << "host authority discovery failed: " << error << '\n';
+            return EXIT_FAILURE;
+        }
+        const auto authority = client.getSnapshot(
+            hydra::hostipc::kDefaultHostIpcTimeoutMs, &error);
+        client.close();
+        if (!authority || authority->managementSeatId == 0) {
+            std::cerr << "host authority discovery failed: " << error << '\n';
+            return EXIT_FAILURE;
+        }
+        if (!client.connectForSeat(ClientRole::Control, authority->managementSeatId,
+                                   hydra::hostipc::kDefaultHostIpcTimeoutMs, &error)) {
+            std::cerr << "host control connection failed: " << error << '\n';
+            return EXIT_FAILURE;
+        }
+    } else if (!client.connect(ClientRole::ReadOnly,
+                               hydra::hostipc::kDefaultHostIpcTimeoutMs, &error)) {
         std::cerr << "host connection failed: " << error << '\n';
         return EXIT_FAILURE;
     }
@@ -177,18 +289,58 @@ int main(int argc, char** argv) {
                       << hydra::runtime::runtimeCommandName(event.event->command)
                       << "\",\"result\":\""
                       << hydra::runtime::runtimeResultCodeName(event.event->result)
-                      << "\"}\n";
+                      << "\",\"seat_id\":" << event.event->seatId
+                      << "}\n";
         } else {
             std::cout << "event seq=" << event.event->sequence
                       << " command=" << hydra::runtime::runtimeCommandName(event.event->command)
                       << " result=" << hydra::runtime::runtimeResultCodeName(event.event->result)
+                      << " seat=" << event.event->seatId
                       << '\n';
         }
         return EXIT_SUCCESS;
     }
 
+    if (seatMutation || reconcile) {
+        std::optional<hydra::hostipc::ErrorPayload> protocolError;
+        std::optional<hydra::runtime::SeatGameCommandResult> result;
+        if (reconcile) {
+            result = client.reconcileSeatGames(
+                hydra::hostipc::kDefaultHostIpcTimeoutMs, &error, &protocolError);
+        } else {
+            hydra::hostipc::SeatGameCommandPayload payload;
+            payload.seatId = seatId;
+            if (command == "seat-assign") {
+                const std::string_view player(argv[index + 2]);
+                const std::string_view game(argv[index + 3]);
+                if (player.empty() || game.empty() ||
+                    player.size() > hydra::runtime::kSeatGameIdentifierMaxBytes ||
+                    game.size() > hydra::runtime::kSeatGameIdentifierMaxBytes) {
+                    std::cerr << "Player/Game identifiers must be nonempty and bounded\n";
+                    return EXIT_FAILURE;
+                }
+                payload.binding = hydra::runtime::SeatGameBinding{
+                    std::string(player), std::string(game)};
+            }
+            result = client.seatGameCommand(
+                *seatMutation, payload, hydra::hostipc::kDefaultHostIpcTimeoutMs,
+                &error, &protocolError);
+        }
+        if (!result) {
+            if (protocolError) {
+                std::cerr << hydra::hostipc::errorCodeName(protocolError->code)
+                          << ": " << protocolError->diagnostic << '\n';
+            } else {
+                std::cerr << "Seat command failed: " << error << '\n';
+            }
+            return EXIT_FAILURE;
+        }
+        printSeatResult(*result, json);
+        return result->succeeded() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
     std::optional<hydra::hostipc::ErrorPayload> protocolError;
-    const auto result = client.command(*mutationFor(command),
+    const auto result = client.command(*globalMutation,
                                        hydra::hostipc::kDefaultHostIpcTimeoutMs,
                                        &error, &protocolError);
     if (!result) {
