@@ -493,6 +493,20 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P6-CATALOG-01 provider-neutral, read-only candidate reconciliation into bounded
+# stable GameRecords plus catalog-only icon/architecture/staleness metadata.
+add_library(hydra_game_catalog STATIC
+    src/game_catalog.cpp
+    include/hydra/game_catalog.hpp
+)
+target_link_libraries(hydra_game_catalog PUBLIC hydra_profile_schema)
+if(MSVC)
+    target_compile_options(hydra_game_catalog PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_game_catalog PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P8-WATCH-01 versioned lease/rollback protocol and idempotent rollback registry.
 # The portable core contains no arbitrary command execution or persistent-state I/O.
 add_library(hydra_watchdog_core STATIC
@@ -1671,6 +1685,19 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME ProfileMigrationTests COMMAND profile_migration_tests)
 set_tests_properties(ProfileMigrationTests PROPERTIES LABELS "P6-MIG-01")
+
+# P6-CATALOG-01 provider/executable identity, malformed metadata, deterministic
+# duplicate reconciliation, missing artwork, staleness, and transaction tests.
+add_executable(game_catalog_tests tests/test_game_catalog.cpp)
+target_link_libraries(game_catalog_tests PRIVATE hydra_game_catalog)
+if(MSVC)
+    target_compile_options(game_catalog_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(game_catalog_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME GameCatalogTests COMMAND game_catalog_tests)
+set_tests_properties(GameCatalogTests PROPERTIES LABELS "P6-CATALOG-01")
 
 # P3-HW-01 acceptance tooling is CI-tested without claiming physical acceptance.
 # Python parses bounded synthetic evidence; Windows additionally checks that the

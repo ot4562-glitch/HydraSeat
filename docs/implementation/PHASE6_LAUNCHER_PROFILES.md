@@ -128,7 +128,7 @@ Legacy fixture profiles migrate deterministically and injected write/validation 
 
 ## P6-CATALOG-01 — Provider-neutral local game catalog
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -159,11 +159,23 @@ Create the normal HydraSeat game library from locally installed/discovered title
 
 A provider-neutral catalog merges deterministic fixtures and local provider discoveries into stable GameRecords with no filesystem mutation.
 
+**Automated implementation evidence — 2026-08-28**
+
+- `hydra_game_catalog` is a pure candidate-to-catalog core: it performs no filesystem, registry, network, launcher, process, or provider I/O and therefore cannot mutate provider/game state while reconciling supplied local metadata.
+- Provider IDs are canonicalized independently from friendly title/icon presentation. Strong provider+app identity generates a bounded stable `game_id`; candidates without a provider app ID fall back to normalized Windows executable identity. Title changes never merge unrelated executables, and provider/app IDs keep a stable game identity across title/install/icon presentation changes.
+- Windows executable identity canonicalizes ASCII path case, `/` versus `\\`, repeated separators, and `.`/`..` segments without opening the path. Duplicate provider records and manual/discovered records that resolve to the same executable merge deterministically, with current strong provider metadata preferred and candidate-order-invariant output.
+- Two different strong provider/app identities that claim the same normalized executable fail closed rather than guessing. Malformed identifiers, invalid enum values, empty executable sets, overlong icon metadata, schema-invalid hashes/compatibility metadata, and candidate-count overflow leave the previous catalog unchanged.
+- Missing local artwork never blocks a valid game entry. Architecture and staleness remain catalog-layer metadata rather than silently changing the P6-SCHEMA-01 persistence contract; conflicting equally current architecture observations conservatively degrade to `Unknown`.
+- Final reconciled records are revalidated through `GameRecordDocument`, sorted by stable `game_id`, and the output object is replaced only after the complete build validates.
+- Strict Windows x64 MinGW compilation completed with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion`, and focused `GameCatalogTests` passed **1/1**. Provider-specific discovery/launch/account behavior is intentionally deferred to P6-PROV-01 and later provider packets.
+
+`CODE_COMPLETE` establishes the provider-neutral read-only catalog/reconciliation contract only; it does not claim Steam/Epic/EA/GOG discovery has been implemented or physically/real-game validated.
+
 ---
 
 ## P6-PROV-01 — Launcher provider adapter contract
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 

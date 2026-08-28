@@ -3,8 +3,8 @@
 ## Current program state
 
 - Current validation phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P6-CATALOG-01 — Provider-neutral local game catalog** (automated implementation frontier under D-051)
-- Current default packet state: **READY for automated implementation** — P6-SCHEMA-01 and P6-MIG-01 are `CODE_COMPLETE`; the next bounded step is a read-only provider-neutral catalog that reconciles local discovery/manual records deterministically into stable GameRecords without filesystem mutation.
+- Current default packet: **P6-PROV-01 — Launcher provider adapter contract** (automated implementation frontier under D-051)
+- Current default packet state: **READY for automated implementation** — P6-SCHEMA-01, P6-MIG-01, and P6-CATALOG-01 are `CODE_COMPLETE`; the next bounded step is a lawful typed provider adapter boundary for read-only discovery, launch-plan construction, optional existing-account references, and explicit provider absence/offline behavior.
 - Deferred validation queue starts with **P3-HW-01** — tooling/CI are complete; real two-keyboard/two-pointing-device physical Gate A/B/C evidence is still required before physical isolation/cloaking claims and Phase 3 closure.
 - Product contract: **HydraSeat v1 is a two-Seat, game-first local Windows gaming product** for households that want to use the spare performance of one capable PC instead of buying a second complete desktop solely for simultaneous local gaming. See `docs/PRODUCT_V1.md`.
 - v1 does not pursue N-Seat generalization, a general independent Windows desktop per Seat, or a maintainer-created official game-certification badge.
@@ -187,7 +187,8 @@ Remaining evidence:
 | --- | --- | --- |
 | P6-SCHEMA-01 | CODE_COMPLETE | Separate bounded version-1 Seat/Player/Game/TwoPlayerSetup/runtime schemas; stable persistence cannot represent PID/HWND/handles or provider secrets/scripts; compatibility is referenced only by logical record/provenance/revision; transactional strict JSON/Unicode/version/bounds/cross-reference tests pass; x64/x86 exact-head full 84/84 and strict focused 1/1 pass |
 | P6-MIG-01 | CODE_COMPLETE | Read-only bounded legacy-v2 parse; deterministic separated six-file v1 bundle; exact source-byte backup; bounded canonical diagnostics for targetHwnd, unknown values, and shareability; staged byte/decode/backup validation; explicit replace authorization; previous-bundle rollback across injected write, staged-validation, commit, and post-commit failures; strict Windows x64 MinGW focused build/test pass |
-| P6-CATALOG-01 | READY | Build a provider-neutral read-only local catalog that validates untrusted discovery/manual candidates, reconciles duplicate provider/executable identities deterministically, and emits stable bounded GameRecords without filesystem mutation |
+| P6-CATALOG-01 | CODE_COMPLETE | Pure bounded candidate reconciliation with no provider/game filesystem mutation; provider+app stable identity plus normalized executable fallback; title/icon excluded from identity; duplicate provider/manual records merge deterministically and candidate-order-invariant; conflicting strong identities fail closed; icon/architecture/staleness remain catalog-only metadata; strict Windows x64 MinGW focused build and GameCatalogTests 1/1 pass |
+| P6-PROV-01 | READY | Define a lawful typed provider adapter boundary for bounded read-only discovery, launch-plan construction, optional references to already authenticated provider accounts, provider absence/offline states, and deterministic fake-provider tests |
 
 ## Manual/physical gates still pending
 
@@ -205,7 +206,7 @@ Remaining evidence:
 
 ## Current next action
 
-Under D-051, P6-MIG-01 has reached `CODE_COMPLETE`: legacy schema-version-2 workspace bytes are parsed read-only, converted into separate bounded v1 stores, preserved in an exact backup, validated in staging, and committed with restoration of any previous complete bundle across injected write/validation/commit failures. The automated implementation frontier advances to **P6-CATALOG-01**: define a provider-neutral read-only local catalog that treats discovery/manual metadata as bounded untrusted input, reconciles duplicate provider/executable identities deterministically, and emits stable GameRecords without mutating provider or game files. P5-CLOSE-01 and physical/real-game gates remain required before Phase 6 validation/closure claims.
+Under D-051, P6-CATALOG-01 has reached `CODE_COMPLETE`: provider/manual discovery candidates are bounded and schema-validated, provider+app identity or normalized executable fallback produces stable GameRecords, duplicate records reconcile deterministically without provider/game I/O, and ambiguous strong identities fail closed. The automated implementation frontier advances to **P6-PROV-01**: define the small typed provider adapter contract for lawful read-only discovery, launch-plan construction, optional references to already authenticated provider accounts, and explicit unavailable/offline behavior, proven first with deterministic fake providers. P5-CLOSE-01 and physical/real-game gates remain required before Phase 6 validation/closure claims.
 
 Deferred validation queue: P3-HW-01 Gate A/B/C remains physically unvalidated and still blocks `PhysicalDeviceCloaking`/physical zero-bleed claims, Phase 3 closure, and release validation. It no longer blocks unrelated automated coding. Later phases may be implemented against truthful controlled/fake evidence and remain `CODE_COMPLETE` until their manual gates are eventually run.
 

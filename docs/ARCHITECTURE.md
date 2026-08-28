@@ -376,7 +376,7 @@ Provider adapters may inspect supported local metadata for:
 
 Provider adapters are lawful integration layers, not restriction bypasses.
 
-The game catalog remains provider-neutral above the adapter layer.
+The game catalog remains provider-neutral above the adapter layer. P6-CATALOG-01 implements this layer as a pure bounded candidate-reconciliation core: adapters/manual entry supply typed metadata, provider+app identity is preferred where available, normalized Windows executable identity is the fallback, friendly title/icon never define identity, and ambiguous conflicting strong provider identities fail closed. Catalog-only icon/architecture/staleness observations remain outside the persisted `GameRecord` schema until a schema packet explicitly promotes them.
 
 Icons should normally be obtained from locally installed executable/shortcut/provider metadata. Community setup packages should avoid redistributing third-party game artwork by default.
 
