@@ -2,9 +2,10 @@
 
 ## Current program state
 
-- Current phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P3-HW-01 — Gate A/B/C physical acceptance runner**
-- Current default packet state: **CODE_COMPLETE** — tooling/CI are complete; real two-keyboard/two-pointing-device physical Gate A/B/C evidence is still required.
+- Current validation phase: **Phase 3 — Input Compatibility & Isolation**
+- Current default packet: **P5-AUD-01 — Audio endpoint inventory and Seat assignment validation** (automated implementation frontier under D-051)
+- Current default packet state: **READY for automated implementation** — Phase 4's remaining blockers are manual/physical validation only; P5-AUD-01 is read-only inventory/validation work and may proceed to `CODE_COMPLETE` without pretending Phase 4 is `VALIDATED`/closed.
+- Deferred validation queue starts with **P3-HW-01** — tooling/CI are complete; real two-keyboard/two-pointing-device physical Gate A/B/C evidence is still required before physical isolation/cloaking claims and Phase 3 closure.
 - Product contract: **HydraSeat v1 is a two-Seat, game-first local Windows gaming product** for households that want to use the spare performance of one capable PC instead of buying a second complete desktop solely for simultaneous local gaming. See `docs/PRODUCT_V1.md`.
 - v1 does not pursue N-Seat generalization, a general independent Windows desktop per Seat, or a maintainer-created official game-certification badge.
 - Selected Phase 4 runtime/display/control foundations were implemented early and validated/code-completed independently. This does **not** close Phase 3 or replace its physical acceptance gate.
@@ -74,8 +75,8 @@ The roadmap and repository documentation now use these v1 decisions:
 
 | Packet | State | Immediate evidence required |
 | --- | --- | --- |
-| P3-HW-01 | CODE_COMPLETE | Run the guided real two-keyboard/two-pointing-device Gate A/B/C acceptance; record physical identities, hot-plug/soak, routing, receiver evidence, and privacy-safe report |
-| P3-D-02 | BLOCKED | Becomes actionable only after P3-HW-01 physical acceptance; recovery prerequisites are already validated |
+| P3-HW-01 | CODE_COMPLETE | Deferred validation: run the guided real two-keyboard/two-pointing-device Gate A/B/C acceptance before physical claims/release |
+| P3-D-02 | CODE_COMPLETE | Guarded transaction, disabled-by-default native boundary, durable recovery snapshot, watchdog/reset restore executor, x64/x86 75/75, and strict P3-D-02 3/3 pass; physical activation/claim remains deferred until P3-HW-01 |
 | P3-E-02 | BLOCKED | First explicit real non-anti-cheat game profile after physical suppression/isolation path is proven |
 | P3-E-03 | BLOCKED | Two different real-game zero-bleed proof after P3-E-02 |
 | P3-CLOSE-01 | BLOCKED | Dedicated Phase 3 close verification after required physical/game gates |
@@ -176,7 +177,7 @@ Remaining evidence:
 | Gate A physical device observation | PENDING | Two keyboards + two pointing devices, hot-plug/composite behavior, >=10-minute trace |
 | Gate B physical Seat routing | PENDING | Exclusive Seat routes plus shared/ambiguous fail-closed case |
 | Gate C physical controlled-process routing | PENDING | Two physical input sets, two controlled targets, receiver-aware metrics, zero verified cross-Seat/process events |
-| Gate D guarded device cloaking/suppression | NOT IMPLEMENTED | Only after physical acceptance + validated recovery/reset |
+| Gate D guarded device cloaking/suppression | CODE COMPLETE / PHYSICAL PENDING | Transaction/native boundary/recovery code exists, but actual device cloaking/suppression remains disabled and unvalidated until physical acceptance |
 | First real non-protected game | NOT IMPLEMENTED | Exact game/provider/version profile and real evidence |
 | Two real games concurrently | NOT IMPLEMENTED | Objective two-Seat input/controller/audio/window/display evidence |
 | Same-title two-instance v1 demonstration | NOT IMPLEMENTED | One lawful game/provider setup after Phase 6 setup system; no bypass |
@@ -185,9 +186,9 @@ Remaining evidence:
 
 ## Current next action
 
-The default execution task remains **P3-HW-01** because its physical evidence is the only remaining blocker before the guarded device-cloak experiment and the remaining Phase 3 game path can proceed.
+Under D-051, `P3-D-02` has reached `CODE_COMPLETE` while its physical Gate D evidence remains deferred. The automated implementation frontier advances to **P5-AUD-01**: implement read-only Windows audio endpoint inventory, stable endpoint identity, at-most-two-Seat assignment validation, and deterministic change snapshots without performing per-process audio routing mutation.
 
-The accumulated Phase 4 development may be committed/pushed/reviewed in parallel as early foundation, but agents must not use that remote progress to mark Phase 3 complete.
+Deferred validation queue: P3-HW-01 Gate A/B/C remains physically unvalidated and still blocks `PhysicalDeviceCloaking`/physical zero-bleed claims, Phase 3 closure, and release validation. It no longer blocks unrelated automated coding. Later phases may be implemented against truthful controlled/fake evidence and remain `CODE_COMPLETE` until their manual gates are eventually run.
 
 ## Evidence update template
 

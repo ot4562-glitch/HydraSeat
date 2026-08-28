@@ -494,4 +494,17 @@ HydraSeat is a one-developer project unless that changes explicitly. When two te
 
 Features that do not materially improve that v1 journey should normally be deferred rather than expanding HydraSeat into a general Windows multiseat desktop platform.
 
-The canonical product contract for D-039 through D-050 is `docs/PRODUCT_V1.md`.
+## D-051 — Manual/physical evidence blocks validation and release, not automated implementation
+
+The user explicitly prefers HydraSeat to be driven to a code-complete product before spending development cycles on repeated manual hardware acceptance. Manual/physical/game/install/reboot evidence therefore remains mandatory for truthful validation and release claims, but a missing manual gate does not by itself stop later automated implementation work.
+
+Rules:
+
+- automated unit/integration/process/CI tests remain mandatory; this decision defers only evidence that genuinely requires a person, physical hardware, a real game, a clean-machine install, sign-out/restart, or equivalent external acceptance;
+- a packet whose only unsatisfied prerequisites are deferred manual gates may be implemented and may reach `CODE_COMPLETE`, but it may not be marked `VALIDATED`, used to close its phase, or used as proof of a compatibility/release claim;
+- `STATUS.md` tracks the automated implementation frontier separately from the deferred validation queue so agents continue coding instead of repeatedly stopping on the same physical gate;
+- synthetic/fake/controlled-process evidence must remain labeled as such and never be rewritten as physical zero-bleed, device-cloaking, game, audio, display, installer, or reboot evidence;
+- risky global/device/driver mutations may have interfaces, plans, dry-runs, fake backends, snapshot/rollback logic, and disabled native implementations prepared automatically, but they remain disabled by default until their declared recovery and physical-safety gate is satisfied;
+- release hardening still requires all mandatory deferred validation relevant to the supported v1 scope. This decision changes development ordering, not the truth standard for `VALIDATED` or release readiness.
+
+The canonical product contract for D-039 through D-051 is `docs/PRODUCT_V1.md`.

@@ -90,13 +90,15 @@ Scope rules:
 - keep Seat, Player, Game, TwoPlayerSetup, and runtime bindings separate;
 - do not weaken fail-closed behavior or recovery requirements;
 - do not mark manual hardware/game/install/reboot acceptance complete;
+- under D-051, a prerequisite blocked only by deferred manual/physical/game/install/reboot evidence does not by itself block automated implementation; keep the resulting packet at most CODE_COMPLETE and preserve the missing evidence explicitly;
+- risky global/device/driver mutation remains disabled by default until its declared physical-safety/recovery gate is actually satisfied; automated work may implement fake/dry-run/plan/snapshot/rollback boundaries without pretending they were physically exercised;
 - do not claim capabilities not proven by the packet tests;
 - no anti-cheat, DRM, protected-process, credential, launcher/account, or deliberate single-instance bypass;
 - no third-party source copying outside docs/CLEAN_ROOM_POLICY.md;
 - do not push or create/merge PRs unless the user explicitly authorizes it.
 
 Required workflow:
-1. verify the packet state is actionable for the requested task and every prerequisite has sufficient evidence;
+1. verify the packet state is actionable for the requested task; distinguish code prerequisites from D-051 deferred manual-only validation prerequisites instead of stopping solely because a physical/game/install/reboot gate is pending;
 2. inspect existing implementation and tests;
 3. record files/types, ownership/thread model, OS state touched, rollback path,
    tests, and pending manual gates before editing;

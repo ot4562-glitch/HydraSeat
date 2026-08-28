@@ -156,7 +156,7 @@ Both Seats ending, or explicit Management UI `Return to Windows`, triggers verif
 
 ## 7. Phase model
 
-A phase is not complete because individual packets compile. Every numbered phase ends with a separate phase-close verification covering the whole phase, cross-packet behavior, declared Windows CI, physical/manual gates, recovery, performance claims, and documentation truth.
+A phase is not complete because individual packets compile. Every numbered phase ends with a separate phase-close verification covering the whole phase, cross-packet behavior, declared Windows CI, physical/manual gates, recovery, performance claims, and documentation truth. Under D-051, however, an unperformed manual/physical gate blocks validation/phase closure rather than later automated implementation: agents may continue building downstream code against controlled/fake evidence while keeping the missing real evidence explicit.
 
 | Phase | Product capability | State | Exit summary |
 | --- | --- | --- | --- |
@@ -199,7 +199,7 @@ P3 physical acceptance / guarded suppression / real-game zero-bleed
   -> P10 release hardening and legal release gate
 ```
 
-Cross-phase recovery prerequisites may be implemented early when required by a risky earlier packet. Their early implementation never closes the phase that owns them.
+This remains the **validation/release** critical path. The automated implementation frontier may move ahead of it under D-051 when the only blocker is manual/physical/game/install/reboot evidence. Cross-phase recovery prerequisites and other downstream foundations may therefore be implemented early; early implementation never closes the phase that owns them and never upgrades synthetic evidence into physical evidence.
 
 ## 9. Work-packet states
 
@@ -215,7 +215,7 @@ Packets use:
 - `DEFERRED`
 - `REJECTED`
 
-`CODE_COMPLETE` means implementation/automated evidence exists but a required manual/physical/game/install/reboot gate is still pending.
+`CODE_COMPLETE` means implementation/automated evidence exists but a required manual/physical/game/install/reboot gate may still be pending. D-051 intentionally allows downstream automated work to consume such code-complete foundations while the corresponding validation claim remains blocked.
 
 A packet is `VALIDATED` only when all declared evidence actually exists. Never infer manual acceptance from source inspection, synthetic tests, or a green unrelated CI job.
 

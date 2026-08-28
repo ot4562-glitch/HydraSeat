@@ -380,6 +380,23 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P3-D-02 guarded session-cloak transaction. The native Windows boundary uses
+# HidHide's process-lifetime session blacklist; HydraSeat never appends session
+# devices to the persistent blacklist. Activation is still runtime-gated by
+# physical acceptance and explicit high-risk approval.
+add_library(hydra_hidhide_session STATIC
+    src/hidhide_session_backend.cpp
+    src/hidhide_session_native.cpp
+    include/hydra/hidhide_session_backend.hpp
+)
+target_link_libraries(hydra_hidhide_session PUBLIC hydra_hidhide_probe)
+if(MSVC)
+    target_compile_options(hydra_hidhide_session PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_hidhide_session PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P3-MET-01 fixed-capacity, process-local metrics recorder and deterministic
 # off-path report generator. The recorder performs no I/O on the input path.
 add_library(hydra_input_metrics STATIC
@@ -408,6 +425,22 @@ if(MSVC)
     target_compile_options(hydra_watchdog_core PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_watchdog_core PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P3-D-02 durable recovery record + narrow RestoreSnapshotState executor. The
+# watchdog/reset path restores only a numeric resource ID from the bounded
+# HydraSeat recovery root and refuses stale external-state overwrite.
+add_library(hydra_hidhide_session_recovery STATIC
+    src/hidhide_session_recovery.cpp
+    include/hydra/hidhide_session_recovery.hpp
+)
+target_link_libraries(hydra_hidhide_session_recovery PUBLIC
+    hydra_hidhide_session hydra_watchdog_core)
+if(MSVC)
+    target_compile_options(hydra_hidhide_session_recovery PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_hidhide_session_recovery PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
@@ -641,7 +674,8 @@ endif()
 # P8-RESET-01 independently launchable emergency reset tool. It depends only on
 # recovery/watchdog core libraries and never on Qt or the main control UI.
 add_executable(hydra_reset src/reset_main.cpp)
-target_link_libraries(hydra_reset PRIVATE hydra_reset_actions)
+target_link_libraries(hydra_reset PRIVATE
+    hydra_reset_actions hydra_hidhide_session_recovery)
 if(MSVC)
     target_compile_options(hydra_reset PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -693,17 +727,35 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P3-D-02 guarded lab exposes only read-only status and synthetic self-test
+# while physical acceptance is deferred. No native cloak command is available.
+add_executable(hydra_hidhide_session_lab
+    src/hidhide_session_lab.cpp
+)
+target_link_libraries(hydra_hidhide_session_lab PRIVATE
+    hydra_hidhide_probe hydra_hidhide_session)
+if(MSVC)
+    target_compile_options(hydra_hidhide_session_lab PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_hidhide_session_lab PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P8-WATCH-01 independent rollback-only watchdog executable. The host-side
 # launcher is intentionally deferred to the owning runtime/recovery packet.
 add_executable(hydra_watchdog
     src/watchdog_main.cpp
 )
-target_link_libraries(hydra_watchdog PRIVATE hydra_watchdog_core)
+target_link_libraries(hydra_watchdog PRIVATE
+    hydra_watchdog_core hydra_hidhide_session_recovery)
 if(MSVC)
     target_compile_options(hydra_watchdog PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_watchdog PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    if(MINGW)
+        target_link_options(hydra_watchdog PRIVATE -municode)
+    endif()
 endif()
 
 # P3-MET-01 report/self-test CLI. Live producers use hydra_input_metrics
@@ -1101,6 +1153,37 @@ if(WIN32)
     add_test(NAME HidHideProbeNativeReadOnly
              COMMAND hydra_hidhide_probe_cli --probe)
 endif()
+
+# P3-D-02 fake/synthetic transaction coverage. It never invokes the native
+# HidHide control device and is safe to run while physical acceptance is deferred.
+add_executable(hidhide_session_backend_tests
+    tests/test_hidhide_session_backend.cpp
+)
+target_link_libraries(hidhide_session_backend_tests PRIVATE hydra_hidhide_session)
+if(MSVC)
+    target_compile_options(hidhide_session_backend_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hidhide_session_backend_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME HidHideSessionBackendTests COMMAND hidhide_session_backend_tests)
+set_tests_properties(HidHideSessionBackendTests PROPERTIES LABELS "P3-D-02")
+add_test(NAME HidHideSessionLabSelfTest COMMAND hydra_hidhide_session_lab --self-test)
+set_tests_properties(HidHideSessionLabSelfTest PROPERTIES LABELS "P3-D-02")
+
+add_executable(hidhide_session_recovery_tests
+    tests/test_hidhide_session_recovery.cpp
+)
+target_link_libraries(hidhide_session_recovery_tests PRIVATE
+    hydra_hidhide_session_recovery)
+if(MSVC)
+    target_compile_options(hidhide_session_recovery_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hidhide_session_recovery_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME HidHideSessionRecoveryTests COMMAND hidhide_session_recovery_tests)
+set_tests_properties(HidHideSessionRecoveryTests PROPERTIES LABELS "P3-D-02;P8-WATCH-01")
 
 # P8-WATCH-01 portable protocol/registry tests and Windows process/fault tests.
 add_executable(watchdog_protocol_tests

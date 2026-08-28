@@ -1,3 +1,4 @@
+#include "hydra/hidhide_session_recovery.hpp"
 #include "hydra/rollback_registry.hpp"
 #include "hydra/watchdog_protocol.hpp"
 
@@ -8,11 +9,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cwchar>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -59,6 +62,7 @@ struct Options {
     HANDLE statusHandle{INVALID_HANDLE_VALUE};
     ProcessIdentity host{};
     SessionId sessionId{};
+    std::filesystem::path recoveryDirectory;
 };
 
 bool parseUnsigned(std::wstring_view text, std::uint64_t& value) {
@@ -104,12 +108,13 @@ bool parseHandle(std::wstring_view text, HANDLE& handle) {
 }
 
 bool parseOptions(int argc, wchar_t** argv, Options& options) {
-    if (argc != 11) return false;
+    if (argc != 11 && argc != 13) return false;
     std::wstring_view controlValue;
     std::wstring_view statusValue;
     std::wstring_view hostPidValue;
     std::wstring_view hostCreatedValue;
     std::wstring_view sessionValue;
+    std::wstring_view recoveryDirectoryValue;
 
     for (int index = 1; index + 1 < argc; index += 2) {
         const std::wstring_view name(argv[index]);
@@ -124,6 +129,8 @@ bool parseOptions(int argc, wchar_t** argv, Options& options) {
             hostCreatedValue = value;
         } else if (name == L"--session") {
             sessionValue = value;
+        } else if (name == L"--recovery-dir") {
+            recoveryDirectoryValue = value;
         } else {
             return false;
         }
@@ -148,6 +155,10 @@ bool parseOptions(int argc, wchar_t** argv, Options& options) {
     if (!parseUnsigned(hostCreatedValue, options.host.creationTime100ns) ||
         options.host.creationTime100ns == 0) {
         return false;
+    }
+    if (argc == 13) {
+        if (recoveryDirectoryValue.empty()) return false;
+        options.recoveryDirectory = std::filesystem::path(recoveryDirectoryValue);
     }
     return true;
 }
@@ -256,12 +267,25 @@ void printStatus(const WatchdogStatus& status) {
               << " system_error=" << status.systemError << '\n';
 }
 
+RollbackExecutionSummary executeRegisteredRollback(
+    RollbackRegistry& registry,
+    const std::filesystem::path& recoveryDirectory) {
+    if (recoveryDirectory.empty()) {
+        DefaultRollbackExecutor executor;
+        return registry.execute(executor);
+    }
+    auto platform = hydra::makeNativeHidHideSessionPlatform();
+    hydra::HidHideSessionRollbackExecutor executor(
+        recoveryDirectory, std::move(platform));
+    return registry.execute(executor);
+}
+
 int executeRollback(RollbackRegistry& registry,
                     HANDLE statusHandle,
                     std::uint64_t statusSequence,
-                    WatchdogTriggerReason triggerReason) {
-    DefaultRollbackExecutor executor;
-    const auto summary = registry.execute(executor);
+                    WatchdogTriggerReason triggerReason,
+                    const std::filesystem::path& recoveryDirectory) {
+    const auto summary = executeRegisteredRollback(registry, recoveryDirectory);
     const auto* manifest = registry.manifest();
     if (manifest == nullptr) return kExitStartupFailure;
 
@@ -384,12 +408,12 @@ int runWatchdog(const Options& options) {
         if (hostState == WAIT_OBJECT_0) {
             return executeRollback(registry, options.statusHandle,
                                    lastSequence + 1,
-                                   WatchdogTriggerReason::HostExited);
+                                   WatchdogTriggerReason::HostExited, options.recoveryDirectory);
         }
         if (hostState == WAIT_FAILED) {
             return executeRollback(registry, options.statusHandle,
                                    lastSequence + 1,
-                                   WatchdogTriggerReason::ProtocolViolation);
+                                   WatchdogTriggerReason::ProtocolViolation, options.recoveryDirectory);
         }
 
         const auto now = std::chrono::steady_clock::now();
@@ -397,7 +421,7 @@ int runWatchdog(const Options& options) {
             std::chrono::milliseconds(manifest->lease.timeoutMilliseconds)) {
             return executeRollback(registry, options.statusHandle,
                                    lastSequence + 1,
-                                   WatchdogTriggerReason::LeaseExpired);
+                                   WatchdogTriggerReason::LeaseExpired, options.recoveryDirectory);
         }
 
         std::vector<std::byte> bytes;
@@ -411,19 +435,19 @@ int runWatchdog(const Options& options) {
         if (readState == PipeReadState::Closed) {
             return executeRollback(registry, options.statusHandle,
                                    lastSequence + 1,
-                                   WatchdogTriggerReason::ControlChannelClosed);
+                                   WatchdogTriggerReason::ControlChannelClosed, options.recoveryDirectory);
         }
         if (readState != PipeReadState::Frame) {
             return executeRollback(registry, options.statusHandle,
                                    lastSequence + 1,
-                                   WatchdogTriggerReason::ProtocolViolation);
+                                   WatchdogTriggerReason::ProtocolViolation, options.recoveryDirectory);
         }
 
         const auto decoded = decodeWatchdogFrame(bytes);
         if (!decoded || decoded.frame->sequence <= lastSequence) {
             return executeRollback(registry, options.statusHandle,
                                    lastSequence + 1,
-                                   WatchdogTriggerReason::ProtocolViolation);
+                                   WatchdogTriggerReason::ProtocolViolation, options.recoveryDirectory);
         }
 
         WatchdogLease lease;
@@ -433,7 +457,7 @@ int runWatchdog(const Options& options) {
                 lease != manifest->lease) {
                 return executeRollback(registry, options.statusHandle,
                                        decoded.frame->sequence + 1,
-                                       WatchdogTriggerReason::ProtocolViolation);
+                                       WatchdogTriggerReason::ProtocolViolation, options.recoveryDirectory);
             }
             lastSequence = decoded.frame->sequence;
             lastRenewal = std::chrono::steady_clock::now();
@@ -444,15 +468,15 @@ int runWatchdog(const Options& options) {
                 lease != manifest->lease) {
                 return executeRollback(registry, options.statusHandle,
                                        decoded.frame->sequence + 1,
-                                       WatchdogTriggerReason::ProtocolViolation);
+                                       WatchdogTriggerReason::ProtocolViolation, options.recoveryDirectory);
             }
 
             // A host request alone is not sufficient proof of rollback. Re-run
             // the registered idempotent plan as a safety backstop before the
             // watchdog releases its lease. Already-restored state is reported
             // as AlreadySatisfied; any unresolved action keeps recovery armed.
-            DefaultRollbackExecutor executor;
-            const auto summary = registry.execute(executor);
+            const auto summary = executeRegisteredRollback(
+                registry, options.recoveryDirectory);
             WatchdogStatus status;
             status.sessionId = manifest->lease.sessionId;
             status.generation = manifest->lease.generation;
@@ -487,7 +511,7 @@ int runWatchdog(const Options& options) {
 
         return executeRollback(registry, options.statusHandle,
                                decoded.frame->sequence + 1,
-                               WatchdogTriggerReason::ProtocolViolation);
+                               WatchdogTriggerReason::ProtocolViolation, options.recoveryDirectory);
     }
 }
 

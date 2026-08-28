@@ -698,6 +698,7 @@ public:
     GateCWatchdogClient& operator=(const GateCWatchdogClient&) = delete;
 
     bool start(const hydra::watchdog::RollbackPlanManifest& manifest,
+               const std::filesystem::path& recoveryDirectory,
                std::string* error = nullptr) {
         closeTransport();
         m_watchdog.terminate(0x52454357u); // "RECW".
@@ -752,7 +753,8 @@ public:
             L" --host-pid " + std::to_wstring(hostIdentity.processId) +
             L" --host-created " +
             std::to_wstring(hostIdentity.creationTime100ns) +
-            L" --session " + sessionHex(manifest.lease.sessionId);
+            L" --session " + sessionHex(manifest.lease.sessionId) +
+            L" --recovery-dir " + quoteArgument(recoveryDirectory.wstring());
         std::vector<wchar_t> mutableCommand(command.begin(), command.end());
         mutableCommand.push_back(L'\0');
 
@@ -822,6 +824,7 @@ public:
         m_controlWrite = controlWrite;
         m_statusRead = statusRead;
         m_manifest = manifest;
+        m_recoveryDirectory = recoveryDirectory;
         m_sequence = 1;
 
         if (!sendFrame(hydra::watchdog::encodeRegisterPlan(
@@ -887,7 +890,8 @@ public:
 
     bool restartForVerification(std::string* error = nullptr) {
         const auto manifest = m_manifest;
-        return start(manifest, error);
+        const auto recoveryDirectory = m_recoveryDirectory;
+        return start(manifest, recoveryDirectory, error);
     }
 
     bool running() const noexcept { return m_watchdog.running(); }
@@ -1055,6 +1059,7 @@ private:
     HANDLE m_statusRead{nullptr};
     ChildProcess m_watchdog;
     hydra::watchdog::RollbackPlanManifest m_manifest;
+    std::filesystem::path m_recoveryDirectory;
     std::uint64_t m_sequence{0};
 };
 
@@ -1073,10 +1078,12 @@ struct TargetSession {
 
 struct GateCRecoveryContext {
     explicit GateCRecoveryContext(std::filesystem::path directory)
-        : storage(directory),
+        : recoveryDirectory(directory),
+          storage(directory),
           store(storage),
           resetRegistration(std::move(directory)) {}
 
+    std::filesystem::path recoveryDirectory;
     hydra::recovery::NativeCrashJournalStorage storage;
     hydra::recovery::CrashJournalStore store;
     hydra::reset::RuntimeResetRegistrationStore resetRegistration;
@@ -1639,7 +1646,8 @@ private:
             terminateSessionsNoJournal(sessions);
             return false;
         }
-        if (!recovery.watchdog.start(*manifest, &error)) {
+        if (!recovery.watchdog.start(
+                *manifest, recovery.recoveryDirectory, &error)) {
             std::cerr << "Gate C watchdog arm failed: " << error << '\n';
             terminateSessionsNoJournal(sessions);
             std::string ignored;
