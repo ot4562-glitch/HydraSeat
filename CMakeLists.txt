@@ -465,6 +465,20 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P6-SCHEMA-01 bounded versioned persistence/runtime schema family. This keeps
+# Seat hardware, Player identity, Game metadata, two-player recipes, and
+# temporary runtime bindings separate and contains no credential/script/runtime-handle fields.
+add_library(hydra_profile_schema STATIC
+    src/profile_schema.cpp
+    include/hydra/profile_schema.hpp
+)
+if(MSVC)
+    target_compile_options(hydra_profile_schema PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_profile_schema PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P8-WATCH-01 versioned lease/rollback protocol and idempotent rollback registry.
 # The portable core contains no arbitrary command execution or persistent-state I/O.
 add_library(hydra_watchdog_core STATIC
@@ -1618,6 +1632,18 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME SessionMetricsTests COMMAND session_metrics_tests)
 set_tests_properties(SessionMetricsTests PROPERTIES LABELS "P5-MET-01")
+
+# P6-SCHEMA-01 strict version/bounds/Unicode/cross-reference persistence tests.
+add_executable(profile_schema_tests tests/test_profile_schema.cpp)
+target_link_libraries(profile_schema_tests PRIVATE hydra_profile_schema)
+if(MSVC)
+    target_compile_options(profile_schema_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(profile_schema_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ProfileSchemaTests COMMAND profile_schema_tests)
+set_tests_properties(ProfileSchemaTests PROPERTIES LABELS "P6-SCHEMA-01")
 
 # P3-HW-01 acceptance tooling is CI-tested without claiming physical acceptance.
 # Python parses bounded synthetic evidence; Windows additionally checks that the

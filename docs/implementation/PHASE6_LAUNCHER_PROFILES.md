@@ -32,7 +32,7 @@ Phase 6 closes only when:
 
 ## P6-SCHEMA-01 — Versioned Seat, Player, Game, setup, and session schema family
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **D-051 automated-development rule**
 
@@ -73,11 +73,23 @@ Define separate persisted/runtime schemas instead of growing one monolithic prof
 
 Round-trip, malformed, migration-boundary, Unicode/path, maximum-size, unknown-version, and cross-concept isolation tests pass for the schema family.
 
+**Automated implementation evidence — 2026-08-28**
+
+- `hydra_profile_schema` defines five separate version-1 model/document families: hardware-only persisted Seat configuration, Player profiles, Game records, optional two-player setup recipes, and temporary runtime Seat+Player+Game bindings. The v1 Seat/binding count is bounded to two without forcing the internal runtime to become an N-Seat product.
+- Stable persisted Seat data has no PID/HWND/handle field. Converting the legacy runtime `SeatConfig` fails closed if `targetHwnd` is nonzero, and restoring a persisted Seat always sets the transient HWND to zero; P6-MIG-01 owns migration of the legacy workspace file rather than silently preserving runtime identity.
+- Provider accounts expose only bounded provider/account references; passwords, OAuth tokens, cookies, refresh tokens, arbitrary scripts, and shell commands are not representable schema fields. Unknown fields fail closed.
+- Game and TwoPlayerSetup records may carry only a bounded logical compatibility `record_id`, provenance identifier, and nonzero evidence revision. Compatibility result bodies/evidence remain in their own store rather than being copied into profile persistence.
+- The parser rejects duplicate object keys, malformed/overlong UTF-8, invalid surrogate/code-point sequences, unknown future schema versions, wrong types, unsupported fields, unbounded arrays/strings/paths/documents, duplicate IDs, and invalid cross-references transactionally without replacing the previous valid destination object.
+- Runtime selection validates active Seat, Player, Game, setup ownership, unique Seat/Player assignment, and distinct setup instance indices. Two different Players may intentionally reference the same Game through the two typed instance recipes.
+- MSVC x64 and Win32/x86 exact-head full suites pass **84/84**. Strict MinGW P6-SCHEMA-01 passes **1/1** with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion` and no packet-source warnings. One pre-existing x64 cursor/focus process test produced a single transient host-global-state failure on the first full run, then passed both isolated and subsequent full rerun.
+
+`CODE_COMPLETE` establishes bounded typed schema contracts only. Legacy on-disk migration, provider discovery, compatibility execution, real-game evidence, and UI persistence are separate packets.
+
 ---
 
 ## P6-MIG-01 — Transactional profile migration and backup
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 

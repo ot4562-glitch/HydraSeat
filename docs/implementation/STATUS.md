@@ -3,8 +3,8 @@
 ## Current program state
 
 - Current validation phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P6-SCHEMA-01 — Versioned Seat, Player, Game, setup, and session schema family** (automated implementation frontier under D-051)
-- Current default packet state: **READY for automated implementation** — P5-MVP-01 is CODE_COMPLETE with real owned Job Object process trees plus explicitly synthetic device evidence. Under D-051, versioned Player/Game/TwoPlayerSetup/runtime schemas can now proceed while P5 real-game/physical validation and P5-CLOSE-01 remain deferred product gates.
+- Current default packet: **P6-MIG-01 — Transactional profile migration and backup** (automated implementation frontier under D-051)
+- Current default packet state: **READY for automated implementation** — P6-SCHEMA-01 is `CODE_COMPLETE`; legacy workspace/Seat persistence can now be parsed read-only, converted into the separated v1 model, backed up, validated, and committed transactionally without persisting transient HWND/PID/handle state.
 - Deferred validation queue starts with **P3-HW-01** — tooling/CI are complete; real two-keyboard/two-pointing-device physical Gate A/B/C evidence is still required before physical isolation/cloaking claims and Phase 3 closure.
 - Product contract: **HydraSeat v1 is a two-Seat, game-first local Windows gaming product** for households that want to use the spare performance of one capable PC instead of buying a second complete desktop solely for simultaneous local gaming. See `docs/PRODUCT_V1.md`.
 - v1 does not pursue N-Seat generalization, a general independent Windows desktop per Seat, or a maintainer-created official game-certification badge.
@@ -181,6 +181,13 @@ Remaining evidence:
 | P5-MET-01 | CODE_COMPLETE | Versioned plan-fingerprint two-Seat evidence report, explicit Synthetic/Controlled/Physical origin, receiver-complete/loss-free isolation verdict, controller/audio outcomes, launch/stop/rollback timing and existing CPU/memory aggregate, privacy-safe JSON; x64/x86 full 82/82 and strict focused 1/1 pass; physical zero-bleed/real-game performance remains deferred |
 | P5-MVP-01 | CODE_COMPLETE | Controlled production-path harness uses real owned root+descendant Job Object trees, independent Seat 2 stop/restart/natural-exit while Seat 1 exact identity survives, injected Seat 2 rollback fault, final orphan=0 and verified host return; x64/x86 full 83/83 and strict focused 1/1 pass; display/input/controller/audio evidence remains Synthetic and not physical validation |
 
+## Phase 6 automated frontier
+
+| Packet | State | Evidence / remaining gate |
+| --- | --- | --- |
+| P6-SCHEMA-01 | CODE_COMPLETE | Separate bounded version-1 Seat/Player/Game/TwoPlayerSetup/runtime schemas; stable persistence cannot represent PID/HWND/handles or provider secrets/scripts; compatibility is referenced only by logical record/provenance/revision; transactional strict JSON/Unicode/version/bounds/cross-reference tests pass; x64/x86 exact-head full 84/84 and strict focused 1/1 pass |
+| P6-MIG-01 | READY | Migrate legacy workspace/Seat persistence read-only-first into separated v1 documents with deterministic report, byte-preserving backup, temp validation, atomic commit, and injected-failure rollback; transient targetHwnd must not survive into stable persistence |
+
 ## Manual/physical gates still pending
 
 | Gate | State | Required evidence |
@@ -197,7 +204,7 @@ Remaining evidence:
 
 ## Current next action
 
-Under D-051, P5-MVP-01 has reached CODE_COMPLETE while physical two-display/two-input zero-bleed and real-game evidence remain deferred. The automated implementation frontier advances to **P6-SCHEMA-01**: define bounded, versioned, separately persisted SeatConfig, PlayerProfile, GameRecord, TwoPlayerSetup, and temporary runtime binding schemas. P5-CLOSE-01 remains a required product validation gate before Phase 6 validation/closure claims but no longer blocks this isolated schema work.
+Under D-051, P6-SCHEMA-01 has reached `CODE_COMPLETE` with separate bounded Seat/Player/Game/TwoPlayerSetup/runtime models and fail-closed exclusion of transient OS object identity, provider secrets, and arbitrary scripts. The automated implementation frontier advances to **P6-MIG-01**: parse legacy workspace/Seat state read-only first, produce deterministic separated v1 output plus migration report, preserve the original bytes in a backup, validate a temporary write, and commit atomically with rollback on every injected failure. P5-CLOSE-01 and physical/real-game gates remain required before Phase 6 validation/closure claims.
 
 Deferred validation queue: P3-HW-01 Gate A/B/C remains physically unvalidated and still blocks `PhysicalDeviceCloaking`/physical zero-bleed claims, Phase 3 closure, and release validation. It no longer blocks unrelated automated coding. Later phases may be implemented against truthful controlled/fake evidence and remain `CODE_COMPLETE` until their manual gates are eventually run.
 
