@@ -177,11 +177,11 @@ Physical controller connection/reconnect and physical vibration observation rema
 
 ## P5-LAUNCH-01 — Minimal two-Seat launch plan and activation transaction
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **D-051 automated-development rule**
 
-P3-CLOSE-01 remains blocked by deferred physical/game evidence, but the immutable plan compiler, fake/controlled resource backends, activation/rollback ordering, exact two-Seat bound, and controlled-target integration can proceed to `CODE_COMPLETE`. No missing physical Phase 3 evidence may be re-labelled as validated by this packet.
+P3-CLOSE-01 remains blocked by deferred physical/game evidence, but the immutable plan compiler, fake/controlled resource backends, activation/rollback ordering, exact two-Seat bound, and controlled-target integration may reach `CODE_COMPLETE`. No missing physical Phase 3 evidence is re-labelled as validated by this packet.
 
 **Goal**
 
@@ -229,11 +229,27 @@ failure at any step -> reverse rollback -> verified prior/safe state
 
 The production host can execute a deterministic two-Seat plan with fake/controlled targets and rollback every injected failure index without cross-Seat mutation.
 
+**Automated implementation evidence — 2026-08-28**
+
+- `compileTwoSeatLaunchPlan` accepts exactly two active Seats, canonicalizes Seat order, strips legacy/transient `targetHwnd`, and fingerprints the immutable Seat/game/process/requirements/capability/resource contract. Stale HWND/input order does not change the plan fingerprint, while a material capability change does.
+- Preflight checks only selected-game requirements: keyboard/mouse/controller/audio may be omitted when not required, while required missing devices, a primary display outside its group, unsupported required capabilities, high-risk options without explicit approval, third/one-Seat plans, and duplicate exclusive display/input/controller/audio ownership fail before any resource factory/mutation is reached.
+- `PlannedSeatGameInstance` prepares every typed Seat-local resource before activation, activates/verifies in deterministic order, and rolls every resource back in exact reverse order on any injected activation failure. If rollback cannot be verified, exact resource ownership is retained and the instance remains recovery-required for a later retry.
+- RuntimeHost integration uses the existing authoritative `SeatGameLifecycle`: both Seats can become `Playing`, Seat 2 can stop/restart while Seat 1 remains unchanged, and a controlled Seat 2 start failure rolls back only Seat 2 while Seat 1's exact resource set remains active.
+- Natural game process exit no longer assumes that display/input/controller/audio state is already safe. `observeTargetExit` and reconcile now execute the same idempotent Seat-local `stop()` rollback before accepting the Seat as `Idle`; controlled tests prove the other Seat remains `Playing` during this cleanup.
+- The controlled resource matrix covers recovery, process, window, display, input, controller, and audio resources. Every activation failure index is injected and verified to reverse-roll back the complete prepared Seat resource set.
+- MSVC x64 and Win32/x86 full suites pass 81/81. Focused P5-LAUNCH-01 passes on x64, x86, and strict MinGW; the existing P4 Seat/IPC/watchdog regressions remain green after the natural-exit cleanup strengthening.
+
+This is controlled/fake resource evidence. Real-game process/window/input/controller/audio/display activation remains deferred physical/game validation and is not implied by `CODE_COMPLETE`.
+
 ---
 
 ## P5-MET-01 — Integrated session metrics and zero-bleed report
 
-**State:** BLOCKED
+**State:** READY
+
+**D-051 automated-development rule**
+
+The report schema, bounded recorder/aggregator, controlled receiver-evidence correlation, queue/drop/loss and launch/rollback timing, controller/audio outcome fields, privacy redaction, and synthetic/controlled resource samples may proceed to `CODE_COMPLETE`. Physical zero-bleed and real-game latency/resource claims remain deferred validation evidence.
 
 **Goal**
 
