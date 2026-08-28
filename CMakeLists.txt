@@ -507,6 +507,134 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P6-PROV-01 bounded lawful launcher-provider boundary. Provider-specific I/O
+# stays behind this contract; the core validates discovery, account references,
+# typed launch requests, revision freshness, and process evidence transactionally.
+add_library(hydra_provider_adapter STATIC
+    src/provider_adapter.cpp
+    include/hydra/provider_adapter.hpp
+)
+target_link_libraries(hydra_provider_adapter PUBLIC hydra_game_catalog)
+if(MSVC)
+    target_compile_options(hydra_provider_adapter PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_provider_adapter PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P6-PROV-02 independently implemented read-only Steam metadata adapter.
+# It parses bounded local KeyValues metadata, creates normal steam://run plans,
+# keeps authentication in Steam, and never launches or mutates provider state.
+add_library(hydra_steam_provider STATIC
+    src/steam_provider.cpp
+    include/hydra/steam_provider.hpp
+)
+target_link_libraries(hydra_steam_provider PUBLIC hydra_provider_adapter)
+if(WIN32)
+    target_link_libraries(hydra_steam_provider PRIVATE advapi32)
+endif()
+
+# P6-PROV-03D typed manual executable fallback. Native inspection is read-only;
+# launch output is an exact executable path plus argument vector/working folder.
+add_library(hydra_custom_executable_provider STATIC
+    src/custom_executable_provider.cpp
+    include/hydra/custom_executable_provider.hpp
+)
+target_link_libraries(hydra_custom_executable_provider PUBLIC hydra_provider_adapter)
+if(MSVC)
+    target_compile_options(hydra_custom_executable_provider PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_custom_executable_provider PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+if(MSVC)
+    target_compile_options(hydra_steam_provider PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_steam_provider PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P6-PLAN-01 pure immutable provider-aware plan compiler. It resolves bounded
+# Seat/Player/Game/setup/provider snapshots and performs exact hardware/capability
+# preflight without launching a process or mutating provider/system state.
+add_library(hydra_provider_launch_plan STATIC
+    src/provider_launch_plan.cpp
+    include/hydra/provider_launch_plan.hpp
+)
+target_link_libraries(hydra_provider_launch_plan PUBLIC
+    hydra_provider_adapter hydra_profile_schema hydra_two_seat_launch)
+if(MSVC)
+    target_compile_options(hydra_provider_launch_plan PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_provider_launch_plan PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P6-PREFLIGHT-01 deterministic normal/expert requirement, risk, and typed
+# mutation preview. The preview surface cannot carry arbitrary mutation payloads.
+add_library(hydra_plan_preflight STATIC
+    src/plan_preflight.cpp
+    include/hydra/plan_preflight.hpp
+)
+target_link_libraries(hydra_plan_preflight PUBLIC hydra_provider_launch_plan)
+if(MSVC)
+    target_compile_options(hydra_plan_preflight PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_plan_preflight PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P6-PROFILE-01 typed two-player setup generation/editor model. Automatic
+# generation is pure/read-only, while manual Save is transactional and keeps the
+# previous valid setup on validation failure.
+add_library(hydra_two_player_setup_editor STATIC
+    src/two_player_setup_editor.cpp
+    include/hydra/two_player_setup_editor.hpp
+)
+target_link_libraries(hydra_two_player_setup_editor PUBLIC hydra_profile_schema)
+if(MSVC)
+    target_compile_options(hydra_two_player_setup_editor PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_two_player_setup_editor PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P6-IMPORT-01 versioned portable two-player setup package with provenance,
+# path-variable redaction, strict decode, explicit local remap, and revalidation.
+add_library(hydra_setup_package STATIC
+    src/setup_package.cpp
+    include/hydra/setup_package.hpp
+)
+target_link_libraries(hydra_setup_package PUBLIC hydra_two_player_setup_editor)
+if(MSVC)
+    target_compile_options(hydra_setup_package PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_setup_package PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P6-CLI-01 deterministic expert renderer plus redacted stable plan snapshots.
+add_library(hydra_profile_cli STATIC
+    src/profile_cli.cpp
+    include/hydra/profile_cli.hpp
+)
+target_link_libraries(hydra_profile_cli PUBLIC hydra_profile_schema hydra_provider_launch_plan)
+if(MSVC)
+    target_compile_options(hydra_profile_cli PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_profile_cli PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+add_executable(hydraseat_profilectl src/profilectl_main.cpp)
+target_link_libraries(hydraseat_profilectl PRIVATE hydra_profile_cli)
+if(MSVC)
+    target_compile_options(hydraseat_profilectl PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydraseat_profilectl PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P8-WATCH-01 versioned lease/rollback protocol and idempotent rollback registry.
 # The portable core contains no arbitrary command execution or persistent-state I/O.
 add_library(hydra_watchdog_core STATIC
@@ -1698,6 +1826,140 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME GameCatalogTests COMMAND game_catalog_tests)
 set_tests_properties(GameCatalogTests PROPERTIES LABELS "P6-CATALOG-01")
+
+# P6-PROV-01 fake-provider contract, revision, bounds, offline/absent,
+# transactional failure, typed-launch, and post-launch evidence tests.
+add_executable(provider_adapter_tests tests/test_provider_adapter.cpp)
+target_link_libraries(provider_adapter_tests PRIVATE hydra_provider_adapter)
+if(MSVC)
+    target_compile_options(provider_adapter_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(provider_adapter_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ProviderAdapterTests COMMAND provider_adapter_tests)
+set_tests_properties(ProviderAdapterTests PROPERTIES LABELS "P6-PROV-01")
+
+# P6-PROV-02 virtual metadata-source fixtures plus a Windows-only, read-only
+# installed-Steam smoke test. Neither test starts Steam or a game.
+add_executable(steam_provider_tests tests/test_steam_provider.cpp)
+target_link_libraries(steam_provider_tests PRIVATE hydra_steam_provider)
+if(MSVC)
+    target_compile_options(steam_provider_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(steam_provider_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SteamProviderTests COMMAND steam_provider_tests)
+set_tests_properties(SteamProviderTests PROPERTIES LABELS "P6-PROV-02")
+if(WIN32)
+    add_test(NAME SteamProviderLiveReadOnlySmoke
+             COMMAND steam_provider_tests --live-smoke)
+    set_tests_properties(SteamProviderLiveReadOnlySmoke PROPERTIES
+        LABELS "P6-PROV-02" RUN_SERIAL TRUE)
+endif()
+
+# P6-PROV-03D virtual source fixtures and native read-only PE/path smoke. No
+# test starts the selected executable or evaluates a shell command.
+add_executable(custom_executable_provider_tests
+    tests/test_custom_executable_provider.cpp)
+target_link_libraries(custom_executable_provider_tests PRIVATE
+    hydra_custom_executable_provider)
+if(MSVC)
+    target_compile_options(custom_executable_provider_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(custom_executable_provider_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME CustomExecutableProviderTests COMMAND custom_executable_provider_tests)
+set_tests_properties(CustomExecutableProviderTests PROPERTIES LABELS "P6-PROV-03D")
+if(WIN32)
+    add_test(NAME CustomExecutableProviderLiveReadOnlySmoke
+             COMMAND custom_executable_provider_tests --live-smoke)
+    set_tests_properties(CustomExecutableProviderLiveReadOnlySmoke PROPERTIES
+        LABELS "P6-PROV-03D" RUN_SERIAL TRUE)
+endif()
+
+# P6-PLAN-01 deterministic provider-aware plan/hash, same-game setup, stale
+# requirement/provider, account ambiguity, and exact hardware preflight tests.
+add_executable(provider_launch_plan_tests tests/test_provider_launch_plan.cpp)
+target_link_libraries(provider_launch_plan_tests PRIVATE hydra_provider_launch_plan)
+if(MSVC)
+    target_compile_options(provider_launch_plan_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(provider_launch_plan_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ProviderLaunchPlanTests COMMAND provider_launch_plan_tests)
+set_tests_properties(ProviderLaunchPlanTests PROPERTIES LABELS "P6-PLAN-01")
+
+# P6-PREFLIGHT-01 normal/expert messages, deterministic mutation ordering,
+# explicit approval gates, and typed no-secret mutation preview tests.
+add_executable(plan_preflight_tests tests/test_plan_preflight.cpp)
+target_link_libraries(plan_preflight_tests PRIVATE hydra_plan_preflight)
+if(MSVC)
+    target_compile_options(plan_preflight_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(plan_preflight_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME PlanPreflightTests COMMAND plan_preflight_tests)
+set_tests_properties(PlanPreflightTests PROPERTIES LABELS "P6-PREFLIGHT-01")
+
+# P6-PROFILE-01 automatic/manual convergence, transactional Save, bounded path,
+# shared-data-root, and cross-document runtime-selection validation tests.
+add_executable(two_player_setup_editor_tests tests/test_two_player_setup_editor.cpp)
+target_link_libraries(two_player_setup_editor_tests PRIVATE hydra_two_player_setup_editor)
+if(MSVC)
+    target_compile_options(two_player_setup_editor_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(two_player_setup_editor_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME TwoPlayerSetupEditorTests COMMAND two_player_setup_editor_tests)
+set_tests_properties(TwoPlayerSetupEditorTests PROPERTIES LABELS "P6-PROFILE-01")
+
+# P6-IMPORT-01 privacy-redacted package roundtrip, explicit remap, malformed
+# envelope/version, and transactional failure tests.
+add_executable(setup_package_tests tests/test_setup_package.cpp)
+target_link_libraries(setup_package_tests PRIVATE hydra_setup_package)
+if(MSVC)
+    target_compile_options(setup_package_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(setup_package_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SetupPackageTests COMMAND setup_package_tests)
+set_tests_properties(SetupPackageTests PROPERTIES LABELS "P6-IMPORT-01")
+
+# P6-REG-01 deterministic cross-packet fixture corpus covering provider/catalog
+# churn, Seat/Player moves, same-game setup/import, protection, malformed data,
+# provider absence/offline, Unicode, moved paths, and stale/uninstalled metadata.
+add_executable(phase6_regression_tests tests/test_phase6_regression_fixtures.cpp)
+target_link_libraries(phase6_regression_tests PRIVATE
+    hydra_game_catalog hydra_provider_launch_plan hydra_plan_preflight
+    hydra_two_player_setup_editor hydra_setup_package)
+if(MSVC)
+    target_compile_options(phase6_regression_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(phase6_regression_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME Phase6RegressionTests COMMAND phase6_regression_tests)
+set_tests_properties(Phase6RegressionTests PROPERTIES LABELS "P6-REG-01")
+
+# P6-CLI-01 stable-schema human/JSON rendering, plan snapshot roundtrip, Unicode,
+# malformed-version rejection, and account-reference redaction tests.
+add_executable(profile_cli_tests tests/test_profile_cli.cpp)
+target_link_libraries(profile_cli_tests PRIVATE hydra_profile_cli)
+if(MSVC)
+    target_compile_options(profile_cli_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(profile_cli_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ProfileCliTests COMMAND profile_cli_tests)
+set_tests_properties(ProfileCliTests PROPERTIES LABELS "P6-CLI-01")
 
 # P3-HW-01 acceptance tooling is CI-tested without claiming physical acceptance.
 # Python parses bounded synthetic evidence; Windows additionally checks that the

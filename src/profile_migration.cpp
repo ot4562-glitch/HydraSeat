@@ -1057,7 +1057,7 @@ ProfileMigrationOutcome planLegacyWorkspaceMigration(
         for (std::size_t index = 0u; index < seatValues.size(); ++index) {
             const auto& object = asObject(seatValues[index], "seat");
             const auto rawId = asUnsigned(required(object, "id"), "seat id");
-            if (rawId == 0u || rawId > std::numeric_limits<SeatId>::max()) {
+            if (rawId == 0u || rawId > (std::numeric_limits<SeatId>::max)()) {
                 fail(ProfileMigrationResult::LegacyValidationError,
                      "legacy Seat ID is out of range");
             }
@@ -1139,7 +1139,7 @@ ProfileMigrationOutcome planLegacyWorkspaceMigration(
         if (const auto* management = optional(root, "management_seat_id")) {
             const auto rawManagement = asUnsigned(*management, "management_seat_id");
             if (rawManagement == 0u ||
-                rawManagement > std::numeric_limits<SeatId>::max()) {
+                rawManagement > (std::numeric_limits<SeatId>::max)()) {
                 fail(ProfileMigrationResult::LegacyValidationError,
                      "legacy management_seat_id is out of range");
             }

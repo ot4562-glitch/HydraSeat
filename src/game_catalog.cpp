@@ -307,16 +307,25 @@ std::string canonicalCandidateKey(const NormalizedCandidate& candidate) {
            << static_cast<unsigned>(candidate.value.staleness) << '|'
            << candidate.normalizedInstallRoot << '|';
     std::string title;
+    std::string installRootDisplay;
     (void)wideToUtf8(candidate.value.title, title);
+    (void)wideToUtf8(candidate.value.installRoot, installRootDisplay);
     output << title << '|';
     for (const auto& executable : candidate.executables) {
-        output << executable.key << ';';
+        std::string display;
+        (void)wideToUtf8(executable.display, display);
+        // The normalized key defines semantic path identity. The display spelling
+        // is a deterministic final tie-breaker so equivalent slash/dot/case input
+        // cannot leave representative selection dependent on candidate order.
+        output << executable.key << ':' << display << ';';
     }
     output << '|'
+           << installRootDisplay << '|'
            << optionalWideKey(candidate.value.localVersion) << '|'
            << optionalStringKey(candidate.value.executableSha256) << '|'
            << compatibilityKey(candidate.value.compatibility) << '|'
-           << candidate.normalizedIconSource;
+           << candidate.normalizedIconSource << '|'
+           << optionalWideKey(candidate.value.localIconSource);
     return output.str();
 }
 

@@ -175,7 +175,7 @@ A provider-neutral catalog merges deterministic fixtures and local provider disc
 
 ## P6-PROV-01 — Launcher provider adapter contract
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -208,11 +208,25 @@ Providers may expose only their supported bounded operations such as:
 
 Fake providers prove deterministic discovery/launch-plan/account-reference behavior with malformed/stale metadata rejection.
 
+**Automated implementation evidence — 2026-08-28**
+
+- `hydra_provider_adapter` defines one bounded interface for provider descriptors, read-only installed-game discovery, existing authenticated-account references, typed launch-request construction, and post-launch process evidence. The interface has no credential, provider mutation, shell command, arbitrary script, policy-bypass, or restriction-bypass operation.
+- Provider state distinguishes `Available`, `Offline`, and `Absent`, and every operation advertises an explicit capability. Absence, unsupported operations, and online-only launch while offline fail before invoking the adapter; offline local discovery/account-reference lookup remains possible when supported.
+- Every installed provider snapshot has a nonzero metadata revision. Launch selections, discovery/account responses, launch requests, and process evidence must match that revision, so stale provider metadata cannot silently produce a plan.
+- Provider discovery is revalidated through the P6-CATALOG-01 pure catalog core before replacing caller output. Cross-provider candidates, missing provider app identities, malformed paths/Unicode/IDs, ambiguous catalog identity, and candidate overflow fail transactionally.
+- Account references contain only provider ID plus bounded opaque reference, are deduplicated and sorted deterministically, and cannot represent passwords, tokens, cookies, or refresh tokens.
+- Launches are typed as an absolute executable or bounded provider URI plus a vector of bounded arguments and optional absolute working directory. No command-line/shell string field exists. Returned provider/game/app/account identity must exactly match the request.
+- Post-launch evidence records bounded PID + creation time + absolute executable path and explicit provider-relationship verification state. Malformed, duplicate, or stale evidence is rejected without replacing prior output.
+- Fake-provider tests cover deterministic discovery, canonical account ordering, typed launch plans, process evidence, absent/offline/unsupported states, stale revisions, cross-provider/candidate/schema failure, duplicate accounts, shell-like invalid targets, malformed process identity, bounds, and transactional output preservation.
+- Strict MinGW compilation passes with `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion`; focused P6-SCHEMA/CATALOG/PROV tests pass **3/3** under MinGW, MSVC x64, and MSVC Win32/x86. Full MSVC builds exposed and repaired a pre-existing P6-MIG-01 `Windows.h` `max` macro collision. Broader x64/x86 suites cannot be run concurrently on one interactive desktop because existing Host IPC/cursor tests share host-global state; isolated reruns cleared the IPC/lifecycle collisions, while the pre-existing x64 cursor/focus host-native-state tests still require an idle/virtualized desktop to avoid real global cursor drift.
+
+`CODE_COMPLETE` proves the bounded provider-neutral contract with fake evidence only. Steam/Epic/EA/GOG/custom adapters, live provider discovery, supported provider launch behavior, account/license/single-instance policy, and real-game evidence remain owned by later packets.
+
 ---
 
 ## P6-PROV-02 — Steam provider adapter
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -234,6 +248,26 @@ Implement the first concrete provider using local Steam installation metadata an
 **Done when**
 
 Installed Steam fixture/live discovery works read-only and supported launches are reproducible without HydraSeat storing Steam credentials.
+
+**Automated implementation evidence — 2026-08-28**
+
+- `hydra_steam_provider` implements an independent bounded KeyValues reader for local `libraryfolders.vdf` and `appmanifest_*.acf` observations. It rejects duplicate keys, malformed/overlong documents, excessive depth/node/library/manifest/scan counts, invalid UTF-8/AppID/build ID, manifest filename/AppID mismatch, undeclared library roots, duplicate AppIDs, and install-directory traversal.
+- The native source reads supported Steam registry locations, library/app manifests, bounded local executable/icon hints, and matching process paths/PID/creation times only. Its interface has no write, launch, authentication, account-switch, download, provider-mutation, or executable-start operation. Fake sources virtualize all file/process observations for deterministic tests.
+- Provider metadata revision is a deterministic hash of normalized Steam root, library metadata, sorted manifest paths/bytes, and sorted executable hints. Material changes invalidate older launch/process selections before adapter invocation.
+- Discovery emits provider-neutral `GameCatalogCandidate` values containing Steam AppID, title, install root, bounded executable hints, local build ID, and a local executable icon source. Every candidate is revalidated by the P6-CATALOG-01 core before exposure; manifests with no executable hint are not claimed as launchable games.
+- The adapter constructs only the normal typed `steam://run/<appid>` request documented by Steam. It does not execute the URI during automated/local smoke tests. Account selection and arbitrary/per-instance Steam arguments are explicitly unsupported, and the adapter makes no same-title, license, offline-launch, or single-instance claim.
+- Process observation matches exact discovered executable paths and returns PID + creation time evidence, but forcibly leaves `providerRelationshipVerified=false`: path matching alone is not proof that Steam caused the process. Runtime ownership must establish stronger evidence after an actual launch.
+- Virtual-source tests cover two libraries, deterministic discovery/revision, normal URI construction, unsupported account/arguments, stale refresh, duplicate/malformed/traversal metadata, source failure/absence, and unverified process candidates. The native read-only smoke discovered **2** launchable local apps without starting Steam/a game or mutating provider/game state.
+- Strict MinGW builds without packet warnings; focused schema/catalog/provider/Steam tests pass **5/5** under MinGW, MSVC x64, and MSVC Win32/x86. Sequential full MSVC Release suites pass **89/89 x64** and **89/89 x86**.
+
+**Clean-room/provenance record**
+
+- Product/source: Valve Steam client and official Steam documentation; proprietary software/documentation-only classification under `docs/CLEAN_ROOM_POLICY.md`.
+- Consulted public documentation: Steam Support `Installed games are appearing as uninstalled` (`https://help.steampowered.com/en/faqs/view/4578-18A7-C819-8620`) for default/additional local library behavior, and Steamworks `ISteamApps` documentation (`https://partner.steamgames.com/doc/api/ISteamApps`) for the normal `steam://run/<appid>` path.
+- Local behavior studied: ordinary read-only observation of this machine's registry installation path, `steamapps/libraryfolders.vdf`, and `steamapps/appmanifest_*.acf` field shapes. No credential/session data, binary inspection, decompilation, memory extraction, or protection behavior was consulted.
+- Code reuse: none. No Valve or third-party source/binary/artwork was copied, adapted, linked, redistributed, or made a build input. No attribution or third-party notice is introduced by this independent metadata reader.
+
+`CODE_COMPLETE` proves bounded fixture behavior, live read-only discovery, and deterministic construction of the documented launch request. Actual URI/game launch, provider authentication/license behavior, process causality, same-title/two-instance behavior, and real-game evidence remain unperformed and must run in an isolated VM/manual acceptance environment before validation or compatibility claims.
 
 ---
 
@@ -315,7 +349,7 @@ The declared GOG v1 discovery/launch subset passes fixtures/live smoke evidence,
 
 ## P6-PROV-03D — Custom executable fallback
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Depends on**
 
@@ -337,11 +371,20 @@ Preserve the power-user `Add game / EXE` path for unsupported providers and unus
 
 A manually added executable becomes a normal GameRecord/launch plan with safe path/argument handling and no implicit arbitrary command runner.
 
+**Implementation evidence**
+
+- `CustomExecutableDefinition` carries only an explicit title, absolute executable path, bounded argument vector, optional working directory, and optional local icon source. It has no shell-command or script field.
+- A virtualizable read-only source canonicalizes and validates the selected file, working directory, local icon, PE identity/architecture, size, and write time before emitting a provider-neutral catalog candidate. Missing, malformed, relative, shell-like, or changed selections fail closed without partial output.
+- The adapter pins discovery and launch selection to a deterministic revision derived from the complete definition plus observed executable identity. It emits an exact executable target, argument vector, and working directory; it never starts a process or performs shell interpolation.
+- Native process observation is read-only and retains exact PID/creation/path evidence while leaving the provider relationship unverified. Account selection is explicitly unsupported for the custom provider.
+- Deterministic fake-source tests cover success, stale selection, unsupported account fields, path/argument bounds, source failures, and transactional output. A native smoke validates only the current test executable as a local PE and does not launch it.
+- Strict MinGW focused tests pass 7/7 across schema/catalog/provider/Steam/custom boundaries. MSVC Release x64 and Win32/x86 focused tests pass 7/7 and each complete suite passes 91/91 sequentially.
+
 ---
 
 ## P6-PLAN-01 — Immutable provider-aware game/Seat launch-plan compiler
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -367,11 +410,18 @@ Compile current Game + Seat + Player + provider/setup information into an immuta
 
 Equivalent input produces an identical plan/hash and any material stale/missing requirement prevents activation rather than silently changing behavior.
 
+**Implementation evidence — 2026-08-28**
+
+- `compileProviderAwareLaunchPlan` is a pure one/two-Seat compiler over validated Seat/Player/Game/TwoPlayerSetup documents, exact provider snapshots, and revisioned runtime requirements. It performs no launch or persistent mutation.
+- Equivalent binding order is canonicalized by Seat ID and the plan fingerprint includes Player/Game/setup instance, compatibility/requirement revision, normalized Seat hardware fingerprint, provider revision, target/argument vector, and capability requirements.
+- Same-game two-Seat plans require one valid setup with distinct instance indices; missing/stale requirements, provider absence/offline state, ambiguous account references, high-risk approval gaps, missing hardware/capabilities, and cross-Seat exclusive hardware collisions fail closed before a plan exists.
+- The strict MinGW Windows x64 target `provider_launch_plan_tests` builds successfully; focused runtime verification is recorded with the Phase 6 batch below and does not imply a real-game launch.
+
 ---
 
 ## P6-PREFLIGHT-01 — Human-readable requirements, risk, and mutation preview
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -395,11 +445,18 @@ Technical backend/device path/plan hash details remain expandable diagnostics.
 
 Every plan-blocking requirement and user-approved mutation/risk has a clear user message and deterministic expert detail without exposing secrets.
 
+**Implementation evidence — 2026-08-28**
+
+- `buildSummary` converts every plan issue into a normal-user blocking message plus bounded deterministic Expert detail, and emits visible requirement/setup/protection messages for successful plans.
+- Mutation previews are typed (`CreateDirectory`, config/device/controller/audio/display routing, or another explicitly approved kind), bounded, deterministically ordered, and carry only an opaque mutation ID/Seat/kind/approval state rather than arbitrary payload text.
+- Missing approval, duplicate/invalid mutation identity, or an over-bound mutation set prevents activation. Protected/Experimental paths remain visibly warned after approval.
+- `plan_preflight_tests` builds under strict warnings and its focused runtime test passed in the local Windows x64 build.
+
 ---
 
 ## P6-PROFILE-01 — Two-player setup validator and editor model
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -441,11 +498,18 @@ Make same-game/two-instance configuration a typed reusable `TwoPlayerSetup` with
 
 Both an automatically generated fixture setup and a manually edited fixture setup compile into the same validated runtime contract, with all invalid/unsafe combinations rejected.
 
+**Implementation evidence — 2026-08-28**
+
+- `generateCandidate` produces a validated two-instance setup from already-discovered Game metadata without touching the filesystem; intended data-root creation is emitted only as typed mutation intent.
+- `SetupEditor` keeps committed/draft state separate and replaces the committed setup only after complete validation. Relative Windows paths, stale Game/compatibility references, shared explicit data roots, invalid instance indices, and malformed schema fail closed.
+- Automatic and guided-manual fixture paths converge on the same `TwoPlayerSetup` and the same two-Seat `RuntimeSessionSelection`; the result is cross-validated through the stable profile schema.
+- `two_player_setup_editor_tests` builds under strict Windows x64 MinGW warnings; focused execution is included in the Phase 6 batch check.
+
 ---
 
 ## P6-UI-01 — Game library, Player, Seat, and two-player setup UI
 
-**State:** BLOCKED
+**State:** READY
 
 **Goal**
 
@@ -489,7 +553,7 @@ A non-developer can discover/add a game, create two Players, select both Seats, 
 
 ## P6-CLI-01 — Expert catalog/setup/plan command-line tools
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -508,11 +572,18 @@ Read/list/validate/export catalog, Player metadata, TwoPlayerSetup, and compiled
 
 CLI output round-trips through stable schemas, never exposes credentials, and is sufficient for issue diagnostics/CI fixtures.
 
+**Implementation evidence — 2026-08-28**
+
+- `hydraseat_profilectl` implements bounded `list`, `validate`, and `export` commands for Game, Player, TwoPlayerSetup, and compiled-plan diagnostic snapshot files in human or JSON form.
+- Game/Setup JSON reuses the stable profile schema directly. Player JSON is copied to a schema-valid redacted document before encoding, so provider account-reference values never appear in human or JSON output.
+- Compiled plans convert to a versioned stable diagnostic snapshot that records only whether an account reference was selected, never its opaque value. The snapshot has strict bounded encode/decode, Unicode validation, malformed/trailing-data rejection, and human/JSON renderers.
+- `profile_cli_tests` and the `hydraseat_profilectl` executable build under strict Windows x64 MinGW warnings; the focused CLI test passes.
+
 ---
 
 ## P6-IMPORT-01 — Portable import/export, provenance, and redaction
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -538,11 +609,18 @@ Allow users/community to share setup knowledge without sharing local secrets or 
 
 A setup can be exported, privacy-reviewed, imported on another fixture machine, remapped, validated, and compiled without exposing the source machine's private data.
 
+**Implementation evidence — 2026-08-28**
+
+- `SetupPackage` is a bounded version-1 portable envelope carrying provenance plus exactly one redacted `TwoPlayerSetup`; Player identity, device identity, authentication material, scripts, and binaries are not representable.
+- Every source working directory/data root is replaced with a typed `${...}` variable before export. Import requires an explicit unique local binding for every declared variable, rejects unexpected bindings, and re-runs the normal setup validator before committing output.
+- Strict length-prefixed encode/decode rejects unsupported versions, malformed lengths, duplicate variable identity/fields, unredacted local paths, trailing bytes, missing remaps, and relative remaps transactionally.
+- `setup_package_tests` builds under strict Windows x64 MinGW warnings; roundtrip/privacy/malformed/remap cases are included in the focused Phase 6 check.
+
 ---
 
 ## P6-REG-01 — Game/provider/setup regression fixture suite
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -566,6 +644,12 @@ Prevent provider metadata and setup-schema changes from silently breaking known 
 **Done when**
 
 The fixture corpus runs deterministically on CI and any intentional behavior/schema change requires an explicit migration/update.
+
+**Implementation evidence — 2026-08-28**
+
+- `phase6_regression_tests` spans provider-neutral catalog reconciliation, multiple provider identities, duplicate/path-normalized/moved/stale candidates, Unicode titles, Player/Game Seat moves, provider missing/offline state, same-game automatic/manual setup convergence, portable import/remap/malformed input, and Protected/Experimental approval behavior.
+- The new corpus exposed a real P6-CATALOG-01 tie-break defect: semantically equivalent path spellings could leave representative display metadata input-order-dependent. `canonicalCandidateKey` now includes deterministic display-spelling tie-break fields while retaining normalized path identity.
+- After that correction the focused regression executable passes deterministically on the local Windows x64 MinGW build.
 
 ---
 
