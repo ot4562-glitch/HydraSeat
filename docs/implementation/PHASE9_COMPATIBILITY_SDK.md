@@ -175,7 +175,7 @@ Create/import/update/rollback/tamper fixtures pass and a package can be mirrored
 
 ## P9-RPC-01 — Optional community submission transport boundary
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -202,6 +202,13 @@ The implementation may start with a GitHub/community contribution workflow, stat
 **Done when**
 
 A reference submission path proves opt-in, redaction preview, offline failure, retry/idempotence, and no impact on local gameplay when the service is unavailable.
+
+**Implementation evidence — 2026-08-29**
+
+- `SubmissionSession` canonicalizes and validates the local public compatibility result first, produces the exact redacted JSON plus deterministic submission/idempotency identities, and has no timer/background-worker/account/credential field.
+- Transport invocation is impossible before explicit approval of the exact preview bytes. Offline/unavailable state fails before transport invocation; timeout/retryable/permanent failure leaves the complete local result in memory and never changes technical evidence.
+- Retry is caller-explicit and reuses the exact payload/idempotency key. Accepted/duplicate-accepted responses require a bounded receipt and explicit remote-accepted flag; malformed success receipts fail closed transactionally.
+- Focused `community_submission_tests` pass on the local Windows x64 MinGW build. A production network endpoint/service is not claimed and remains optional deployment work.
 
 ---
 
@@ -317,7 +324,7 @@ Deferred beyond v1.
 
 ## P9-DIAG-01 — Local compatibility test/export/submission model
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -350,6 +357,13 @@ Unify local test results, human-readable details, redacted JSON preview, and opt
 **Done when**
 
 A user can run a local compatibility check, inspect results, preview redaction, decline or submit, and continue offline regardless of submission outcome.
+
+**Implementation evidence — 2026-08-29**
+
+- `CompatibilityShareModel` is a UI-independent local-first state machine covering TestNotRun, LocalResultAvailable, PreviewReady, UserDeclined, SubmitPending, SubmitSucceeded, SubmitFailed, and Superseded.
+- Local compatibility results remain immutable history across decline, offline/timeout/failure, successful submission, and later superseding tests. A new local test marks the previous entry Superseded without deleting it or changing its technical evidence.
+- Submission requires the exact preview and an explicit pending transition. Protected/Experimental state remains attached to the result/preview throughout; upload state never changes compatibility truth.
+- Focused `compatibility_share_model_tests` pass on the local Windows x64 MinGW build. This is controlled state-model evidence; no background telemetry or live public service is claimed.
 
 ---
 
@@ -426,7 +440,7 @@ CI/community contributors can run one documented validation workflow and malform
 
 ## P9-SEC-01 — Community ecosystem threat model and privacy review
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -453,11 +467,18 @@ Review the data-first ecosystem as an untrusted-content boundary.
 
 Threat model, mitigations, negative tests, retention/privacy rules, and reporting/withdrawal process are documented and reviewed before public ecosystem launch.
 
+**Implementation evidence — 2026-08-29**
+
+- `docs/security/COMMUNITY_ECOSYSTEM_THREAT_MODEL.md` maps malformed/oversized data, script/binary/bypass instructions, credential/private-path leakage, forged/stale evidence, spam/duplicates, Protected misrepresentation, external resources, catalog tamper/rollback, and transport outage/compromise to the concrete P6/P8/P9 trust boundaries and focused negative tests.
+- The review records local-first data minimization, exact-preview consent, local-result retention independent of upload state, remote withdrawal semantics, and a fail-closed requirement that a real service publish its own retention/IP/logging terms before collection begins.
+- The repository currently has no tracked production `SECURITY.md` or deployed service contract, so public collection remains gated on a configured private reporting/withdrawal route. That operational gate does not widen or block offline/local compatibility use.
+- Existing `CommunitySetupTests`, package/catalog/trust/result tests, plus the new support/submission/share-model tests cover the declared executable-instruction, external-resource, tamper/staleness, privacy, duplicate/idempotency, malformed-response, and offline failure boundaries.
+
 ---
 
 ## P9-DOC-01 — Community testing and setup contribution documentation
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -485,11 +506,17 @@ Explain how users can help expand compatibility without needing the maintainer t
 
 A new contributor can produce a valid privacy-safe result/setup contribution using only public documentation and the conformance tools.
 
+**Implementation evidence — 2026-08-29**
+
+- `docs/COMMUNITY_COMPATIBILITY_CONTRIBUTING.md` documents the local-first result flow, measured-result/Untested semantics, evidence-not-certification aggregation, automatic versus guided manual TwoPlayerSetup paths, exact privacy preview, Protected / Experimental warnings, offline operation, provenance/licensing, and the no-script/binary/DRM/anti-cheat/provider-bypass boundary.
+- The guide includes the real conformance commands `hydraseat_community_validate result <compatibility-result.json>` and `hydraseat_community_validate setup-package <portable-setup.package>`, explains canonical output and local remapping/revalidation, and links the ecosystem threat model/reporting gate.
+- The root README now links both the contributor guide and threat model from the local-first compatibility section. No live public endpoint/account is required to follow the documented offline validation workflow.
+
 ---
 
 ## P9-CLOSE-01 — Phase 9 closure
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -518,3 +545,14 @@ Verify that community compatibility can scale without official-certification the
 **Done when**
 
 HydraSeat can publish/update a privacy-safe compatibility/setup catalog from community evidence while every user can keep using the complete core product offline and without sharing data.
+
+**Automated closure review — 2026-08-29**
+
+- Local-first truth is preserved end to end: a compatibility result is validated/canonicalized locally before any preview/submission state, and transport failure/decline/success never mutates that technical evidence.
+- Sharing is explicit and preview-bound: the public result schema is redacted/versioned/bounded, support export and community submission approval are both tied to the exact preview bytes, and there is no default background telemetry or hidden automatic retry.
+- Aggregation keeps Success/Failure/Untested and materially relevant cohorts separate, retains Protected / Experimental classification, and never acts as local launch authority or a certification guarantee.
+- Community TwoPlayerSetup/package/catalog data is data-only, trust/hash/provenance/revision checked, locally remapped/revalidated, available from a trusted offline cache, and unable to silently supply executable/script/download/bypass authority.
+- Broad binary backend/provider/Seat-shell extension SDK packets remain explicitly `DEFERRED`; the v1 ecosystem does not need them for result/setup sharing.
+- Contributor conformance/docs and the ecosystem threat model cover privacy, malformed/tampered/stale data, unsafe instructions/external resources, duplicate/idempotent submission, outage, reporting, and withdrawal semantics.
+- Focused Windows x64 MinGW Phase 9 regression passes **7/7** (`CompatibilityResult`, aggregation, community package/setup, compatibility catalog, submission, share model), and `hydraseat_community_validate` builds. This is controlled automated closure evidence only.
+- `VALIDATED` is intentionally not claimed: no production public submission endpoint, service-side abuse controls, private reporting/withdrawal route, deployment retention/privacy terms, or real community publication campaign has been exercised. Core/local/offline operation remains independent of those deployment choices.

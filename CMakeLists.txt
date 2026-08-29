@@ -852,6 +852,64 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P8-DIAG-01 privacy-redacted support bundle. It accepts only already-bounded
+# public/aggregate evidence and binds export approval to the exact preview bytes.
+add_library(hydra_support_bundle STATIC
+    src/support_bundle.cpp
+    include/hydra/support_bundle.hpp
+)
+target_link_libraries(hydra_support_bundle PUBLIC
+    hydra_compatibility_result hydra_crash_journal hydra_session_metrics)
+if(MSVC)
+    target_compile_options(hydra_support_bundle PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_support_bundle PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P8-BOOT-01 user-approved startup policy and transactional fixed-target registration.
+add_library(hydra_startup_policy STATIC
+    src/startup_policy.cpp
+    include/hydra/startup_policy.hpp
+)
+if(MSVC)
+    target_compile_options(hydra_startup_policy PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_startup_policy PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P8-PRIV-01 narrow typed elevated broker core. The unelevated caller can name
+# only compiled resources/operations; broker-owned trust plus capture/verify/rollback
+# prevent this boundary from becoming arbitrary administrator execution.
+add_library(hydra_privilege_broker STATIC
+    src/privilege_broker.cpp
+    include/hydra/privilege_broker.hpp
+)
+target_link_libraries(hydra_privilege_broker PUBLIC hydra_artifact_trust)
+if(MSVC)
+    target_compile_options(hydra_privilege_broker PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_privilege_broker PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P9-RPC-01 explicit opt-in community submission boundary. Local evidence is
+# canonicalized first; transport invocation requires approval of the exact JSON preview.
+add_library(hydra_community_submission STATIC
+    src/community_submission.cpp
+    src/compatibility_share_model.cpp
+    include/hydra/community_submission.hpp
+    include/hydra/compatibility_share_model.hpp
+)
+target_link_libraries(hydra_community_submission PUBLIC hydra_compatibility_result)
+if(MSVC)
+    target_compile_options(hydra_community_submission PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_community_submission PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P8-RESET-01 bounded runtime reset registration and verified emergency-reset
 # execution. The crash journal remains evidence-only; reset authority is the
 # journal-correlated exact watchdog manifest plus exact runtime-owner identity.
@@ -2319,6 +2377,61 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME CatalogCacheTests COMMAND catalog_cache_tests)
 set_tests_properties(CatalogCacheTests PROPERTIES LABELS "P8-DATA-01")
+
+add_executable(support_bundle_tests tests/test_support_bundle.cpp)
+target_link_libraries(support_bundle_tests PRIVATE hydra_support_bundle)
+if(MSVC)
+    target_compile_options(support_bundle_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(support_bundle_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SupportBundleTests COMMAND support_bundle_tests)
+set_tests_properties(SupportBundleTests PROPERTIES LABELS "P8-DIAG-01")
+
+add_executable(privilege_broker_tests tests/test_privilege_broker.cpp)
+target_link_libraries(privilege_broker_tests PRIVATE hydra_privilege_broker)
+if(MSVC)
+    target_compile_options(privilege_broker_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(privilege_broker_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME PrivilegeBrokerTests COMMAND privilege_broker_tests)
+set_tests_properties(PrivilegeBrokerTests PROPERTIES LABELS "P8-PRIV-01")
+
+add_executable(startup_policy_tests tests/test_startup_policy.cpp)
+target_link_libraries(startup_policy_tests PRIVATE hydra_startup_policy)
+if(MSVC)
+    target_compile_options(startup_policy_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(startup_policy_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME StartupPolicyTests COMMAND startup_policy_tests)
+set_tests_properties(StartupPolicyTests PROPERTIES LABELS "P8-BOOT-01")
+
+add_executable(community_submission_tests tests/test_community_submission.cpp)
+target_link_libraries(community_submission_tests PRIVATE hydra_community_submission)
+if(MSVC)
+    target_compile_options(community_submission_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(community_submission_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME CommunitySubmissionTests COMMAND community_submission_tests)
+set_tests_properties(CommunitySubmissionTests PROPERTIES LABELS "P9-RPC-01")
+
+add_executable(compatibility_share_model_tests tests/test_compatibility_share_model.cpp)
+target_link_libraries(compatibility_share_model_tests PRIVATE hydra_community_submission)
+if(MSVC)
+    target_compile_options(compatibility_share_model_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(compatibility_share_model_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME CompatibilityShareModelTests COMMAND compatibility_share_model_tests)
+set_tests_properties(CompatibilityShareModelTests PROPERTIES LABELS "P9-DIAG-01")
 
 # P3-HW-01 acceptance tooling is CI-tested without claiming physical acceptance.
 # Python parses bounded synthetic evidence; Windows additionally checks that the

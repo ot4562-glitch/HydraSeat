@@ -116,7 +116,7 @@ Interrupted/corrupt/non-clean startup fixtures reliably prevent unsafe automatic
 
 ## P8-PRIV-01 — Narrow elevated privilege broker
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -148,11 +148,19 @@ Keep normal `HydraSeat.exe`, Seat Launcher, game/provider discovery, and ordinar
 
 Privilege-boundary tests prove normal flows stay standard-user and malformed/out-of-scope broker requests cannot be converted into general administrator execution.
 
+**Implementation evidence — 2026-08-29**
+
+- `PrivilegeBrokerSession` exposes only fixed `RuntimeService`, `WatchdogService`, and `RecoveryTool` resources plus typed Install/Repair/Remove operations. Requests have no executable path, registry path, device path, command line, shell, PowerShell, or general process-execution field.
+- The native IPC boundary must supply the authenticated caller SID, broker-owner SID, channel nonce, and broker elevation state separately from request payload. Wrong-user/wrong-channel/non-elevated/stale-sequence requests fail before mutation capture.
+- Install/repair binds each resource to one compiled artifact identity/capability and reuses broker-owned P8 artifact trust policy. Tampered/wrong-publisher/wrong-capability/substituted artifacts fail before the executor is called; remove cannot smuggle artifact metadata.
+- Every authorized mutation is capture-first and verify-after-apply. Apply/verification failure runs rollback + rollback verification; failed recovery is explicit `RecoveryRequired` rather than false success. Focused strict MinGW `privilege_broker_tests` pass.
+- This is the least-privilege broker core only. Real UAC/elevated IPC, SCM/installer mutation, clean-machine repair/uninstall, and standard-user/manual acceptance remain later P8-INST/BOOT/manual evidence, so `VALIDATED` is not claimed.
+
 ---
 
 ## P8-BOOT-01 — User-approved background startup and lifecycle
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -180,6 +188,13 @@ Support explicit runtime startup modes without surprising system-wide mutation.
 **Done when**
 
 Logon/reboot tests prove all three user-selected modes, safe fallback, disable/uninstall cleanup, and no duplicate host processes.
+
+**Implementation evidence — 2026-08-29**
+
+- `StartupMode` is limited to Manual, BackgroundIdle, and AutoActivateValidatedSession. The startup config contains only mode/revision/approval and an optional validated-session identity; it has no executable path, command line, registry path, task XML, or shell field.
+- Auto activation requires explicit approved registration plus an exact validated session and clean journal/safe-mode/topology/capability/recovery preflight. Any unsafe/stale condition falls back to BackgroundIdle; an existing Host yields `ReuseExistingHost` instead of spawning a duplicate.
+- `updateRegistration` mutates a fixed native registration target transactionally: read prior state, write/remove, verify, and restore prior state on mutation/verification failure. Manual mode removes registration for disable/uninstall cleanup.
+- Focused strict MinGW `startup_policy_tests` pass. This is policy/registration-core evidence only; real Windows logon/reboot/task/startup integration and duplicate-process observation remain manual/native acceptance, so `VALIDATED` is not claimed.
 
 ---
 
@@ -373,7 +388,7 @@ Network-off, stale-cache, corrupt/tampered download, update-disabled, first-down
 
 ## P8-DIAG-01 — Redacted diagnostic/support bundle
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -397,6 +412,13 @@ Produce useful issue evidence while enforcing the privacy rules needed for later
 **Done when**
 
 Deterministic redaction tests and a human preview/export flow show exactly what will be shared, with sensitive fixtures removed or blocked.
+
+**Implementation evidence — 2026-08-29**
+
+- `SupportBundle` accepts only bounded public environment tokens, Phase 5 aggregate session metrics, a reduced crash-journal phase/generation/count summary, the already-redacted public compatibility result, and stable Seat event codes. Raw journal identities, arbitrary diagnostic text, Player names, personal paths, credentials/authentication material, typed text, unrelated process data, and device serials have no default bundle field.
+- Mandatory redaction flags are validated again at encode time. Invalid/malformed environment/event/compatibility/recovery/metrics inputs leave caller output unchanged; event ordering canonicalizes deterministically.
+- `SupportExportSession` produces both a human summary and the exact JSON bytes, refuses export before explicit approval, and binds approval to those exact bytes so a changed payload must be previewed again.
+- Strict Windows x64 MinGW `support_bundle_tests` builds and passes. This is automated privacy/redaction evidence only; it does not imply public support service deployment.
 
 ---
 

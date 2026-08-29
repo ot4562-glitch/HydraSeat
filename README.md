@@ -334,6 +334,8 @@ Results are stored **locally by default**.
 
 Community submission is explicit opt-in and should show the user the redacted JSON before upload. Default submissions must avoid credentials, passwords, tokens, raw typed text, Player names, personal paths, and unnecessary stable device identifiers.
 
+Contributor workflow and security boundaries are documented in `docs/COMMUNITY_COMPATIBILITY_CONTRIBUTING.md` and `docs/security/COMMUNITY_ECOSYSTEM_THREAT_MODEL.md`.
+
 ---
 
 ## Offline first
