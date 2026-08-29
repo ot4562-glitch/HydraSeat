@@ -3,8 +3,8 @@
 ## Current program state
 
 - Current validation phase: **Phase 3 — Input Compatibility & Isolation**
-- Current default packet: **P9-SDK-01 — Community compatibility result schema and version policy** (next data-first automated frontier under D-051)
-- Current default packet state: **ACTIONABLE FOR AUTOMATED IMPLEMENTATION under D-051, while formal state remains BLOCKED by deferred Phase 5/8 real-game/install/soak evidence** — Phase 7's non-deferred automated Seat Launcher packets are now `CODE_COMPLETE`; physical/mixed-DPI/real-game/Explorer acceptance remains pending and is not promoted to validation.
+- Current default packet: **P8-DIAG-01 — Redacted diagnostic/support bundle** (next automation frontier needed to unlock optional P9 submission state under D-051)
+- Current default packet state: **ACTIONABLE FOR AUTOMATED IMPLEMENTATION under D-051** — Phase 7's non-deferred Seat Launcher work plus P8 trust/offline-cache and the P9 data-first SDK/aggregation/package/setup/catalog/conformance path are `CODE_COMPLETE`; physical, real-game, installer/signing, mixed-DPI, Explorer, and live community transport evidence remains pending and is not promoted to validation.
 - Deferred validation queue starts with **P3-HW-01** — tooling/CI are complete; real two-keyboard/two-pointing-device physical Gate A/B/C evidence is still required before physical isolation/cloaking claims and Phase 3 closure.
 - Product contract: **HydraSeat v1 is a two-Seat, game-first local Windows gaming product** for households that want to use the spare performance of one capable PC instead of buying a second complete desktop solely for simultaneous local gaming. See `docs/PRODUCT_V1.md`.
 - v1 does not pursue N-Seat generalization, a general independent Windows desktop per Seat, or a maintainer-created official game-certification badge.
@@ -209,6 +209,19 @@ Remaining evidence:
 
 Focused Windows Phase 6 batch check on 2026-08-29: **15/15 P6-labeled tests passed**, including profile schema/migration/catalog, provider contract, Steam fixture + native read-only smoke, custom EXE fixture + native read-only smoke, provider-aware plan, preflight, game-first UI model, setup editor, portable package, cross-packet regression, and CLI. Complete MSVC Release x64 and Win32/x86 suites each pass 98/98 sequentially. This is automated/read-only/controlled evidence only; it does not replace real-game/provider-policy/physical acceptance.
 
+## Phase 8/9 data-first automated frontier
+
+| Packet | State | Evidence / remaining gate |
+| --- | --- | --- |
+| P8-TRUST-01 | CODE_COMPLETE | Data-only vs executable/driver/helper trust classes; exact hash/version/architecture, source/license/capability, signature/development exception, recovery-plan and redistribution policy; optional absence non-fatal; focused trust tests pass; production signing remains later |
+| P8-DATA-01 | CODE_COMPLETE | Pure offline catalog-cache lifecycle preserves last valid cache across network-off/disabled/source-missing/tamper/stale failures, uses P8 trust for first/update, explicit rollback; focused cache tests pass |
+| P9-SDK-01 | CODE_COMPLETE | Bounded public result v1, strict canonical JSON/future/unknown/privacy checks, null-vs-zero semantics, setup revision, mandatory redaction/provenance, Phase 5 metrics adapter; focused tests pass; no community validation claim |
+| P9-CAP-01 | CODE_COMPLETE | Exact environment/setup/backend/freshness cohorts with Success/Failure/Untested and per-subresult denominators; deterministic order, duplicate/future rejection, Protected segregation; focused aggregation tests pass |
+| P9-PKG-01 | CODE_COMPLETE | Data-only manifest entries (result/setup/catalog), exact package/member hashes, schema selectors, trust/provenance/license, monotonic update and transactional rollback; focused package tests pass |
+| P9-PROFILE-01 | CODE_COMPLETE | Community setup reuses P6 portable remap/validation/plan; local Protected approval remains authoritative; shell/bypass/external-resource instruction markers rejected; focused setup tests pass |
+| P9-REG-01 | CODE_COMPLETE | Trusted local snapshot requires manifest-declared payload kind/selector/package identity and renders current/stale cohorts + setup candidates fully offline; unknown game remains untested/empty; focused catalog tests pass |
+| P9-TEST-01 | CODE_COMPLETE | `hydraseat_community_validate` strict offline result/setup-package canonicalization workflow plus underlying malformed/private/tamper/cohort/local-preflight fixtures; executable builds under strict MinGW warnings |
+
 ## Manual/physical gates still pending
 
 | Gate | State | Required evidence |
@@ -225,7 +238,7 @@ Focused Windows Phase 6 batch check on 2026-08-29: **15/15 P6-labeled tests pass
 
 ## Current next action
 
-Under D-051, the non-deferred automated Phase 7 Seat Launcher path is now `CODE_COMPLETE`: shell/launch composition, Seat-local notifications, bounded navigation without global cursor mutation, focused-window hotkeys, en-US/ko-KR/zh-CN localization, DPI/input/layout readiness checks, and disposable UI crash/restart behavior all have focused controlled evidence. The #34 x86 graceful-stop race was also hardened by retrying exact-identity WM_CLOSE discovery during the bounded graceful timeout instead of enumerating windows only once. Physical input/display/no-bleed, mixed-DPI/screen-reader, Explorer coexistence, real-game/provider, and phase-close acceptance remain pending. The next data-first automated frontier is **P9-SDK-01**, which may be implemented under D-051 but must remain at most `CODE_COMPLETE` while its Phase 5/8 real-game/install/soak prerequisites are unvalidated.
+Under D-051, the non-deferred automated Phase 7 Seat Launcher path plus the first P8/P9 data-first ecosystem slice are now `CODE_COMPLETE`: artifact trust and offline cache, public compatibility-result schema, deterministic cohort aggregation, data-only package lifecycle, community setup validation/remap, offline local catalog query, and contributor conformance CLI all have focused controlled evidence. The #34 x86 graceful-stop race was hardened by bounded repeated exact-identity WM_CLOSE discovery, and the #39 x64/x86 CI link failure was traced to `hydra_tests` missing the new UI-localization link dependency and fixed in CMake. Physical/real-game/install/signing/Explorer/mixed-DPI/live-community transport gates remain pending. The next automation frontier is **P8-DIAG-01**, which unlocks the explicit-preview/opt-in P9 submission state without widening core offline operation.
 
 Deferred validation queue: P3-HW-01 Gate A/B/C remains physically unvalidated and still blocks `PhysicalDeviceCloaking`/physical zero-bleed claims, Phase 3 closure, and release validation. It no longer blocks unrelated automated coding. Later phases may be implemented against truthful controlled/fake evidence and remain `CODE_COMPLETE` until their manual gates are eventually run.
 

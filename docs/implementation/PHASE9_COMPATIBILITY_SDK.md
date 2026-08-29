@@ -37,7 +37,7 @@ Phase 9 closes only when:
 
 ## P9-SDK-01 — Community compatibility result schema and version policy
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -76,11 +76,17 @@ Freeze the first public **data** boundary for local/community compatibility evid
 
 Valid/malformed/future/max-size/privacy fixtures and deterministic canonicalization tests pass, with compatibility to the local Phase 5/8 evidence sources.
 
+**Implementation evidence — 2026-08-29**
+
+- `CompatibilityResult` v1 is a bounded data-only public result containing privacy-bucketed timestamp, exact Game/provider/version, HydraSeat/Windows/architecture, scenario/protection/setup revision, backend versions, typed outcomes, optional measurements, origin, mandatory redaction metadata, and provenance. It has no certification flag, credentials, Player-name, raw typed-input, path, script, or executable fields.
+- Strict JSON decode is capped at 256 KiB/depth 32, rejects duplicate/unknown/future required semantics transactionally, and canonicalizes backend ordering. `null` means not measured while numeric zero remains a measured zero.
+- `buildCompatibilityResultFromSessionMetrics` converts the existing privacy-safe Phase 5 evidence into this boundary without copying raw input data. Focused `CompatibilityResultTests` pass. P5/P8 real-game/install/soak dependencies remain deferred, so this is automated `CODE_COMPLETE`, not validated community evidence.
+
 ---
 
 ## P9-CAP-01 — Evidence dimensions, grouping, and confidence policy
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -115,11 +121,17 @@ Define which environment differences require separate compatibility statistics s
 
 Deterministic fixtures prove grouping/version/staleness rules and the same raw dataset always produces the same displayed cohort statistics.
 
+**Implementation evidence — 2026-08-29**
+
+- Cohorts segment exact Game/provider/app/version, HydraSeat version, Windows class, architecture, scenario/protection, material setup revision, backend identities/versions, and explicit current/stale freshness. Materially different environments never merge.
+- Session `Success`, `Failure`, and `Untested` are separate counts, as are each sub-result's `NotMeasured`/`Pass`/`Fail`/`Unsupported` denominators. Duplicate result IDs and future timestamps fail closed under a deterministic reference-month policy.
+- Protected technical success remains in a Protected/Experimental cohort. Focused `CompatibilityAggregationTests` pass and raw input order does not change statistics.
+
 ---
 
 ## P9-PKG-01 — Community setup/catalog package manifest and lifecycle
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -152,6 +164,12 @@ Package compatibility metadata and TwoPlayerSetup entries as bounded data artifa
 **Done when**
 
 Create/import/update/rollback/tamper fixtures pass and a package can be mirrored as a static release/catalog artifact.
+
+**Implementation evidence — 2026-08-29**
+
+- `CommunityPackageManifest` v1 is data-only and can declare only compatibility results, portable TwoPlayerSetup data, or catalog snapshots with exact entry hashes/selectors/schema versions, source/license metadata, profile-schema range, and monotonic package revision. There is no executable/script entry kind or output-path field.
+- `CommunityPackageStore` requires P8 data-artifact trust, exact package/entry hash observations, deterministic declared-entry matching, and transactional install/update/rollback history. Tamper, missing/extra member, incompatible schema, untrusted provenance, and stale revision leave the last valid package untouched.
+- Focused `CommunityPackageTests` pass. Static hosting/mirroring is intentionally deployment-independent and not required for offline core operation.
 
 ---
 
@@ -233,7 +251,7 @@ Deferred beyond the initial v1 ecosystem.
 
 ## P9-PROFILE-01 — Community TwoPlayerSetup format and validator
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -266,6 +284,12 @@ Make lawful same-game setup knowledge easy to share and review without turning c
 **Done when**
 
 Community setup fixtures can be validated/imported/remapped and compiled locally while malicious/unsafe/tampered entries are rejected.
+
+**Implementation evidence — 2026-08-29**
+
+- `CommunitySetupEntry` wraps the existing P6 portable SetupPackage with exact Game/provider/app/version selector, package/source/license/author provenance, protection marker, bounded limitations, and evidence references. The portable payload provenance must match the enclosing package revision.
+- Import still requires explicit local path remapping and reuses P6 `portable::importSetup`, setup validation, and immutable plan/preflight. Community popularity/evidence cannot supply or override local runtime requirements or Protected/Experimental approval.
+- Passive community text rejects executable/protection-bypass/external-resource instruction markers such as shell commands, DLL injection, DRM/anti-cheat bypass, and URLs. Focused `CommunitySetupTests` pass.
 
 ---
 
@@ -331,7 +355,7 @@ A user can run a local compatibility check, inspect results, preview redaction, 
 
 ## P9-REG-01 — Local catalog and optional remote/static catalog contract
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -356,11 +380,17 @@ Define how compatibility/setup data is cached, updated, and rendered without a m
 
 Catalog install/update/offline/stale/tamper/rollback tests pass and the UI can show evidence/sample statistics with networking completely disabled.
 
+**Implementation evidence — 2026-08-29**
+
+- `LocalCatalogSnapshot` accepts only decoded compatibility/setup payloads declared by an already trusted `CommunityPackageManifest`; payload kind, ID, selector, package identity/revision, and underlying schemas are revalidated before replacing local catalog state.
+- `queryGameEvidence` runs entirely from the local snapshot and deterministic aggregation policy, returning current/stale sample counts, cohort sub-results, and matching setup candidates with no network dependency. Unknown games return an explicit empty/untested view rather than a compatibility failure.
+- P8 `CatalogCacheModel` separately preserves the last trusted local package across offline/disabled/tampered refreshes. Focused `CompatibilityCatalogTests` and `CatalogCacheTests` pass.
+
 ---
 
 ## P9-TEST-01 — Community contribution conformance kit
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -385,6 +415,12 @@ Let contributors validate compatibility results and TwoPlayerSetup packages befo
 **Done when**
 
 CI/community contributors can run one documented validation workflow and malformed/private/unsafe contribution fixtures fail with precise reasons.
+
+**Implementation evidence — 2026-08-29**
+
+- `hydraseat_community_validate` provides one bounded offline contributor workflow: `result <file>` strict-decodes a public compatibility result and prints its canonical privacy-safe JSON; `setup-package <file>` strict-decodes/revalidates a portable setup package and prints its canonical representation.
+- The CLI inherits exact schema/version/size/privacy/provenance/path-placeholder checks from P9-SDK/P6-IMPORT. P9 package/setup/catalog tests additionally cover tamper, unsafe instructions/external resources, selector mismatch, stale revisions, cohort sanity, and local preflight reuse with precise typed diagnostics.
+- The conformance executable builds under strict Windows x64 MinGW warnings. Public contribution documentation and security review remain later packets; no network submission is implied.
 
 ---
 

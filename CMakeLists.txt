@@ -693,6 +693,81 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P9-SDK-01 public data-only compatibility result boundary. It canonicalizes a
+# bounded privacy-safe JSON schema and can derive it from Phase 5 session metrics.
+add_library(hydra_compatibility_result STATIC
+    src/compatibility_result.cpp
+    src/compatibility_aggregation.cpp
+    include/hydra/compatibility_result.hpp
+    include/hydra/compatibility_aggregation.hpp
+)
+target_link_libraries(hydra_compatibility_result PUBLIC hydra_session_metrics)
+if(MSVC)
+    target_compile_options(hydra_compatibility_result PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_compatibility_result PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P8-TRUST-01 pure optional artifact/data trust evaluator. It separates data-only
+# hashes/provenance/license policy from executable architecture/signature/recovery policy.
+add_library(hydra_artifact_trust STATIC
+    src/artifact_trust.cpp
+    include/hydra/artifact_trust.hpp
+)
+if(MSVC)
+    target_compile_options(hydra_artifact_trust PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_artifact_trust PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P9-PKG-01 data-only community package manifest/lifecycle. Package entries are
+# compatibility results, TwoPlayerSetup data, or catalog snapshots only.
+add_library(hydra_community_package STATIC
+    src/community_package.cpp
+    src/community_setup.cpp
+    src/compatibility_catalog.cpp
+    include/hydra/community_package.hpp
+    include/hydra/community_setup.hpp
+    include/hydra/compatibility_catalog.hpp
+)
+target_link_libraries(hydra_community_package PUBLIC
+    hydra_artifact_trust hydra_compatibility_result hydra_setup_package
+    hydra_provider_launch_plan)
+if(MSVC)
+    target_compile_options(hydra_community_package PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_community_package PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P8-DATA-01 pure optional compatibility/setup catalog cache lifecycle. Network/file
+# code supplies observations; offline/disabled/tampered refreshes preserve local state.
+add_library(hydra_catalog_cache STATIC
+    src/catalog_cache.cpp
+    include/hydra/catalog_cache.hpp
+)
+target_link_libraries(hydra_catalog_cache PUBLIC hydra_artifact_trust)
+if(MSVC)
+    target_compile_options(hydra_catalog_cache PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_catalog_cache PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P9-TEST-01 contributor-facing conformance CLI. It validates/canonicalizes the
+# public compatibility result or portable setup package without networking.
+add_executable(hydraseat_community_validate src/community_validate_main.cpp)
+target_link_libraries(hydraseat_community_validate PRIVATE
+    hydra_compatibility_result hydra_setup_package)
+if(MSVC)
+    target_compile_options(hydraseat_community_validate PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydraseat_community_validate PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P8-WATCH-01 versioned lease/rollback protocol and idempotent rollback registry.
 # The portable core contains no arbitrary command execution or persistent-state I/O.
 add_library(hydra_watchdog_core STATIC
@@ -1256,7 +1331,8 @@ endif()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(hydra_tests PRIVATE
     hydra_hardware hydra_host_transport hydra_control_surface hydra_session_control
-    hydra_launcher_ui_model hydra_steam_provider hydra_custom_executable_provider)
+    hydra_launcher_ui_model hydra_steam_provider hydra_custom_executable_provider
+    hydra_ui_localization)
 if(WIN32)
     target_link_libraries(hydra_tests PRIVATE ${WIN32_LIBS})
 endif()
@@ -2164,6 +2240,85 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME ProfileCliTests COMMAND profile_cli_tests)
 set_tests_properties(ProfileCliTests PROPERTIES LABELS "P6-CLI-01")
+
+# P9-SDK-01 public compatibility-result schema/canonicalization, privacy,
+# malformed/future/bounds, and Phase 5 session-metrics adapter fixtures.
+add_executable(compatibility_result_tests tests/test_compatibility_result.cpp)
+target_link_libraries(compatibility_result_tests PRIVATE hydra_compatibility_result)
+if(MSVC)
+    target_compile_options(compatibility_result_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(compatibility_result_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME CompatibilityResultTests COMMAND compatibility_result_tests)
+set_tests_properties(CompatibilityResultTests PROPERTIES LABELS "P9-SDK-01")
+
+add_executable(compatibility_aggregation_tests tests/test_compatibility_aggregation.cpp)
+target_link_libraries(compatibility_aggregation_tests PRIVATE hydra_compatibility_result)
+if(MSVC)
+    target_compile_options(compatibility_aggregation_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(compatibility_aggregation_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME CompatibilityAggregationTests COMMAND compatibility_aggregation_tests)
+set_tests_properties(CompatibilityAggregationTests PROPERTIES LABELS "P9-CAP-01")
+
+add_executable(artifact_trust_tests tests/test_artifact_trust.cpp)
+target_link_libraries(artifact_trust_tests PRIVATE hydra_artifact_trust)
+if(MSVC)
+    target_compile_options(artifact_trust_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(artifact_trust_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME ArtifactTrustTests COMMAND artifact_trust_tests)
+set_tests_properties(ArtifactTrustTests PROPERTIES LABELS "P8-TRUST-01")
+
+add_executable(community_package_tests tests/test_community_package.cpp)
+target_link_libraries(community_package_tests PRIVATE hydra_community_package)
+if(MSVC)
+    target_compile_options(community_package_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(community_package_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME CommunityPackageTests COMMAND community_package_tests)
+set_tests_properties(CommunityPackageTests PROPERTIES LABELS "P9-PKG-01")
+
+add_executable(community_setup_tests tests/test_community_setup.cpp)
+target_link_libraries(community_setup_tests PRIVATE hydra_community_package)
+if(MSVC)
+    target_compile_options(community_setup_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(community_setup_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME CommunitySetupTests COMMAND community_setup_tests)
+set_tests_properties(CommunitySetupTests PROPERTIES LABELS "P9-PROFILE-01")
+
+add_executable(compatibility_catalog_tests tests/test_compatibility_catalog.cpp)
+target_link_libraries(compatibility_catalog_tests PRIVATE hydra_community_package)
+if(MSVC)
+    target_compile_options(compatibility_catalog_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(compatibility_catalog_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME CompatibilityCatalogTests COMMAND compatibility_catalog_tests)
+set_tests_properties(CompatibilityCatalogTests PROPERTIES LABELS "P9-REG-01")
+
+add_executable(catalog_cache_tests tests/test_catalog_cache.cpp)
+target_link_libraries(catalog_cache_tests PRIVATE hydra_catalog_cache)
+if(MSVC)
+    target_compile_options(catalog_cache_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(catalog_cache_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME CatalogCacheTests COMMAND catalog_cache_tests)
+set_tests_properties(CatalogCacheTests PROPERTIES LABELS "P8-DATA-01")
 
 # P3-HW-01 acceptance tooling is CI-tested without claiming physical acceptance.
 # Python parses bounded synthetic evidence; Windows additionally checks that the

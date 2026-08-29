@@ -185,7 +185,7 @@ Logon/reboot tests prove all three user-selected modes, safe fallback, disable/u
 
 ## P8-TRUST-01 — Optional component and data artifact trust policy
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -209,6 +209,12 @@ Data-only compatibility/setup catalogs and executable components remain differen
 **Done when**
 
 Tampered, unknown-version, wrong-architecture, untrusted, and policy-disallowed artifacts are rejected deterministically while core physical-display/offline operation remains functional with optional components absent.
+
+**Implementation evidence — 2026-08-29**
+
+- `hydra_artifact_trust` separates data-only catalogs/setup packages from executable/driver/provider-helper artifacts. Data uses exact hash/provenance/license/capability policy; executable artifacts additionally require exact architecture, trusted signing (or a narrow explicit development exception), and a recovery plan for install/restart paths.
+- Data-only manifests cannot acquire install/restart/development flags or executable capability, and optional artifact absence is explicitly non-fatal to offline/core operation. Tampered hash, stale version, wrong architecture, unknown publisher, unapproved source/capability, missing redistribution permission, and missing recovery policy fail closed.
+- Focused `ArtifactTrustTests` pass on the local Windows x64 MinGW build. Production signing-key handling and installer/reboot acceptance remain later/manual gates.
 
 ---
 
@@ -324,7 +330,7 @@ Upgrade, downgrade/rollback fixture, interrupted/tampered update, active-session
 
 ## P8-DATA-01 — Optional compatibility/setup catalog refresh and offline cache
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -356,6 +362,12 @@ Keep small, frequently changing compatibility/setup knowledge separate from Hydr
 **Done when**
 
 Network-off, stale-cache, corrupt/tampered download, update-disabled, first-download, and rollback tests prove local functionality remains available independently from the catalog service/source.
+
+**Implementation evidence — 2026-08-29**
+
+- `CatalogCacheModel` is a no-I/O state machine for optional data refresh. A loader/network layer may supply an observed artifact, but offline, refresh-disabled, download-disabled, source-missing, tampered, stale, or failed refresh paths never replace the last valid local cache.
+- First install/update uses the P8 data-only trust class, exact expected/observed SHA-256, source/license/capability policy, and monotonic revision. Explicit rollback restores the previous trusted cache; no cache + network-off remains a valid non-fatal core state.
+- Focused `CatalogCacheTests` pass. Real network transport/publication infrastructure is not required by this packet and remains separate from core offline operation.
 
 ---
 
