@@ -81,6 +81,7 @@ private:
     void startSession();
     void stopSessionAndReturnToWindows();
     void beginReconfigure();
+    void openGameLibrary();
     bool applyCurrentProfileToHost(bool showErrors);
 
     HWND m_hwnd{nullptr};
@@ -99,6 +100,7 @@ private:
     HWND m_startSessionBtn{nullptr};
     HWND m_stopSessionBtn{nullptr};
     HWND m_reconfigureBtn{nullptr};
+    HWND m_gameLibraryBtn{nullptr};
 
     std::vector<std::unique_ptr<VisualDeviceTile>> m_deviceTiles;
     std::unordered_map<uintptr_t, size_t> m_handleToTileIndex;

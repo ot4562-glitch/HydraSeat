@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace hydra::plan {
@@ -29,6 +30,18 @@ struct GameRuntimeRequirement {
 struct ProviderAdapterBinding {
     std::string providerId;
     provider::LauncherProviderAdapter* adapter{nullptr};
+    // Empty binds one provider-wide adapter. A value scopes the adapter to one
+    // exact application, allowing multiple independent manual EXE definitions.
+    std::optional<std::string> providerAppId;
+
+    ProviderAdapterBinding() = default;
+    ProviderAdapterBinding(
+        std::string provider,
+        provider::LauncherProviderAdapter* providerAdapter,
+        std::optional<std::string> application = std::nullopt)
+        : providerId(std::move(provider)),
+          adapter(providerAdapter),
+          providerAppId(std::move(application)) {}
 };
 
 struct SeatProviderLaunchPlan {

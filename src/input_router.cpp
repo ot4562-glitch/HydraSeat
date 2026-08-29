@@ -448,7 +448,7 @@ bool InputRouter::registerRawInputDevices(bool backgroundSink) {
     devices[1] = {HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_MOUSE,
                   flags, m_hwnd};
     devices[2] = {HID_USAGE_PAGE_DIGITIZER,
-                  HID_USAGE_DIGITIZER_TOUCH_PAD, flags, m_hwnd};
+                  hid::kDigitizerTouchpadUsage, flags, m_hwnd};
 
     if (!RegisterRawInputDevices(devices, 3,
                                  sizeof(RAWINPUTDEVICE))) {
@@ -582,7 +582,7 @@ void InputRouter::stop() {
         devices[1] = {HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_MOUSE,
                       RIDEV_REMOVE, nullptr};
         devices[2] = {HID_USAGE_PAGE_DIGITIZER,
-                      HID_USAGE_DIGITIZER_TOUCH_PAD,
+                      hid::kDigitizerTouchpadUsage,
                       RIDEV_REMOVE, nullptr};
         if (!RegisterRawInputDevices(devices, 3,
                                      sizeof(RAWINPUTDEVICE))) {

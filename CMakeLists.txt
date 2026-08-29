@@ -54,7 +54,7 @@ endif()
 # Windows system libraries for Win32 Raw Input, SetupAPI, DXGI, and Comctl32 GUI
 if(WIN32)
     add_compile_definitions(_UNICODE UNICODE WIN32_LEAN_AND_MEAN)
-    set(WIN32_LIBS User32.lib Cfgmgr32.lib Dxgi.lib Setupapi.lib Hid.lib Xinput.lib Comctl32.lib)
+    set(WIN32_LIBS User32.lib Cfgmgr32.lib Dxgi.lib Setupapi.lib Hid.lib Xinput.lib Comctl32.lib Comdlg32.lib)
 endif()
 
 # Find Qt6 components if available
@@ -91,6 +91,9 @@ set(HYDRA_SOURCES
     src/gui_win32.cpp
     ${UI_SOURCES}
 )
+if(WIN32)
+    list(APPEND HYDRA_SOURCES src/launcher_win32.cpp)
+endif()
 
 set(HYDRA_HARDWARE_HEADERS
     include/hydra/hardware_detector.hpp
@@ -599,6 +602,61 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+# P7-I18N-01 stable UI-string catalog. Protocol/schema/diagnostic identifiers stay
+# canonical English while presentation strings have en-US/ko-KR/zh-CN entries.
+add_library(hydra_ui_localization STATIC
+    src/ui_localization.cpp
+    src/ui_accessibility.cpp
+    include/hydra/ui_localization.hpp
+    include/hydra/ui_accessibility.hpp
+)
+if(MSVC)
+    target_compile_options(hydra_ui_localization PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_ui_localization PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P6-UI-01 Qt-independent product-flow model. UI state is exercised with fake
+# providers and immutable snapshots; the model performs no launch or mutation.
+add_library(hydra_launcher_ui_model STATIC
+    src/launcher_ui_model.cpp
+    include/hydra/launcher_ui_model.hpp
+)
+target_link_libraries(hydra_launcher_ui_model PUBLIC
+    hydra_plan_preflight hydra_two_player_setup_editor hydra_game_catalog)
+if(MSVC)
+    target_compile_options(hydra_launcher_ui_model PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_launcher_ui_model PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P7-SHELL-01 pure per-Seat presentation/policy state and its capability-
+# restricted host adapter. Neither surface exposes whole-machine commands.
+add_library(hydra_seat_launcher STATIC
+    src/seat_launcher_model.cpp
+    src/seat_host_client.cpp
+    src/seat_launch_flow.cpp
+    src/seat_notification_model.cpp
+    src/seat_hotkey_model.cpp
+    src/seat_navigation_model.cpp
+    include/hydra/seat_launcher_model.hpp
+    include/hydra/seat_host_client.hpp
+    include/hydra/seat_launch_flow.hpp
+    include/hydra/seat_notification_model.hpp
+    include/hydra/seat_hotkey_model.hpp
+    include/hydra/seat_navigation_model.hpp
+)
+target_link_libraries(hydra_seat_launcher PUBLIC
+    hydra_host_transport hydra_launcher_ui_model)
+if(MSVC)
+    target_compile_options(hydra_seat_launcher PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_seat_launcher PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
 # P6-IMPORT-01 versioned portable two-player setup package with provenance,
 # path-variable redaction, strict decode, explicit local remap, and revalidation.
 add_library(hydra_setup_package STATIC
@@ -893,7 +951,9 @@ endif()
 # Core Executable target (Windows GUI subsystem)
 add_executable(HydraSeat WIN32 src/main.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(HydraSeat PRIVATE
-    hydra_hardware hydra_host_transport hydra_control_surface hydra_session_control)
+    hydra_hardware hydra_host_transport hydra_control_surface hydra_session_control
+    hydra_launcher_ui_model hydra_steam_provider hydra_custom_executable_provider
+    hydra_ui_localization)
 
 if(WIN32)
     target_link_libraries(HydraSeat PRIVATE ${WIN32_LIBS})
@@ -920,6 +980,22 @@ if(MSVC)
     target_compile_options(hydra_hostctl PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(hydra_hostctl PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+
+# P7-SHELL-01 minimal per-Seat Windows launcher. It can issue only Seat-local
+# game lifecycle commands through hydra_seat_launcher and remains hidden until
+# its authoritative display group resolves against a fresh topology snapshot.
+add_executable(hydra_seat_ui WIN32 src/seat_ui_main.cpp)
+target_link_libraries(hydra_seat_ui PRIVATE
+    hydra_seat_launcher hydra_seat_display_layout hydra_ui_localization)
+if(WIN32)
+    target_link_libraries(hydra_seat_ui PRIVATE User32.lib Shell32.lib)
+endif()
+if(MSVC)
+    target_compile_options(hydra_seat_ui PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hydra_seat_ui PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
@@ -1179,7 +1255,8 @@ if(WIN32)
 endif()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(hydra_tests PRIVATE
-    hydra_hardware hydra_host_transport hydra_control_surface hydra_session_control)
+    hydra_hardware hydra_host_transport hydra_control_surface hydra_session_control
+    hydra_launcher_ui_model hydra_steam_provider hydra_custom_executable_provider)
 if(WIN32)
     target_link_libraries(hydra_tests PRIVATE ${WIN32_LIBS})
 endif()
@@ -1237,6 +1314,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 add_test(NAME HostProtocolTests COMMAND host_protocol_tests)
+set_tests_properties(HostProtocolTests PROPERTIES LABELS "P4-IPC-01;P7-SHELL-01")
 
 add_executable(host_ipc_process_tests tests/test_host_process.cpp)
 target_link_libraries(host_ipc_process_tests PRIVATE hydra_host_transport)
@@ -1249,9 +1327,123 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME HostIpcProcessTests COMMAND host_ipc_process_tests)
 set_tests_properties(HostIpcProcessTests PROPERTIES
-    LABELS "P4-IPC-01;P4-SEAT-01")
+    LABELS "P4-IPC-01;P4-SEAT-01;P7-SHELL-01")
+
+add_executable(seat_launcher_model_tests tests/test_seat_launcher_model.cpp)
+target_link_libraries(seat_launcher_model_tests PRIVATE hydra_seat_launcher)
+if(MSVC)
+    target_compile_options(seat_launcher_model_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(seat_launcher_model_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SeatLauncherModelTests COMMAND seat_launcher_model_tests)
+set_tests_properties(SeatLauncherModelTests PROPERTIES LABELS "P7-SHELL-01")
+
+add_executable(seat_launch_flow_tests tests/test_seat_launch_flow.cpp)
+target_link_libraries(seat_launch_flow_tests PRIVATE hydra_seat_launcher)
+if(MSVC)
+    target_compile_options(seat_launch_flow_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(seat_launch_flow_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SeatLaunchFlowTests COMMAND seat_launch_flow_tests)
+set_tests_properties(SeatLaunchFlowTests PROPERTIES LABELS "P7-LAUNCH-01")
+
+add_executable(seat_notification_model_tests
+    tests/test_seat_notification_model.cpp)
+target_link_libraries(seat_notification_model_tests PRIVATE hydra_seat_launcher)
+if(MSVC)
+    target_compile_options(seat_notification_model_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(seat_notification_model_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SeatNotificationModelTests COMMAND seat_notification_model_tests)
+set_tests_properties(SeatNotificationModelTests PROPERTIES LABELS "P7-NOTIFY-01")
+
+add_executable(seat_hotkey_model_tests tests/test_seat_hotkey_model.cpp)
+target_link_libraries(seat_hotkey_model_tests PRIVATE hydra_seat_launcher)
+if(MSVC)
+    target_compile_options(seat_hotkey_model_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(seat_hotkey_model_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SeatHotkeyModelTests COMMAND seat_hotkey_model_tests)
+set_tests_properties(SeatHotkeyModelTests PROPERTIES LABELS "P7-HOTKEY-01")
+
+add_executable(seat_navigation_model_tests tests/test_seat_navigation_model.cpp)
+target_link_libraries(seat_navigation_model_tests PRIVATE hydra_seat_launcher)
+if(MSVC)
+    target_compile_options(seat_navigation_model_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(seat_navigation_model_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME SeatNavigationModelTests COMMAND seat_navigation_model_tests)
+set_tests_properties(SeatNavigationModelTests PROPERTIES LABELS "P7-CURSOR-01")
+
+add_executable(ui_localization_tests tests/test_ui_localization.cpp)
+target_link_libraries(ui_localization_tests PRIVATE hydra_ui_localization)
+if(MSVC)
+    target_compile_options(ui_localization_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(ui_localization_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME UiLocalizationTests COMMAND ui_localization_tests)
+set_tests_properties(UiLocalizationTests PROPERTIES LABELS "P7-I18N-01")
+
+add_executable(ui_accessibility_tests tests/test_ui_accessibility.cpp)
+target_link_libraries(ui_accessibility_tests PRIVATE hydra_ui_localization)
+if(MSVC)
+    target_compile_options(ui_accessibility_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(ui_accessibility_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME UiAccessibilityTests COMMAND ui_accessibility_tests)
+set_tests_properties(UiAccessibilityTests PROPERTIES LABELS "P7-A11Y-01")
+
+if(WIN32)
+    add_executable(seat_launch_flow_process_tests
+        tests/test_seat_launch_flow_process.cpp)
+    target_link_libraries(seat_launch_flow_process_tests PRIVATE
+        hydra_seat_launcher hydra_process hydra_runtime)
+    if(MSVC)
+        target_compile_options(seat_launch_flow_process_tests PRIVATE /W4 /permissive-)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(seat_launch_flow_process_tests PRIVATE
+            -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    endif()
+    add_test(NAME SeatLaunchFlowProcessTests COMMAND seat_launch_flow_process_tests)
+    set_tests_properties(SeatLaunchFlowProcessTests PROPERTIES
+        LABELS "P7-LAUNCH-01")
+endif()
+
+if(WIN32)
+    add_executable(seat_ui_process_tests tests/test_seat_ui_process.cpp)
+    target_link_libraries(seat_ui_process_tests PRIVATE hydra_host_transport)
+    add_dependencies(seat_ui_process_tests hydra_host hydra_seat_ui)
+    if(MSVC)
+        target_compile_options(seat_ui_process_tests PRIVATE /W4 /permissive-)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(seat_ui_process_tests PRIVATE
+            -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    endif()
+    add_test(NAME SeatUiProcessTests COMMAND seat_ui_process_tests)
+    set_tests_properties(SeatUiProcessTests PROPERTIES
+        LABELS "P7-SHELL-01;P7-REC-01" RESOURCE_LOCK "HydraSeatHostPipe")
+    set_tests_properties(HostIpcProcessTests PROPERTIES
+        RESOURCE_LOCK "HydraSeatHostPipe")
+endif()
 
 add_executable(hydra_process_tree_child tests/process_tree_child.cpp)
+if(TARGET seat_launch_flow_process_tests)
+    add_dependencies(seat_launch_flow_process_tests hydra_process_tree_child)
+endif()
 if(MSVC)
     target_compile_options(hydra_process_tree_child PRIVATE /W4 /permissive-)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -1905,6 +2097,18 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME PlanPreflightTests COMMAND plan_preflight_tests)
 set_tests_properties(PlanPreflightTests PROPERTIES LABELS "P6-PREFLIGHT-01")
+
+# P6-UI-01 full normal flow over fake providers and immutable local snapshots.
+add_executable(launcher_ui_model_tests tests/test_launcher_ui_model.cpp)
+target_link_libraries(launcher_ui_model_tests PRIVATE hydra_launcher_ui_model)
+if(MSVC)
+    target_compile_options(launcher_ui_model_tests PRIVATE /W4 /permissive-)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(launcher_ui_model_tests PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
+add_test(NAME LauncherUiModelTests COMMAND launcher_ui_model_tests)
+set_tests_properties(LauncherUiModelTests PROPERTIES LABELS "P6-UI-01")
 
 # P6-PROFILE-01 automatic/manual convergence, transactional Save, bounded path,
 # shared-data-root, and cross-document runtime-selection validation tests.

@@ -292,7 +292,7 @@ bool validRuntimeResult(std::uint8_t raw) {
 }
 
 bool validRole(std::uint8_t raw) {
-    return raw <= static_cast<std::uint8_t>(ClientRole::Control);
+    return raw <= static_cast<std::uint8_t>(ClientRole::SeatControl);
 }
 
 bool validError(std::uint16_t raw) {
@@ -484,7 +484,7 @@ std::optional<Hello> decodeHello(std::span<const std::byte> payload) {
     if (!reader.u8(role) || !reader.u8(r1) || !reader.u8(r2) || !reader.u8(r3) ||
         !reader.u32(value.seatId) || !reader.done() || !validRole(role) ||
         r1 != 0 || r2 != 0 || r3 != 0 ||
-        (static_cast<ClientRole>(role) == ClientRole::Control && value.seatId == 0)) {
+        (static_cast<ClientRole>(role) != ClientRole::ReadOnly && value.seatId == 0)) {
         return std::nullopt;
     }
     value.role = static_cast<ClientRole>(role);
@@ -511,7 +511,7 @@ std::optional<HelloAck> decodeHelloAck(std::span<const std::byte> payload) {
         !reader.u32(value.serverProcessId) || !reader.u32(value.windowsSessionId) ||
         !reader.done() || !validRole(role) || r1 != 0 || r2 != 0 || r3 != 0 ||
         value.managementSeatId == 0 ||
-        (static_cast<ClientRole>(role) == ClientRole::Control && value.seatId == 0)) {
+        (static_cast<ClientRole>(role) != ClientRole::ReadOnly && value.seatId == 0)) {
         return std::nullopt;
     }
     value.role = static_cast<ClientRole>(role);

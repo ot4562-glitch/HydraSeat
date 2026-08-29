@@ -288,6 +288,42 @@ void testProviderAndAccountAmbiguityFailClosed() {
           "duplicate provider account references fail closed at the stable Player schema boundary");
 }
 
+void testApplicationScopedProviderBindings() {
+    FakeProvider first;
+    FakeProvider second;
+    const std::vector<ProviderAdapterBinding> providers{
+        {"fake", &first, "100"},
+        {"fake", &second, "200"},
+    };
+    const auto compiled = compileProviderAwareLaunchPlan(
+        seats(), players(), games(), {}, twoDifferentGames(), providers,
+        requirements());
+    check(compiled.succeeded(),
+          "application-scoped adapters allow multiple definitions from one provider");
+
+    const std::vector<ProviderAdapterBinding> ambiguous{
+        {"fake", &first, "100"},
+        {"fake", &second, "100"},
+    };
+    const auto rejected = compileProviderAwareLaunchPlan(
+        seats(), players(), games(), {}, twoDifferentGames(), ambiguous,
+        requirements());
+    check(!rejected.succeeded() &&
+              rejected.issues.front().code == PlanIssueCode::DuplicateProvider,
+          "duplicate application-scoped adapters fail closed");
+
+    const std::vector<ProviderAdapterBinding> nullScoped{
+        {"fake", &first},
+        {"fake", nullptr, "100"},
+    };
+    const auto nullRejected = compileProviderAwareLaunchPlan(
+        seats(), players(), games(), {}, twoDifferentGames(), nullScoped,
+        requirements());
+    check(!nullRejected.succeeded() &&
+              nullRejected.issues.front().code == PlanIssueCode::MissingProvider,
+          "a null exact binding cannot fall back to a provider-wide adapter");
+}
+
 } // namespace
 
 int main() {
@@ -295,6 +331,7 @@ int main() {
     testSameGameRequiresAndPinsSetup();
     testMaterialStalenessAndHardwareBlockPlan();
     testProviderAndAccountAmbiguityFailClosed();
+    testApplicationScopedProviderBindings();
     if (failures != 0) {
         std::cerr << failures << " provider launch plan test(s) failed\n";
         return 1;

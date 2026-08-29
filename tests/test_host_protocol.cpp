@@ -98,6 +98,13 @@ void testPayloadRoundTripsAndBounds() {
           "hello role and requesting Seat round-trip");
     check(!decodeHello(encodeHello(Hello{ClientRole::Control, 0})),
           "control hello without a Seat identity is rejected");
+    const Hello seatHello{ClientRole::SeatControl, 1};
+    const auto decodedSeatHello = decodeHello(encodeHello(seatHello));
+    check(decodedSeatHello && decodedSeatHello->role == ClientRole::SeatControl &&
+              decodedSeatHello->seatId == 1,
+          "Seat-scoped control identity round-trips");
+    check(!decodeHello(encodeHello(Hello{ClientRole::SeatControl, 0})),
+          "Seat-scoped control without a Seat identity is rejected");
 
     const HelloAck ack{ClientRole::ReadOnly, 0, 2, 1234, 7};
     const auto decodedAck = decodeHelloAck(encodeHelloAck(ack));

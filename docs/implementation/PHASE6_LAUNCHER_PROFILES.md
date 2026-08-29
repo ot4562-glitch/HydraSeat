@@ -509,7 +509,7 @@ Both an automatically generated fixture setup and a manually edited fixture setu
 
 ## P6-UI-01 — Game library, Player, Seat, and two-player setup UI
 
-**State:** READY
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -548,6 +548,15 @@ Hardware configuration remains separately accessible and can contain unset items
 **Done when**
 
 A non-developer can discover/add a game, create two Players, select both Seats, resolve same/different-game flows, and produce a validated Play plan without editing JSON.
+
+**Implementation evidence — 2026-08-29**
+
+- `LauncherUiModel` is a bounded Qt-independent product-flow model over the stable Seat/Game/Player/setup documents, exact provider bindings, and revision-pinned runtime requirements. Player create/rename/remove, optional local avatar, opaque account reference, recent-game/Seat preference, per-Seat or Both selection, setup choice/generation, and Play preview are typed operations with transactional failure.
+- Different-game and same-game fixture flows use fake providers and immutable requirement snapshots. Missing requirement evidence, missing/stale setup, removed selected games, invalid avatars, oversized snapshots, and in-use Player removal block without inventing compatibility capabilities or changing committed state.
+- Provider plan bindings now optionally scope an adapter to one exact provider AppID. This preserves one provider-wide Steam adapter while allowing multiple independent `custom` EXE definitions; duplicate or null exact bindings fail closed instead of falling back silently.
+- The default Win32 product executable exposes a `Games` window with read-only Steam refresh, provider-neutral local titles, file-picker-based `Add EXE`, Player roster management, Seat 1/2 selectors, two-player setup creation, normal preflight messages, and a Play button enabled only by a valid immutable plan. The window receives requirement evidence from its caller; the current empty live evidence snapshot leaves Play visibly disabled.
+- Computer-use smoke on the MSVC x64 Release build opened the main UI and Games window, observed two locally discovered Steam entries, verified the Player/Seat/setup controls and disabled Play state, closed both windows normally, and left no HydraSeat process/window running. It launched no provider or game.
+- MinGW builds the product UI plus focused model/planner tests. MSVC Release x64 and Win32/x86 build the complete product, focused Phase 6 UI stack passes 5/5 on each architecture, and each complete suite passes 98/98 sequentially.
 
 ---
 

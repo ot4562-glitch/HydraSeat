@@ -429,7 +429,7 @@ HostControlClient& HostControlClient::operator=(HostControlClient&&) noexcept = 
 
 bool HostControlClient::connect(ClientRole requestedRole, std::uint32_t timeoutMs,
                                 std::string* error) {
-    const SeatId defaultSeatId = requestedRole == ClientRole::Control ? 1u : 0u;
+    const SeatId defaultSeatId = requestedRole == ClientRole::ReadOnly ? 0u : 1u;
     return connectForSeat(requestedRole, defaultSeatId, timeoutMs, error);
 }
 
@@ -828,6 +828,20 @@ public:
                             "global control is restricted to the configured Management Seat");
             return;
         }
+        if (hello->role == ClientRole::SeatControl) {
+            const auto configured = std::find_if(
+                authoritySnapshot.configuredSeats.begin(),
+                authoritySnapshot.configuredSeats.end(),
+                [&](const SeatConfig& seat) {
+                    return seat.active && seat.seatId == hello->seatId;
+                });
+            if (configured == authoritySnapshot.configuredSeats.end()) {
+                (void)sendError(pipe.value, helloFrame->correlationId,
+                                ErrorCode::PermissionDenied,
+                                "Seat control requires an active configured Seat identity");
+                return;
+            }
+        }
         DWORD sessionId = 0;
         (void)ProcessIdToSessionId(GetCurrentProcessId(), &sessionId);
         if (!sendFrame(pipe.value,
@@ -872,6 +886,16 @@ public:
                 (void)sendError(pipe.value, request->correlationId,
                                 ErrorCode::PermissionDenied,
                                 "global control authority moved to another Management Seat");
+                continue;
+            }
+            if (hello->role == ClientRole::SeatControl &&
+                isMutatingRequest(request->type) &&
+                request->type != MessageType::AssignSeatGame &&
+                request->type != MessageType::StartSeatGame &&
+                request->type != MessageType::StopSeatGame) {
+                (void)sendError(pipe.value, request->correlationId,
+                                ErrorCode::PermissionDenied,
+                                "Seat control cannot mutate whole-machine runtime state");
                 continue;
             }
 
@@ -936,6 +960,13 @@ public:
                     (void)sendError(pipe.value, request->correlationId,
                                     ErrorCode::Malformed,
                                     "malformed Seat game command payload");
+                    continue;
+                }
+                if (hello->role == ClientRole::SeatControl &&
+                    seatCommand->seatId != hello->seatId) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::PermissionDenied,
+                                    "Seat control cannot mutate another Seat game lifecycle");
                     continue;
                 }
                 runtime::SeatGameCommandResult seatResult;

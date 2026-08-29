@@ -1,0 +1,99 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <string_view>
+
+namespace hydra::ui {
+
+enum class Locale : std::uint8_t {
+    EnglishUnitedStates = 0,
+    KoreanKorea = 1,
+    ChineseSimplified = 2,
+};
+
+enum class TextId : std::uint16_t {
+    GamesWindowTitle = 0,
+    GamesHeading,
+    InstalledTitles,
+    Refresh,
+    AddExecutable,
+    PlayersAndSeats,
+    PlayerName,
+    AddPlayer,
+    Rename,
+    Remove,
+    SeatLabel,
+    Player,
+    Game,
+    ChoosePlayer,
+    ChooseGame,
+    CreateTwoPlayerSetup,
+    Play,
+    SameGameFirst,
+    TwoPlayers,
+    SetupCreatedEvidencePending,
+    PlayPlanReady,
+    PlayDialogTitle,
+    GameLibraryRegisterFailed,
+    GameLibraryInitializeFailed,
+    SteamRefreshed,
+    PlayerAdded,
+    PlayerRenamed,
+    PlayerRemoved,
+    ChooseRosterPlayer,
+    ManualExecutableIdentityMissing,
+    ExecutableAdded,
+    SeatSelectionUpdated,
+    SeatLauncherTitle,
+    EndPlaying,
+    Reconnect,
+    None,
+    CurrentSelectedPlayer,
+    CurrentSelectedGame,
+    RecentGames,
+    AvailableGames,
+    NotificationHostDisconnected,
+    NotificationGameStarting,
+    NotificationGameWarning,
+    NotificationGameRecovery,
+    NotificationDevicesRequired,
+    NotificationRequirementsReview,
+    NotificationSetupReview,
+    NotificationProtectionReview,
+    NotificationProviderUnavailable,
+    NotificationPlayerAccount,
+    NotificationPreflightInformation,
+    NotificationPreflightReview,
+    SetLater,
+    OptionalSeatSetup,
+    ProtectedExperimentConfirmation,
+    RecoveryAction,
+    StatusDisconnected,
+    StatusReady,
+    StatusReadyToStart,
+    StatusStartingGame,
+    StatusPlaying,
+    StatusEndingPlay,
+    StatusNeedsAttention,
+    StatusRecoveryRequired,
+    ConfirmEndPlayingPrompt,
+    RecoveryHelpText,
+    EmergencyResetHelpText,
+    Count,
+};
+
+Locale localeFromTag(std::string_view tag) noexcept;
+Locale systemLocale() noexcept;
+std::string_view localeTag(Locale locale) noexcept;
+std::wstring_view text(TextId id, Locale locale) noexcept;
+std::wstring formatOne(TextId id, Locale locale, std::wstring_view value);
+std::wstring formatTwo(TextId id, Locale locale,
+                       std::wstring_view first, std::wstring_view second);
+
+// Maps stable notification/preflight IDs to localized UI text. Unknown IDs return
+// an empty view so callers can use their canonical English fallback explicitly.
+std::wstring_view notificationText(std::string_view messageId, Locale locale) noexcept;
+std::wstring_view preflightText(std::string_view code, Locale locale) noexcept;
+
+} // namespace hydra::ui

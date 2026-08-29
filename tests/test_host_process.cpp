@@ -125,7 +125,7 @@ DWORD runHostCtl(std::wstring arguments) {
 bool waitForClient(HostControlClient& client, ClientRole role, hydra::SeatId seatId = 0) {
     for (int attempt = 0; attempt < 50; ++attempt) {
         std::string error;
-        const bool connected = role == ClientRole::Control
+        const bool connected = role != ClientRole::ReadOnly
             ? client.connectForSeat(role, seatId, 200u, &error)
             : client.connect(role, 200u, &error);
         if (connected) return true;
@@ -174,6 +174,50 @@ void testRealHostProcess() {
     check(!otherSeatControl.connectForSeat(ClientRole::Control, 1, 1000u, &otherSeatError) &&
               otherSeatError.find("Management Seat") != std::string::npos,
           "non-Management Seat control handshake is rejected before global commands");
+
+    HostControlClient seatOneControl;
+    HostControlClient seatTwoControl;
+    check(waitForClient(seatOneControl, ClientRole::SeatControl, 1) &&
+              waitForClient(seatTwoControl, ClientRole::SeatControl, 2),
+          "two active Seats establish simultaneous scoped control channels");
+    HostControlClient invalidSeatControl;
+    check(!invalidSeatControl.connectForSeat(
+              ClientRole::SeatControl, 3, 1000u, &otherSeatError),
+          "unconfigured Seat cannot establish scoped control authority");
+
+    SeatGameCommandPayload scopedAssignment;
+    scopedAssignment.seatId = 1;
+    scopedAssignment.binding = SeatGameBinding{"seat-ui-player", "seat-ui-game"};
+    std::string scopedError;
+    const auto scopedAssigned = seatOneControl.seatGameCommand(
+        MessageType::AssignSeatGame, scopedAssignment, 2000u, &scopedError);
+    check(scopedAssigned && scopedAssigned->succeeded() &&
+              scopedAssigned->seats[0].phase == SeatGamePhase::Planning,
+          "Seat-scoped client assigns only its own temporary game binding");
+
+    std::optional<ErrorPayload> scopedPermission;
+    SeatGameCommandPayload otherSeatStop;
+    otherSeatStop.seatId = 1;
+    const auto crossSeatDenied = seatTwoControl.seatGameCommand(
+        MessageType::StopSeatGame, otherSeatStop, 2000u, &scopedError,
+        &scopedPermission);
+    check(!crossSeatDenied && scopedPermission &&
+              scopedPermission->code == ErrorCode::PermissionDenied,
+          "Seat-scoped client cannot stop another Seat lifecycle");
+
+    scopedPermission.reset();
+    const auto globalDenied = seatOneControl.command(
+        MessageType::PlanSession, 2000u, &scopedError, &scopedPermission);
+    check(!globalDenied && scopedPermission &&
+              scopedPermission->code == ErrorCode::PermissionDenied,
+          "Seat-scoped client has no whole-machine runtime authority");
+
+    const auto scopedStopped = seatOneControl.seatGameCommand(
+        MessageType::StopSeatGame, otherSeatStop, 2000u, &scopedError);
+    check(scopedStopped && scopedStopped->succeeded() &&
+              scopedStopped->seats[0].phase == SeatGamePhase::Idle &&
+              scopedStopped->seats[1].phase == SeatGamePhase::Idle,
+          "own-Seat stop preserves the other Seat state");
 
     std::string error;
     HostControlClient unsubscribed;

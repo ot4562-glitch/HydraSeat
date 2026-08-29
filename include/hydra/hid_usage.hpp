@@ -4,6 +4,8 @@
 
 namespace hydra::hid {
 
+inline constexpr std::uint16_t kDigitizerTouchpadUsage = 0x05u;
+
 enum class CollectionKind {
     Other,
     Mouse,
@@ -32,7 +34,7 @@ constexpr CollectionKind classifyCollection(uint16_t usagePage, uint16_t usage) 
         }
     }
 
-    if (usagePage == kDigitizersPage && usage == 0x05) {
+    if (usagePage == kDigitizersPage && usage == kDigitizerTouchpadUsage) {
         return CollectionKind::Touchpad;
     }
 

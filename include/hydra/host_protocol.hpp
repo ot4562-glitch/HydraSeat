@@ -62,6 +62,9 @@ enum class MessageType : std::uint16_t {
 enum class ClientRole : std::uint8_t {
     ReadOnly = 0,
     Control = 1,
+    // May mutate only the temporary game lifecycle of the authenticated Seat.
+    // It has no profile, whole-machine, reconcile, or other Seat authority.
+    SeatControl = 2,
 };
 
 enum class ErrorCode : std::uint16_t {

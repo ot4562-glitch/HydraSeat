@@ -1,5 +1,6 @@
 #include "hydra/gui_win32.hpp"
 #include "hydra/hid_usage.hpp"
+#include "hydra/launcher_win32.hpp"
 #include "hydra/raw_input_utils.hpp"
 
 #ifdef _WIN32
@@ -96,6 +97,7 @@ static Win32App* g_appInstance = nullptr;
 #define ID_BTN_START_SESSION 1009
 #define ID_BTN_STOP_SESSION 1010
 #define ID_BTN_RECONFIGURE 1011
+#define ID_BTN_GAME_LIBRARY 1012
 
 #define TIMER_FLASH_RESET 2001
 #define TIMER_HOST_REFRESH 2002
@@ -536,6 +538,11 @@ void Win32App::setupUI() {
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         690, 15, 90, 32, m_hwnd, (HMENU)ID_BTN_REFRESH, GetModuleHandle(NULL), NULL);
 
+    m_gameLibraryBtn = CreateWindowExW(0, L"BUTTON", L"Games",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        790, 15, 140, 32, m_hwnd, (HMENU)ID_BTN_GAME_LIBRARY,
+        GetModuleHandle(NULL), NULL);
+
     // Status Label
     m_deviceStatusLabel = CreateWindowExW(0, L"STATIC", L"Detecting connected hardware...",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
@@ -548,6 +555,7 @@ void Win32App::setupUI() {
     SendMessageW(m_saveProfileBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
     SendMessageW(m_loadProfileBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
     SendMessageW(m_refreshBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
+    SendMessageW(m_gameLibraryBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
 
     m_runtimeStatusLabel = CreateWindowExW(
         0, L"STATIC", L"Runtime: host state unknown",
@@ -1290,6 +1298,48 @@ void Win32App::beginReconfigure() {
     applyManagementSeatPlacement();
 }
 
+void Win32App::openGameLibrary() {
+    profile::SeatConfigDocument document;
+    document.managementSeatId = 1u;
+    profile::PersistedSeatConfig first;
+    first.seatId = 1u;
+    first.name = L"Seat 1";
+    profile::PersistedSeatConfig second;
+    second.seatId = 2u;
+    second.name = L"Seat 2";
+
+    for (const auto& tile : m_deviceTiles) {
+        if (!tile || tile->owner == PartitionOwner::Pool || tile->deviceId.empty()) continue;
+        auto& seat = tile->owner == PartitionOwner::Player1 ? first : second;
+        switch (tile->type) {
+        case DeviceCategory::Display:
+            seat.displayIds.push_back(tile->deviceId);
+            if (tile->isPrimaryDisplay) seat.primaryDisplayId = tile->deviceId;
+            break;
+        case DeviceCategory::Keyboard:
+            seat.keyboardIds.push_back(tile->deviceId);
+            break;
+        case DeviceCategory::Mouse:
+        case DeviceCategory::Touchpad:
+            seat.mouseIds.push_back(tile->deviceId);
+            break;
+        case DeviceCategory::Gamepad:
+            seat.controllerIds.push_back(tile->deviceId);
+            break;
+        }
+    }
+    if (!first.displayIds.empty() && !first.primaryDisplayId) {
+        first.primaryDisplayId = first.displayIds.front();
+    }
+    if (!second.displayIds.empty() && !second.primaryDisplayId) {
+        second.primaryDisplayId = second.displayIds.front();
+    }
+    document.seats = {std::move(first), std::move(second)};
+    // The compatibility evidence store is not yet populated on this runtime
+    // path. Passing an empty snapshot keeps Play visibly fail-closed.
+    launcher_ui::showLauncherWindow(m_hwnd, std::move(document), {});
+}
+
 void Win32App::toggleIsolationMode() {
     const bool current = m_inputRouter.isIsolationMode();
     m_inputRouter.setIsolationMode(!current);
@@ -1496,6 +1546,8 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
             g_appInstance->stopSessionAndReturnToWindows();
         } else if (wmId == ID_BTN_RECONFIGURE && g_appInstance) {
             g_appInstance->beginReconfigure();
+        } else if (wmId == ID_BTN_GAME_LIBRARY && g_appInstance) {
+            g_appInstance->openGameLibrary();
         }
     } else if (uMsg == WM_DESTROY) {
         KillTimer(hwnd, TIMER_FLASH_RESET);

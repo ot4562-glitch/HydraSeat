@@ -168,10 +168,13 @@ ownership. Its bounded protocol snapshot contains stable Seat ID, phase,
 temporary Player/Game IDs, generation, and diagnostic; it contains no handles,
 pointers, credentials, or persisted Seat-profile fields. Host protocol v3
 transports bounded Seat commands, reconnect snapshots, and ordered
-Seat-identified mutation events. `RuntimeHost` serializes these mutations with
+Seat-identified mutation events. A `SeatControl` connection is authenticated to
+one active configured Seat and the server accepts only assign/start/stop
+payloads for that exact Seat; it rejects global, reconcile, and cross-Seat
+mutations. `RuntimeHost` serializes accepted mutations with
 whole-machine work and performs Seat-local cleanup before explicit shared
 rollback. This controlled foundation is not a real-game, physical-device, or
-minimal Seat Launcher capability claim.
+physical-display capability claim.
 
 ### 5.1 Whole-machine host/split state
 
@@ -243,6 +246,8 @@ Click/tap is primary. Drag-and-drop of a game onto a Seat is an optional shortcu
 
 Low-level backend, device-path, protocol, hook, and plan details stay under Diagnostics/Expert UI.
 
+P6-UI-01 implements this flow as a bounded UI-independent model plus the default Win32 `Games` surface. The model owns only local presentation/selection state and compiles through the same provider-aware plan and preflight contracts used by diagnostics; it has no launch, shell, credential, filesystem-mutation, or whole-machine authority. Provider-wide and exact-AppID adapter bindings allow one Steam adapter and multiple independent manual EXE definitions without ambiguity. The Win32 surface performs read-only Steam refresh, manual EXE selection/PE validation, Player roster management, two Seat selections, setup generation, and normal preflight display. Exact runtime-requirement evidence is injected by the caller. If evidence is absent or stale, Play stays disabled rather than assuming a title is compatible.
+
 ### 6.2 Seat UI (`hydra_seat_ui.exe`)
 
 v1 does not need a full shell.
@@ -258,6 +263,14 @@ The per-Seat UI appears only when useful:
 - `End Playing`.
 
 Once a game is running, the UI should disappear or remain non-intrusive.
+
+P7-SHELL-01 implements the bounded client as a fixed-Seat pure model, a narrow
+host adapter with no generic runtime command API, and a Win32 process. Complete
+snapshots drive all visible state. Snapshot sequence/generation rollback and
+authority replacement without explicit reconnect are rejected. Window placement
+is applied only when the authoritative assigned display group resolves against a
+fresh local topology snapshot; otherwise the process stays hidden. Closing the
+client only closes its IPC handle and never owns or tears down a game process.
 
 Deferred beyond v1:
 

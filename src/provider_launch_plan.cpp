@@ -111,18 +111,31 @@ const GameRuntimeRequirement* findRequirement(
 provider::LauncherProviderAdapter* findProvider(
     std::span<const ProviderAdapterBinding> providers,
     std::string_view providerId,
+    const std::optional<std::string>& providerAppId,
     bool& duplicate) noexcept {
-    provider::LauncherProviderAdapter* found = nullptr;
+    provider::LauncherProviderAdapter* exact = nullptr;
+    bool exactMatched = false;
+    provider::LauncherProviderAdapter* providerWide = nullptr;
     duplicate = false;
     for (const auto& binding : providers) {
         if (binding.providerId != providerId) continue;
-        if (found != nullptr) {
+        if (binding.providerAppId) {
+            if (!providerAppId || *binding.providerAppId != *providerAppId) continue;
+            if (exactMatched) {
+                duplicate = true;
+                return nullptr;
+            }
+            exactMatched = true;
+            exact = binding.adapter;
+            continue;
+        }
+        if (providerWide != nullptr) {
             duplicate = true;
             return nullptr;
         }
-        found = binding.adapter;
+        providerWide = binding.adapter;
     }
-    return found;
+    return exactMatched ? exact : providerWide;
 }
 
 std::optional<std::string> resolveAccount(const profile::PlayerProfile& player,
@@ -455,7 +468,8 @@ PlanCompileResult compileProviderAwareLaunchPlan(
             }
 
             bool duplicateProvider = false;
-            auto* adapter = findProvider(providers, game->providerId, duplicateProvider);
+            auto* adapter = findProvider(providers, game->providerId,
+                                         game->providerAppId, duplicateProvider);
             if (duplicateProvider) {
                 return failure(PlanIssueCode::DuplicateProvider, binding.seatId,
                                "multiple provider adapters match the selected Game");

@@ -97,6 +97,7 @@ std::uint32_t queryParentProcessId(std::uint32_t processId) {
 
 struct CloseWindowContext {
     const std::vector<ProcessIdentity>* processes{nullptr};
+    std::size_t postedCount{0u};
 };
 
 BOOL CALLBACK closeOwnedWindow(HWND window, LPARAM parameter) {
@@ -115,8 +116,8 @@ BOOL CALLBACK closeOwnedWindow(HWND window, LPARAM parameter) {
                                      FALSE, processId));
     if (!process.valid()) return TRUE;
     const auto observed = processIdentity(process.value, processId);
-    if (observed.sameInstance(*found)) {
-        (void)PostMessageW(window, WM_CLOSE, 0, 0);
+    if (observed.sameInstance(*found) && PostMessageW(window, WM_CLOSE, 0, 0) != FALSE) {
+        ++context->postedCount;
     }
     return TRUE;
 }
@@ -404,12 +405,26 @@ bool SeatProcessGroup::waitForEmpty(std::uint32_t timeoutMs) const {
 bool SeatProcessGroup::stop(const ProcessStopPolicy& policy, std::string* error) noexcept {
     if (!impl_) return true;
 #ifdef _WIN32
-    const auto processes = impl_->runningProcessIdentities();
-    if (processes.empty()) return true;
+    if (impl_->runningProcessIdentities().empty()) return true;
 
-    CloseWindowContext context{&processes};
-    (void)EnumWindows(closeOwnedWindow, reinterpret_cast<LPARAM>(&context));
-    if (waitForEmpty(policy.gracefulTimeoutMs)) return true;
+    const auto gracefulDeadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(policy.gracefulTimeoutMs);
+    for (;;) {
+        if (waitForEmpty(0u)) return true;
+        const auto processes = impl_->runningProcessIdentities();
+        if (processes.empty()) return true;
+
+        CloseWindowContext context{&processes};
+        (void)EnumWindows(closeOwnedWindow, reinterpret_cast<LPARAM>(&context));
+
+        const auto now = std::chrono::steady_clock::now();
+        if (policy.gracefulTimeoutMs == 0u || now >= gracefulDeadline) break;
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            gracefulDeadline - now);
+        const auto slice = static_cast<std::uint32_t>(
+            std::min<std::int64_t>(remaining.count(), context.postedCount == 0u ? 50 : 100));
+        if (waitForEmpty(slice)) return true;
+    }
 
     if (!policy.forceTerminate) {
         if (error) *error = "owned process group did not exit before graceful timeout";
