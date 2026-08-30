@@ -1,39 +1,42 @@
-#include "hydra/hardware_detector.hpp"
-#include "hydra/input_router.hpp"
-#include "hydra/display_manager.hpp"
-#include "hydra/workspace_manager.hpp"
-#include "hydra/game_launcher.hpp"
-
 #ifdef _WIN32
 #include "hydra/gui_win32.hpp"
-#endif
-
-#ifdef HYDRA_HAS_QT
-#include <QApplication>
-#include "ui/main_window.hpp"
 #endif
 
 #include <iostream>
 
 #ifdef _WIN32
+namespace {
+
+void enableBestEffortDpiAwareness() noexcept {
+    const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32 == nullptr) return;
+
+    using SetContext = BOOL(WINAPI*)(DPI_AWARENESS_CONTEXT);
+    const auto setContext = reinterpret_cast<SetContext>(
+        GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
+    if (setContext != nullptr &&
+        setContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+        return;
+    }
+
+    using SetLegacy = BOOL(WINAPI*)();
+    const auto setLegacy = reinterpret_cast<SetLegacy>(
+        GetProcAddress(user32, "SetProcessDPIAware"));
+    if (setLegacy != nullptr) (void)setLegacy();
+}
+
+} // namespace
+
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
     (void)hPrevInstance;
     (void)pCmdLine;
 
-#ifdef HYDRA_HAS_QT
-    int argc = 0;
-    char** argv = nullptr;
-    QApplication app(argc, argv);
-    hydra::ui::MainWindow window;
-    window.show();
-    return app.exec();
-#else
+    enableBestEffortDpiAwareness();
     hydra::gui::Win32App guiApp;
     if (guiApp.initialize(hInstance, nCmdShow)) {
         return guiApp.run();
     }
     return 0;
-#endif
 }
 #endif
 

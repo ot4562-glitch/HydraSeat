@@ -128,7 +128,12 @@ struct FakeSeatInstance final : ISeatGameInstance {
 struct FakeSeatFactory final : ISeatGameInstanceFactory {
     std::vector<std::shared_ptr<bool>> live;
     std::vector<std::string>* log{nullptr};
-    std::unique_ptr<ISeatGameInstance> create(hydra::SeatId, std::string&) override {
+    hydra::SeatId failSeatId{0};
+    std::unique_ptr<ISeatGameInstance> create(hydra::SeatId seatId, std::string& error) override {
+        if (seatId == failSeatId) {
+            error = "injected Seat instance creation failure";
+            return {};
+        }
         auto state = std::make_shared<bool>(false);
         live.push_back(state);
         return std::make_unique<FakeSeatInstance>(state, log);
@@ -435,6 +440,34 @@ void testAuthoritativeSeatGameLifecycleSnapshot() {
           "RuntimeHost rejects a third active v1 Seat before backend activation");
 }
 
+void testSeatFailureIsolationKeepsHealthyPeerRunning() {
+    auto factory = std::make_shared<FakeSeatFactory>();
+    RuntimeHost host({}, factory);
+    check(host.loadProfile(validSeats(), 1, 300).succeeded() &&
+              host.plan(301).succeeded() && host.prepare(302).succeeded() &&
+              host.start(303).succeeded(),
+          "Seat failure-isolation fixture activates the shared runtime");
+    check(host.assignSeatGame(1, {"player-a", "game-a"}, 304).succeeded() &&
+              host.startSeatGame(1, 305).succeeded() && *factory->live.front(),
+          "Seat 1 is healthy before the peer failure is injected");
+
+    factory->failSeatId = 2;
+    check(host.assignSeatGame(2, {"player-b", "game-b"}, 306).succeeded(),
+          "Seat 2 binding reaches its independent planning state");
+    const auto failedPeer = host.startSeatGame(2, 307);
+    const auto afterFailure = host.snapshot();
+    check(failedPeer.code == SeatGameResultCode::BackendFailure &&
+              afterFailure.seatGames.size() == 2u &&
+              afterFailure.seatGames[0].phase == SeatGamePhase::Playing &&
+              afterFailure.seatGames[1].phase == SeatGamePhase::Idle &&
+              *factory->live.front() && !afterFailure.wholeMachineReturnRequested,
+          "Seat 2 activation failure rolls back locally without stopping healthy Seat 1");
+
+    check(host.stopSeatGame(1, 308).succeeded() &&
+              host.stopAndReturnToWindows(309).succeeded(),
+          "failure-isolation fixture returns to verified Idle state");
+}
+
 void testHostDestructionCleansSeatsBeforeSharedBackends() {
     std::vector<std::string> log;
     auto backend = std::make_shared<FakeBackend>();
@@ -469,6 +502,7 @@ int main() {
     testDiagnosticBounds();
     testConcurrentMutationRejectionAndReaders();
     testAuthoritativeSeatGameLifecycleSnapshot();
+    testSeatFailureIsolationKeepsHealthyPeerRunning();
     testHostDestructionCleansSeatsBeforeSharedBackends();
 
     if (failures != 0) {

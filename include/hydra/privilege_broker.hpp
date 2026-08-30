@@ -74,6 +74,8 @@ enum class BrokerCode : std::uint8_t {
     VerifyFailedRolledBack,
     RollbackFailed,
     RollbackVerifyFailed,
+    ArtifactAuthorityUnavailable,
+    ArtifactAuthorityMismatch,
 };
 
 struct BrokerDiagnostic {
@@ -102,6 +104,18 @@ struct BrokerReceipt {
     bool operator==(const BrokerReceipt&) const = default;
 };
 
+// Resolves the broker-owned release manifest and observes the actual fixed
+// resource. Implementations must not derive either result from caller payload.
+// Paths, signature verification, and hashing stay behind this elevated/native
+// boundary; false means the resource could not be observed safely.
+class PrivilegedArtifactAuthority {
+public:
+    virtual ~PrivilegedArtifactAuthority() = default;
+    virtual bool resolve(BrokerResource resource,
+                         trust::ArtifactManifest& manifest,
+                         trust::ArtifactObservation& observation) noexcept = 0;
+};
+
 // The native/elevated executor resolves the enum resource to broker-owned paths,
 // SCM/registry/device identifiers. None of those authorities are supplied by the
 // unelevated caller. Every mutation is snapshot/capture-first and rollback-capable.
@@ -127,6 +141,7 @@ public:
 
     BrokerDiagnostic execute(const BrokerRequest& request,
                              const AuthenticatedPeer& peer,
+                             PrivilegedArtifactAuthority& artifactAuthority,
                              PrivilegedMutationExecutor& executor,
                              BrokerReceipt& receipt);
 

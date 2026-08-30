@@ -51,6 +51,8 @@ DirectInputDeviceDescriptor device(std::uint32_t instance,
 }
 
 void testDeterministicAllowlistOrder() {
+    check(sizeof(DirectInputInstanceId) == 16u,
+          "DirectInput instance identity stays a fixed 16-byte value on x86 and x64");
     const auto a = device(1u, L"Same friendly name");
     auto b = device(2u, L"Same friendly name");
     b.productId = a.productId;

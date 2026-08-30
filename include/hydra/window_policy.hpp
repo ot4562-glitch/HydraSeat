@@ -39,6 +39,10 @@ struct WindowPlacementPolicy {
     std::uint32_t retryCount{2};
     std::uint32_t retryDelayMs{50};
     std::uint32_t placementTolerancePixels{2};
+    // Production placement follows the Seat's authoritative visual target across
+    // validated HWND recreation. The tracker owns the bounded reacquisition
+    // deadline; disabling this is reserved for one-shot diagnostics/tests.
+    bool followRecreatedWindow{true};
 };
 
 struct WindowPlacementPlan {

@@ -65,6 +65,21 @@ std::uint64_t fileTimeValue(const FILETIME& value) noexcept {
     return result.QuadPart;
 }
 
+std::wstring normalizedWindowsPath(std::wstring_view value) {
+    std::wstring normalized(value);
+    std::replace(normalized.begin(), normalized.end(), L'/', L'\\');
+    return normalized;
+}
+
+bool sameWindowsPath(std::wstring_view left, std::wstring_view right) {
+    const auto normalizedLeft = normalizedWindowsPath(left);
+    const auto normalizedRight = normalizedWindowsPath(right);
+    return CompareStringOrdinal(normalizedLeft.c_str(), -1,
+                                normalizedRight.c_str(), -1, TRUE) == CSTR_EQUAL;
+}
+
+constexpr auto kTrustedHandoffWindow = std::chrono::seconds(10);
+
 ProcessIdentity processIdentity(HANDLE process, std::uint32_t processId) {
     ProcessIdentity identity;
     identity.processId = processId;
@@ -177,8 +192,15 @@ public:
     mutable std::mutex mutex;
     mutable std::condition_variable changed;
     ProcessIdentity root;
+    ProcessIdentity authority;
+    std::vector<std::wstring> trustedHandoffExecutables;
     std::vector<Entry> entries;
     std::uint64_t sequence{0};
+    std::uint64_t handoffGeneration{0};
+    ProcessHandoffState handoffState{ProcessHandoffState::Unverifiable};
+    std::chrono::steady_clock::time_point handoffPendingSince{};
+    bool handoffPending{false};
+    bool trackingComplete{true};
 
 #ifdef _WIN32
     UniqueHandle job;
@@ -192,23 +214,236 @@ public:
                            [](const Entry& entry) { return !entry.record.exited; });
     }
 
-    bool refreshExitedLocked() {
-        bool refreshed = false;
-        for (auto& entry : entries) {
-            if (entry.record.exited || !entry.handle.valid()) continue;
-            if (WaitForSingleObject(entry.handle.value, 0) != WAIT_OBJECT_0) continue;
+    bool queryJobActiveProcessCountLocked(std::uint32_t& activeProcesses) const {
+        if (!job.valid()) return false;
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
+        if (QueryInformationJobObject(job.value, JobObjectBasicAccountingInformation,
+                                      &accounting, sizeof(accounting), nullptr) == FALSE) {
+            return false;
+        }
+        activeProcesses = accounting.ActiveProcesses;
+        return true;
+    }
 
+    void markTrackingUncertainLocked() {
+        if (!trackingComplete) return;
+        trackingComplete = false;
+        handoffState = ProcessHandoffState::Unverifiable;
+        ++sequence;
+        changed.notify_all();
+    }
+
+    void captureExitLocked(Entry& entry) {
+        if (entry.record.exited) return;
+        if (entry.handle.valid()) {
             DWORD exitCode = 0;
             if (GetExitCodeProcess(entry.handle.value, &exitCode) != FALSE &&
                 exitCode != STILL_ACTIVE) {
                 entry.record.exitCode = exitCode;
             }
-            entry.record.exited = true;
-            entry.handle.reset();
-            ++sequence;
+            FILETIME created{}, exited{}, kernel{}, user{};
+            if (GetProcessTimes(entry.handle.value, &created, &exited, &kernel, &user) != FALSE) {
+                entry.record.exitTime100ns = fileTimeValue(exited);
+            }
+        }
+        entry.record.exited = true;
+        entry.handle.reset();
+        ++sequence;
+    }
+
+    bool parentLifetimeContainsLocked(const Entry& parent,
+                                      std::uint64_t childCreation) const {
+        if (parent.record.identity.creationTime100ns == 0 ||
+            parent.record.identity.creationTime100ns >= childCreation) {
+            return false;
+        }
+        if (!parent.record.exited) return true;
+        return parent.record.exitTime100ns != 0 &&
+               parent.record.exitTime100ns >= childCreation;
+    }
+
+    bool resolveParentIdentitiesLocked() {
+        bool resolvedAny = false;
+        for (auto& child : entries) {
+            if (child.record.root || child.record.parentIdentityVerified ||
+                child.record.parentProcessId == 0) {
+                continue;
+            }
+            const Entry* candidate = nullptr;
+            bool ambiguous = false;
+            for (const auto& parent : entries) {
+                if (parent.record.identity.processId != child.record.parentProcessId ||
+                    !parentLifetimeContainsLocked(parent,
+                                                  child.record.identity.creationTime100ns)) {
+                    continue;
+                }
+                if (candidate != nullptr) {
+                    ambiguous = true;
+                    break;
+                }
+                candidate = &parent;
+            }
+            if (!ambiguous && candidate != nullptr) {
+                child.record.parentIdentity = candidate->record.identity;
+                child.record.parentIdentityVerified = true;
+                resolvedAny = true;
+            }
+        }
+        if (resolvedAny) ++sequence;
+        return resolvedAny;
+    }
+
+    const Entry* findEntryLocked(const ProcessIdentity& identity) const {
+        const auto found = std::find_if(entries.begin(), entries.end(),
+                                        [&](const Entry& entry) {
+                                            return entry.record.identity.sameInstance(identity);
+                                        });
+        return found == entries.end() ? nullptr : &*found;
+    }
+
+    bool isExactDescendantLocked(const ProcessIdentity& candidate,
+                                 const ProcessIdentity& ancestor) const {
+        if (!candidate.valid() || !ancestor.valid() || candidate.sameInstance(ancestor)) {
+            return false;
+        }
+        ProcessIdentity currentIdentity = candidate;
+        for (std::size_t depth = 0; depth <= entries.size(); ++depth) {
+            const Entry* current = findEntryLocked(currentIdentity);
+            if (current == nullptr || !current->record.parentIdentityVerified) return false;
+            if (current->record.parentIdentity.sameInstance(ancestor)) return true;
+            currentIdentity = current->record.parentIdentity;
+        }
+        return false;
+    }
+
+    bool trustedExecutableLocked(const ProcessIdentity& identity) const {
+        return std::any_of(trustedHandoffExecutables.begin(),
+                           trustedHandoffExecutables.end(),
+                           [&](const std::wstring& trusted) {
+                               return sameWindowsPath(identity.executablePath, trusted);
+                           });
+    }
+
+    void setHandoffStateLocked(ProcessHandoffState state) {
+        if (handoffState == state) return;
+        handoffState = state;
+        ++sequence;
+        changed.notify_all();
+    }
+
+    void refreshAuthorityLocked() {
+        if (!root.valid() || !authority.valid() || !trackingComplete) {
+            handoffPending = false;
+            setHandoffStateLocked(ProcessHandoffState::Unverifiable);
+            return;
+        }
+        for (std::size_t step = 0; step <= entries.size(); ++step) {
+            const Entry* current = findEntryLocked(authority);
+            if (current == nullptr) {
+                handoffPending = false;
+                setHandoffStateLocked(ProcessHandoffState::Unverifiable);
+                return;
+            }
+            if (!current->record.exited) {
+                handoffPending = false;
+                setHandoffStateLocked(handoffGeneration == 0u
+                    ? ProcessHandoffState::RootActive
+                    : ProcessHandoffState::DescendantActive);
+                return;
+            }
+            if (tracking != ChildTrackingCapability::FullJobObject) {
+                handoffPending = false;
+                setHandoffStateLocked(ProcessHandoffState::UnsupportedContainment);
+                return;
+            }
+            if (trustedHandoffExecutables.empty()) {
+                handoffPending = false;
+                setHandoffStateLocked(ProcessHandoffState::Unverifiable);
+                return;
+            }
+
+            std::vector<const Entry*> trustedRunning;
+            trustedRunning.reserve(entries.size());
+            for (const auto& candidate : entries) {
+                if (candidate.record.exited ||
+                    !trustedExecutableLocked(candidate.record.identity) ||
+                    !isExactDescendantLocked(candidate.record.identity, authority)) {
+                    continue;
+                }
+                trustedRunning.push_back(&candidate);
+            }
+
+            std::vector<const Entry*> trustedFrontier;
+            trustedFrontier.reserve(trustedRunning.size());
+            for (const Entry* candidate : trustedRunning) {
+                const bool hasTrustedAncestor = std::any_of(
+                    trustedRunning.begin(), trustedRunning.end(),
+                    [&](const Entry* other) {
+                        return other != candidate &&
+                               isExactDescendantLocked(candidate->record.identity,
+                                                      other->record.identity);
+                    });
+                if (!hasTrustedAncestor) trustedFrontier.push_back(candidate);
+            }
+
+            if (trustedFrontier.size() > 1u) {
+                handoffPending = false;
+                setHandoffStateLocked(ProcessHandoffState::Unverifiable);
+                return;
+            }
+            if (trustedFrontier.size() == 1u) {
+                authority = trustedFrontier.front()->record.identity;
+                ++handoffGeneration;
+                ++sequence;
+                handoffPending = false;
+                changed.notify_all();
+                continue;
+            }
+
+            std::uint32_t activeProcesses = 0;
+            if (!queryJobActiveProcessCountLocked(activeProcesses)) {
+                handoffPending = false;
+                setHandoffStateLocked(ProcessHandoffState::Unverifiable);
+                return;
+            }
+            if (activeProcesses == 0u) {
+                handoffPending = false;
+                setHandoffStateLocked(ProcessHandoffState::TreeExited);
+                return;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (!handoffPending) {
+                handoffPending = true;
+                handoffPendingSince = now;
+                setHandoffStateLocked(ProcessHandoffState::HandoffPending);
+                return;
+            }
+            if (now - handoffPendingSince <= kTrustedHandoffWindow) {
+                setHandoffStateLocked(ProcessHandoffState::HandoffPending);
+                return;
+            }
+            handoffPending = false;
+            setHandoffStateLocked(ProcessHandoffState::Unverifiable);
+            return;
+        }
+        handoffPending = false;
+        setHandoffStateLocked(ProcessHandoffState::Unverifiable);
+    }
+
+    bool refreshExitedLocked() {
+        bool refreshed = false;
+        for (auto& entry : entries) {
+            if (entry.record.exited || !entry.handle.valid()) continue;
+            if (WaitForSingleObject(entry.handle.value, 0) != WAIT_OBJECT_0) continue;
+            captureExitLocked(entry);
             refreshed = true;
         }
-        if (refreshed) changed.notify_all();
+        if (refreshed) {
+            (void)resolveParentIdentitiesLocked();
+            refreshAuthorityLocked();
+            changed.notify_all();
+        }
         return refreshed;
     }
 
@@ -225,25 +460,42 @@ public:
         ProcessIdentity identity = processIdentity(handle, processId);
         if (!identity.valid()) {
             CloseHandle(handle);
+            if (!isRoot) {
+                std::lock_guard lock(mutex);
+                markTrackingUncertainLocked();
+            }
             return;
         }
+        const std::uint32_t parentProcessId = isRoot ? 0u : queryParentProcessId(processId);
 
         std::lock_guard lock(mutex);
         for (const auto& entry : entries) {
-            if (!entry.record.exited && entry.record.identity.sameInstance(identity)) {
+            if (entry.record.identity.sameInstance(identity)) {
                 CloseHandle(handle);
                 return;
             }
         }
+        if (entries.size() >= kMaximumTrackedSeatProcesses) {
+            CloseHandle(handle);
+            markTrackingUncertainLocked();
+            return;
+        }
 
         Entry entry;
         entry.record.identity = identity;
-        entry.record.parentProcessId = isRoot ? 0u : queryParentProcessId(processId);
+        entry.record.parentProcessId = parentProcessId;
         entry.record.root = isRoot;
         entry.handle = UniqueHandle(handle);
-        if (isRoot) root = identity;
+        if (isRoot) {
+            root = identity;
+            authority = identity;
+            handoffGeneration = 0u;
+            handoffState = ProcessHandoffState::RootActive;
+        }
         entries.push_back(std::move(entry));
         ++sequence;
+        (void)resolveParentIdentitiesLocked();
+        refreshAuthorityLocked();
         changed.notify_all();
     }
 
@@ -260,6 +512,33 @@ public:
         addOwnedHandle(process.release(), processId, false);
     }
 
+    void reconcileJobMembers() {
+        if (!job.valid()) return;
+        const std::size_t bytes = sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) +
+                                  sizeof(ULONG_PTR) * kMaximumTrackedSeatProcesses;
+        std::vector<std::uintptr_t> storage(
+            (bytes + sizeof(std::uintptr_t) - 1u) / sizeof(std::uintptr_t));
+        auto* list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(storage.data());
+        DWORD returned = 0;
+        if (QueryInformationJobObject(job.value, JobObjectBasicProcessIdList,
+                                      list, static_cast<DWORD>(bytes), &returned) == FALSE) {
+            std::lock_guard lock(mutex);
+            markTrackingUncertainLocked();
+            return;
+        }
+        if (list->NumberOfAssignedProcesses > kMaximumTrackedSeatProcesses ||
+            list->NumberOfProcessIdsInList > kMaximumTrackedSeatProcesses) {
+            std::lock_guard lock(mutex);
+            markTrackingUncertainLocked();
+            return;
+        }
+        for (DWORD index = 0; index < list->NumberOfProcessIdsInList; ++index) {
+            const auto rawPid = list->ProcessIdList[index];
+            if (rawPid == 0 || rawPid > 0xffffffffull) continue;
+            addChild(static_cast<std::uint32_t>(rawPid));
+        }
+    }
+
     void markExited(std::uint32_t processId) {
         std::lock_guard lock(mutex);
         for (auto& entry : entries) {
@@ -268,19 +547,19 @@ public:
                 continue;
             }
 
-            // JOB_OBJECT_MSG_EXIT_PROCESS is authoritative for this Job Object
-            // membership. The process handle can become signaled a few scheduler
-            // ticks after the completion packet is dequeued, so do not discard the
-            // one-shot notification just because a zero-time wait races it.
-            (void)WaitForSingleObject(entry.handle.value, 1000u);
-            DWORD exitCode = 0;
-            if (GetExitCodeProcess(entry.handle.value, &exitCode) != FALSE &&
-                exitCode != STILL_ACTIVE) {
-                entry.record.exitCode = exitCode;
+            // A Job completion packet proves that some process with this numeric PID
+            // exited from this Job, but the packet does not carry creation identity.
+            // Require the exact captured handle to be signaled before consuming it so
+            // a delayed packet cannot mark a later PID-reuse instance as exited.
+            const DWORD wait = WaitForSingleObject(entry.handle.value, 1000u);
+            if (wait == WAIT_TIMEOUT) return;
+            if (wait != WAIT_OBJECT_0) {
+                markTrackingUncertainLocked();
+                return;
             }
-            entry.record.exited = true;
-            entry.handle.reset();
-            ++sequence;
+            captureExitLocked(entry);
+            (void)resolveParentIdentitiesLocked();
+            refreshAuthorityLocked();
             changed.notify_all();
             return;
         }
@@ -306,9 +585,6 @@ public:
                     markExited(processId);
                     break;
                 case JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO:
-                    // Individual exit packets can race handle signaling. The
-                    // empty-job notification is a safe point to reconcile every
-                    // exact handle that this Seat already owns.
                     refreshExited();
                     break;
                 default:
@@ -363,11 +639,20 @@ ProcessIdentity SeatProcessGroup::rootIdentity() const {
 ProcessTreeSnapshot SeatProcessGroup::snapshot() const {
     ProcessTreeSnapshot result;
     if (!impl_) return result;
+#ifdef _WIN32
+    impl_->reconcileJobMembers();
+#endif
     std::lock_guard lock(impl_->mutex);
+#ifdef _WIN32
+    (void)impl_->refreshExitedLocked();
+    (void)impl_->resolveParentIdentitiesLocked();
+    impl_->refreshAuthorityLocked();
+#endif
     result.seatId = impl_->seat;
     result.capability = impl_->tracking;
     result.root = impl_->root;
     result.sequence = impl_->sequence;
+    result.trackingComplete = impl_->trackingComplete;
     result.processes.reserve(impl_->entries.size());
     for (const auto& entry : impl_->entries) result.processes.push_back(entry.record);
     std::sort(result.processes.begin(), result.processes.end(),
@@ -381,6 +666,89 @@ ProcessTreeSnapshot SeatProcessGroup::snapshot() const {
     return result;
 }
 
+ProcessHandoffSnapshot SeatProcessGroup::handoffSnapshot() const {
+    ProcessHandoffSnapshot result;
+    if (!impl_) return result;
+#ifdef _WIN32
+    impl_->reconcileJobMembers();
+#endif
+    std::lock_guard lock(impl_->mutex);
+#ifdef _WIN32
+    (void)impl_->refreshExitedLocked();
+    (void)impl_->resolveParentIdentitiesLocked();
+    impl_->refreshAuthorityLocked();
+#endif
+    result.seatId = impl_->seat;
+    result.launchRoot = impl_->root;
+    result.authoritativeProcess = impl_->authority;
+    result.handoffGeneration = impl_->handoffGeneration;
+    result.treeSequence = impl_->sequence;
+    result.state = impl_->handoffState;
+    return result;
+}
+
+bool SeatProcessGroup::configureTrustedHandoffExecutables(
+    std::vector<std::wstring> executablePaths, std::string* error) {
+    if (!impl_) {
+        if (error) *error = "process group is absent";
+        return false;
+    }
+#ifdef _WIN32
+    if (executablePaths.empty() ||
+        executablePaths.size() > kMaximumTrustedHandoffExecutables ||
+        std::any_of(executablePaths.begin(), executablePaths.end(),
+                    [](const std::wstring& path) { return path.empty(); })) {
+        if (error) *error = "trusted handoff executable evidence is empty or exceeds bounds";
+        return false;
+    }
+
+    std::vector<std::wstring> unique;
+    unique.reserve(executablePaths.size());
+    for (auto& path : executablePaths) {
+        if (std::none_of(unique.begin(), unique.end(),
+                         [&](const std::wstring& existing) {
+                             return sameWindowsPath(existing, path);
+                         })) {
+            unique.push_back(std::move(path));
+        }
+    }
+
+    impl_->reconcileJobMembers();
+    std::lock_guard lock(impl_->mutex);
+    if (!impl_->root.valid() ||
+        std::none_of(unique.begin(), unique.end(),
+                     [&](const std::wstring& trusted) {
+                         return sameWindowsPath(impl_->root.executablePath, trusted);
+                     })) {
+        if (error) *error = "launch root does not match trusted executable evidence";
+        return false;
+    }
+    impl_->trustedHandoffExecutables = std::move(unique);
+    impl_->handoffPending = false;
+    (void)impl_->refreshExitedLocked();
+    (void)impl_->resolveParentIdentitiesLocked();
+    impl_->refreshAuthorityLocked();
+    if (error) error->clear();
+    return true;
+#else
+    (void)executablePaths;
+    if (error) *error = "trusted handoff executable evidence is Windows-only";
+    return false;
+#endif
+}
+
+bool SeatProcessGroup::ownsExactIdentity(const ProcessIdentity& identity) const {
+    if (!impl_ || !identity.valid()) return false;
+#ifdef _WIN32
+    impl_->reconcileJobMembers();
+#endif
+    std::lock_guard lock(impl_->mutex);
+    return std::any_of(impl_->entries.begin(), impl_->entries.end(),
+                       [&](const Impl::Entry& entry) {
+                           return entry.record.identity.sameInstance(identity);
+                       });
+}
+
 bool SeatProcessGroup::waitForEmpty(std::uint32_t timeoutMs) const {
     if (!impl_) return true;
 #ifdef _WIN32
@@ -389,7 +757,15 @@ bool SeatProcessGroup::waitForEmpty(std::uint32_t timeoutMs) const {
                           std::chrono::milliseconds(timeoutMs);
     for (;;) {
         (void)impl_->refreshExitedLocked();
-        if (!impl_->containsRunningProcessLocked()) return true;
+        if (impl_->job.valid()) {
+            std::uint32_t activeProcesses = 0;
+            if (impl_->queryJobActiveProcessCountLocked(activeProcesses) &&
+                activeProcesses == 0u && !impl_->containsRunningProcessLocked()) {
+                return true;
+            }
+        } else if (!impl_->containsRunningProcessLocked()) {
+            return true;
+        }
         if (timeoutMs == 0u || std::chrono::steady_clock::now() >= deadline) return false;
 
         const auto nextCheck = std::min(
@@ -405,24 +781,26 @@ bool SeatProcessGroup::waitForEmpty(std::uint32_t timeoutMs) const {
 bool SeatProcessGroup::stop(const ProcessStopPolicy& policy, std::string* error) noexcept {
     if (!impl_) return true;
 #ifdef _WIN32
-    if (impl_->runningProcessIdentities().empty()) return true;
+    if (waitForEmpty(0u)) return true;
 
     const auto gracefulDeadline = std::chrono::steady_clock::now() +
                                   std::chrono::milliseconds(policy.gracefulTimeoutMs);
     for (;;) {
         if (waitForEmpty(0u)) return true;
         const auto processes = impl_->runningProcessIdentities();
-        if (processes.empty()) return true;
-
-        CloseWindowContext context{&processes};
-        (void)EnumWindows(closeOwnedWindow, reinterpret_cast<LPARAM>(&context));
+        std::size_t postedCount = 0u;
+        if (!processes.empty()) {
+            CloseWindowContext context{&processes};
+            (void)EnumWindows(closeOwnedWindow, reinterpret_cast<LPARAM>(&context));
+            postedCount = context.postedCount;
+        }
 
         const auto now = std::chrono::steady_clock::now();
         if (policy.gracefulTimeoutMs == 0u || now >= gracefulDeadline) break;
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
             gracefulDeadline - now);
         const auto slice = static_cast<std::uint32_t>(
-            std::min<std::int64_t>(remaining.count(), context.postedCount == 0u ? 50 : 100));
+            std::min<std::int64_t>(remaining.count(), postedCount == 0u ? 50 : 100));
         if (waitForEmpty(slice)) return true;
     }
 
@@ -446,7 +824,9 @@ bool SeatProcessGroup::stop(const ProcessStopPolicy& policy, std::string* error)
     }
     if (!terminated) return false;
     if (!waitForEmpty(policy.forcedTimeoutMs)) {
-        if (error) *error = "owned process group remained alive after forced termination";
+        if (error) {
+            *error = "owned process group remained alive or cleanup could not be verified after forced termination";
+        }
         return false;
     }
     return true;
@@ -455,6 +835,18 @@ bool SeatProcessGroup::stop(const ProcessStopPolicy& policy, std::string* error)
     if (error) *error = "Seat process groups are Windows-only";
     return false;
 #endif
+}
+
+std::string_view processHandoffStateName(ProcessHandoffState state) noexcept {
+    switch (state) {
+        case ProcessHandoffState::RootActive: return "root-active";
+        case ProcessHandoffState::DescendantActive: return "descendant-active";
+        case ProcessHandoffState::HandoffPending: return "handoff-pending";
+        case ProcessHandoffState::TreeExited: return "tree-exited";
+        case ProcessHandoffState::Unverifiable: return "unverifiable";
+        case ProcessHandoffState::UnsupportedContainment: return "unsupported-containment";
+    }
+    return "unknown";
 }
 
 std::unique_ptr<SeatProcessGroup> SeatProcessGroup::adoptLaunchedProcess(

@@ -28,6 +28,17 @@ constexpr std::uint32_t kHandshakeTimeoutMs = 5000u;
 constexpr std::size_t kMaxConnectedClients = 16u;
 constexpr std::size_t kSeenCorrelationCapacity = 128u;
 
+class FailClosedTrustedRequirementSource final
+    : public requirement::ITrustedRequirementSource {
+public:
+    requirement::RequirementSnapshotDiagnostic resolveCurrent(
+        requirement::TrustedRequirementSnapshot& output) override {
+        output = {};
+        return {requirement::RequirementSnapshotCode::InputUnavailable,
+                "no production trusted requirement source was supplied to this server"};
+    }
+};
+
 std::uint64_t makeCorrelationSeed() noexcept {
     std::uint64_t value = 0;
 #ifdef _WIN32
@@ -290,6 +301,12 @@ bool validatePipeClientIdentity(HANDLE pipe, std::string* error) {
     return true;
 }
 
+std::wstring currentHostAuthorityMutexName() {
+    DWORD sessionId = 0;
+    if (ProcessIdToSessionId(GetCurrentProcessId(), &sessionId) == FALSE) sessionId = 0;
+    return L"Local\\HydraSeat.Host.Authority.v3." + std::to_wstring(sessionId);
+}
+
 std::optional<std::wstring> currentUserSidString() {
     const auto identity = currentIdentity();
     if (!identity || identity->sid.empty()) return std::nullopt;
@@ -399,9 +416,9 @@ std::wstring currentHostPipeName() {
 #ifdef _WIN32
     DWORD sessionId = 0;
     if (ProcessIdToSessionId(GetCurrentProcessId(), &sessionId) == FALSE) sessionId = 0;
-    return L"\\\\.\\pipe\\HydraSeat.Host.v3." + std::to_wstring(sessionId);
+    return L"\\\\.\\pipe\\HydraSeat.Host.v4." + std::to_wstring(sessionId);
 #else
-    return L"HydraSeat.Host.v3.unsupported";
+    return L"HydraSeat.Host.v4.unsupported";
 #endif
 }
 
@@ -511,11 +528,31 @@ std::optional<Frame> HostControlClient::transact(
     }
     Frame request{requestType, correlationId,
                   std::vector<std::byte>(payload.begin(), payload.end())};
-    if (!sendFrame(impl_->pipe.value, request, timeoutMs, error)) return std::nullopt;
-    auto response = receiveFrame(impl_->pipe.value, timeoutMs, error);
-    if (!response || response->correlationId != correlationId) {
-        if (error && (!response || error->empty())) *error = "host response correlation mismatch";
+    if (!sendFrame(impl_->pipe.value, request, timeoutMs, error)) {
+        close();
         return std::nullopt;
+    }
+    auto response = receiveFrame(impl_->pipe.value, timeoutMs, error);
+    if (!response) {
+        // A timed-out request can still complete on the server later. Reusing
+        // this byte stream would let that late response poison the next
+        // correlation, so force an authoritative reconnect/resnapshot.
+        close();
+        return std::nullopt;
+    }
+    if (response->correlationId != correlationId) {
+        if (error) *error = "host response correlation mismatch";
+        close();
+        return std::nullopt;
+    }
+    if (response->type == MessageType::Error) {
+        const auto protocolError = decodeError(response->payload);
+        if (protocolError && protocolError->code == ErrorCode::ResnapshotRequired) {
+            // The server has deliberately retired this request stream. Keeping
+            // the pipe open would allow callers to continue issuing commands
+            // without first acquiring a fresh authoritative snapshot.
+            close();
+        }
     }
     return response;
 #else
@@ -643,6 +680,87 @@ std::optional<runtime::SeatGameCommandResult> HostControlClient::reconcileSeatGa
     return result;
 }
 
+std::optional<production::ProviderPlanRegistrySnapshot>
+HostControlClient::providerPlanRegistry(
+    std::uint32_t timeoutMs, std::string* error,
+    std::optional<ErrorPayload>* protocolError) {
+    const auto correlation = impl_->allocateCorrelation();
+    const auto response = transact(MessageType::GetProviderPlanRegistry, {}, correlation,
+                                   timeoutMs, error);
+    if (!response) return std::nullopt;
+    if (response->type == MessageType::Error) {
+        auto decoded = decodeError(response->payload);
+        if (protocolError) *protocolError = decoded;
+        if (error && decoded) *error = decoded->diagnostic;
+        return std::nullopt;
+    }
+    if (response->type != MessageType::ProviderPlanRegistry) {
+        if (error) *error = "unexpected provider-plan registry response type";
+        return std::nullopt;
+    }
+    auto result = decodeProviderPlanRegistrySnapshot(response->payload);
+    if (!result && error) *error = "provider-plan registry payload is malformed";
+    return result;
+}
+
+std::optional<production::ProviderPlanInstallResult>
+HostControlClient::installProviderPlan(
+    const production::ProviderPlanInstallRequest& request,
+    std::uint32_t timeoutMs, std::string* error,
+    std::optional<ErrorPayload>* protocolError) {
+    const auto payload = encodeProviderPlanInstallRequest(request);
+    if (payload.empty()) {
+        if (error) *error = "provider-plan install request is malformed or exceeds bounds";
+        return std::nullopt;
+    }
+    const auto correlation = impl_->allocateCorrelation();
+    const auto response = transact(MessageType::InstallProviderPlan, payload, correlation,
+                                   timeoutMs, error);
+    if (!response) return std::nullopt;
+    if (response->type == MessageType::Error) {
+        auto decoded = decodeError(response->payload);
+        if (protocolError) *protocolError = decoded;
+        if (error && decoded) *error = decoded->diagnostic;
+        return std::nullopt;
+    }
+    if (response->type != MessageType::InstallProviderPlanResult) {
+        if (error) *error = "unexpected provider-plan install response type";
+        return std::nullopt;
+    }
+    auto result = decodeProviderPlanInstallResult(response->payload);
+    if (!result && error) *error = "provider-plan install result payload is malformed";
+    return result;
+}
+
+std::optional<production::ProviderPlanInstallResult>
+HostControlClient::removeProviderPlan(
+    const production::ProviderPlanRemoveRequest& request,
+    std::uint32_t timeoutMs, std::string* error,
+    std::optional<ErrorPayload>* protocolError) {
+    const auto payload = encodeProviderPlanRemoveRequest(request);
+    if (payload.empty()) {
+        if (error) *error = "provider-plan remove request is malformed or exceeds bounds";
+        return std::nullopt;
+    }
+    const auto correlation = impl_->allocateCorrelation();
+    const auto response = transact(MessageType::RemoveProviderPlan, payload, correlation,
+                                   timeoutMs, error);
+    if (!response) return std::nullopt;
+    if (response->type == MessageType::Error) {
+        auto decoded = decodeError(response->payload);
+        if (protocolError) *protocolError = decoded;
+        if (error && decoded) *error = decoded->diagnostic;
+        return std::nullopt;
+    }
+    if (response->type != MessageType::RemoveProviderPlanResult) {
+        if (error) *error = "unexpected provider-plan remove response type";
+        return std::nullopt;
+    }
+    auto result = decodeProviderPlanInstallResult(response->payload);
+    if (!result && error) *error = "provider-plan remove result payload is malformed";
+    return result;
+}
+
 bool HostControlClient::ping(std::uint64_t nonce, std::uint32_t timeoutMs,
                              std::string* error) {
     const auto correlation = impl_->allocateCorrelation();
@@ -701,6 +819,9 @@ ReceivedEvent HostControlClient::readSubscriptionEvent(std::uint32_t timeoutMs,
     } else if (frame->type == MessageType::Error) {
         result.error = decodeError(frame->payload);
         if (!result.error && error) *error = "subscription error payload is malformed";
+        if (result.error && result.error->code == ErrorCode::ResnapshotRequired) {
+            close();
+        }
     } else if (error) {
         *error = "unexpected subscription frame type";
     }
@@ -713,7 +834,25 @@ ReceivedEvent HostControlClient::readSubscriptionEvent(std::uint32_t timeoutMs,
 
 class HostControlServer::Impl {
 public:
-    explicit Impl(runtime::RuntimeHost& runtimeHost) : host(runtimeHost) {}
+    Impl(runtime::RuntimeHost& runtimeHost,
+         std::shared_ptr<requirement::ITrustedRequirementSource> trustedRequirements)
+        : host(runtimeHost) {
+        if (!trustedRequirements) {
+            compositionError =
+                "trusted runtime requirement source is unavailable during Host composition";
+            return;
+        }
+        auto productionFactory =
+            std::make_shared<production::HostProviderPlanRegistry>(
+                std::shared_ptr<launch::ISeatActivationResourceFactory>{},
+                std::move(trustedRequirements));
+        if (!host.installSeatGameFactoryIfUnavailable(
+                std::move(productionFactory), &compositionError)) {
+            if (compositionError.empty()) {
+                compositionError = "production Seat activation factory registration failed";
+            }
+        }
+    }
 
     struct ClientThread {
         std::thread worker;
@@ -721,6 +860,7 @@ public:
     };
 
     runtime::RuntimeHost& host;
+    std::string compositionError;
     std::atomic<bool> stopRequested{false};
     std::atomic<std::size_t> activeClients{0};
     std::mutex threadsMutex;
@@ -748,17 +888,27 @@ public:
                          kDefaultHostIpcTimeoutMs, nullptr);
     }
 
-    bool rememberCorrelation(std::uint64_t correlation,
-                             std::deque<std::uint64_t>& order,
-                             std::unordered_set<std::uint64_t>& seen) {
-        if (seen.contains(correlation)) return false;
+    enum class CorrelationRememberResult {
+        Accepted,
+        Duplicate,
+        CapacityExhausted,
+    };
+
+    CorrelationRememberResult rememberCorrelation(
+        std::uint64_t correlation,
+        std::deque<std::uint64_t>& order,
+        std::unordered_set<std::uint64_t>& seen) {
+        if (seen.contains(correlation)) return CorrelationRememberResult::Duplicate;
+        // Never evict an accepted correlation while the same command stream is
+        // alive. Eviction would make a previously processed request replayable.
+        // The bounded alternative is to retire the stream and require a fresh
+        // handshake plus an authoritative resnapshot.
+        if (order.size() >= kSeenCorrelationCapacity) {
+            return CorrelationRememberResult::CapacityExhausted;
+        }
         seen.insert(correlation);
         order.push_back(correlation);
-        if (order.size() > kSeenCorrelationCapacity) {
-            seen.erase(order.front());
-            order.pop_front();
-        }
-        return true;
+        return CorrelationRememberResult::Accepted;
     }
 
     void subscriptionLoop(HANDLE pipe, const SubscribeRequest& request,
@@ -869,11 +1019,19 @@ public:
                 if (readError == "host pipe I/O timeout") continue;
                 return;
             }
-            if (!rememberCorrelation(request->correlationId, order, seen)) {
+            const auto correlationState =
+                rememberCorrelation(request->correlationId, order, seen);
+            if (correlationState == CorrelationRememberResult::Duplicate) {
                 (void)sendError(pipe.value, request->correlationId,
                                 ErrorCode::DuplicateCorrelation,
                                 "duplicate command correlation ID");
                 continue;
+            }
+            if (correlationState == CorrelationRememberResult::CapacityExhausted) {
+                (void)sendError(
+                    pipe.value, request->correlationId, ErrorCode::ResnapshotRequired,
+                    "correlation replay window exhausted; reconnect and resnapshot");
+                return;
             }
             if (hello->role == ClientRole::ReadOnly && isMutatingRequest(request->type)) {
                 (void)sendError(pipe.value, request->correlationId,
@@ -892,7 +1050,9 @@ public:
                 isMutatingRequest(request->type) &&
                 request->type != MessageType::AssignSeatGame &&
                 request->type != MessageType::StartSeatGame &&
-                request->type != MessageType::StopSeatGame) {
+                request->type != MessageType::StopSeatGame &&
+                request->type != MessageType::InstallProviderPlan &&
+                request->type != MessageType::RemoveProviderPlan) {
                 (void)sendError(pipe.value, request->correlationId,
                                 ErrorCode::PermissionDenied,
                                 "Seat control cannot mutate whole-machine runtime state");
@@ -909,6 +1069,99 @@ public:
                                 Frame{MessageType::Snapshot, request->correlationId,
                                       encodeSnapshot(host.snapshot())},
                                 kDefaultHostIpcTimeoutMs, nullptr);
+                continue;
+            }
+            if (request->type == MessageType::GetProviderPlanRegistry) {
+                if (!request->payload.empty()) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::Malformed,
+                                    "provider-plan registry request payload must be empty");
+                    continue;
+                }
+                if (hello->role == ClientRole::ReadOnly) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::PermissionDenied,
+                                    "read-only clients cannot inspect temporary provider-plan bindings");
+                    continue;
+                }
+                auto registry = host.providerPlanRegistrySnapshot();
+                if (hello->role == ClientRole::SeatControl) {
+                    registry.entries.erase(
+                        std::remove_if(registry.entries.begin(), registry.entries.end(),
+                                       [&](const auto& entry) {
+                                           return entry.seatId != hello->seatId;
+                                       }),
+                        registry.entries.end());
+                }
+                const auto encoded = encodeProviderPlanRegistrySnapshot(registry);
+                if (encoded.empty()) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::InternalError,
+                                    "host provider-plan registry could not be encoded");
+                    continue;
+                }
+                if (!sendFrame(pipe.value,
+                               Frame{MessageType::ProviderPlanRegistry,
+                                     request->correlationId, encoded},
+                               kDefaultHostIpcTimeoutMs, nullptr)) return;
+                continue;
+            }
+            if (request->type == MessageType::InstallProviderPlan) {
+                const auto install = decodeProviderPlanInstallRequest(request->payload);
+                if (!install) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::Malformed,
+                                    "malformed typed provider-plan install request");
+                    continue;
+                }
+                if (hello->role == ClientRole::SeatControl &&
+                    install->seatId != hello->seatId) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::PermissionDenied,
+                                    "Seat control cannot install another Seat provider plan");
+                    continue;
+                }
+                const auto result = host.installProviderPlan(*install);
+                const auto encoded = encodeProviderPlanInstallResult(result);
+                if (encoded.empty()) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::InternalError,
+                                    "host provider-plan install result could not be encoded");
+                    continue;
+                }
+                if (!sendFrame(pipe.value,
+                               Frame{MessageType::InstallProviderPlanResult,
+                                     request->correlationId, encoded},
+                               kDefaultHostIpcTimeoutMs, nullptr)) return;
+                continue;
+            }
+            if (request->type == MessageType::RemoveProviderPlan) {
+                const auto remove = decodeProviderPlanRemoveRequest(request->payload);
+                if (!remove) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::Malformed,
+                                    "malformed typed provider-plan remove request");
+                    continue;
+                }
+                if (hello->role == ClientRole::SeatControl &&
+                    remove->seatId != hello->seatId) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::PermissionDenied,
+                                    "Seat control cannot remove another Seat provider plan");
+                    continue;
+                }
+                const auto result = host.removeProviderPlan(*remove);
+                const auto encoded = encodeProviderPlanInstallResult(result);
+                if (encoded.empty()) {
+                    (void)sendError(pipe.value, request->correlationId,
+                                    ErrorCode::InternalError,
+                                    "host provider-plan remove result could not be encoded");
+                    continue;
+                }
+                if (!sendFrame(pipe.value,
+                               Frame{MessageType::RemoveProviderPlanResult,
+                                     request->correlationId, encoded},
+                               kDefaultHostIpcTimeoutMs, nullptr)) return;
                 continue;
             }
             if (request->type == MessageType::Ping) {
@@ -1058,7 +1311,14 @@ public:
 };
 
 HostControlServer::HostControlServer(runtime::RuntimeHost& host)
-    : impl_(std::make_unique<Impl>(host)) {}
+    : HostControlServer(host,
+          std::make_shared<FailClosedTrustedRequirementSource>()) {}
+
+HostControlServer::HostControlServer(
+    runtime::RuntimeHost& host,
+    std::shared_ptr<requirement::ITrustedRequirementSource> trustedRequirements)
+    : impl_(std::make_unique<Impl>(host, std::move(trustedRequirements))) {}
+
 HostControlServer::~HostControlServer() {
     requestStop();
     if (impl_) {
@@ -1074,7 +1334,24 @@ void HostControlServer::requestStop() noexcept {
 }
 
 bool HostControlServer::serve(std::string* error) {
+    if (!impl_->compositionError.empty()) {
+        if (error != nullptr) *error = impl_->compositionError;
+        return false;
+    }
 #ifdef _WIN32
+    const auto authorityName = currentHostAuthorityMutexName();
+    HANDLE authorityHandle = CreateMutexW(nullptr, FALSE, authorityName.c_str());
+    if (authorityHandle == nullptr) {
+        if (error) *error = win32ErrorMessage("host authority mutex creation failed", GetLastError());
+        return false;
+    }
+    const DWORD authorityStatus = GetLastError();
+    UniqueHandle authority(authorityHandle);
+    if (authorityStatus == ERROR_ALREADY_EXISTS) {
+        if (error) *error = "another HydraSeat host already owns this Windows session";
+        return false;
+    }
+
     while (!impl_->stopRequested.load(std::memory_order_acquire)) {
         impl_->reapFinishedThreads();
         const auto snapshot = impl_->host.snapshot();

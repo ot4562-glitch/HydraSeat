@@ -1,5 +1,6 @@
 #include "hydra/community_setup.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -76,10 +77,31 @@ profile::TwoPlayerSetup sourceSetup() {
     value.displayName = L"Community two player";
     value.compatibility = compatibility();
     value.instances = {
-        {{L"--seat=1"}, L"C:\\Source\\Game", L"C:\\Source\\Data1"},
-        {{L"--seat=2"}, L"C:\\Source\\Game", L"C:\\Source\\Data2"},
+        {{L"--seat=1", L"--profile", L"alpha"},
+         L"C:\\Source\\Game1", L"C:\\Source\\Data1"},
+        {{L"--seat=2", L"--profile", L"beta"},
+         L"C:\\Source\\Game2", L"C:\\Source\\Data2"},
     };
     return value;
+}
+
+std::vector<portable::PortableInstanceMaterialization> materializations() {
+    return {
+        {0u,
+         {{"community-pre", setup::RecipeExecutionPhase::PreSpawn,
+           setup::MutationScope::SeatWritableInstance,
+           {{L"defaults/pre.ini", L"config/seat1.ini", 4096u}}},
+          {"community-startup", setup::RecipeExecutionPhase::Startup,
+           setup::MutationScope::SeatWritableInstance,
+           {{L"defaults/startup.ini", L"state/startup.ini", 4096u}}}}},
+        {1u,
+         {{"community-window", setup::RecipeExecutionPhase::PostWindow,
+           setup::MutationScope::SeatWritableInstance,
+           {{L"defaults/window.ini", L"config/seat2.ini", 4096u}}},
+          {"community-runtime", setup::RecipeExecutionPhase::Runtime,
+           setup::MutationScope::SeatWritableInstance,
+           {{L"defaults/runtime.ini", L"state/runtime.ini", 4096u}}}}},
+    };
 }
 
 CommunitySetupEntry entry(bool protectedExperimental = false) {
@@ -101,6 +123,17 @@ CommunitySetupEntry entry(bool protectedExperimental = false) {
         sourceSetup(), localGame(), {value.sourceId, value.packageRevision, "fixture-exporter"},
         value.setupPackage);
     check(exported.succeeded(), "community setup fixture exports through the P6 portable boundary");
+    return value;
+}
+
+CommunitySetupEntry entryWithMaterialization() {
+    auto value = entry();
+    const auto descriptors = materializations();
+    const auto exported = portable::exportSetup(
+        sourceSetup(), localGame(), {value.sourceId, value.packageRevision, "fixture-exporter"},
+        descriptors, value.setupPackage);
+    check(exported.succeeded(),
+          "community semantic fixture exports typed materialization descriptors");
     return value;
 }
 
@@ -164,7 +197,8 @@ plan::GameRuntimeRequirement requirement(bool protectedExperimental, bool approv
 
 plan::PlanCompileResult compileImported(const profile::TwoPlayerSetup& imported,
                                         bool protectedExperimental,
-                                        bool approved) {
+                                        bool approved,
+                                        bool provideLocalRequirement = true) {
     FakeProvider fake;
     const std::vector<plan::ProviderAdapterBinding> providers{{"fake", &fake}};
     profile::GameRecordDocument games;
@@ -173,8 +207,10 @@ plan::PlanCompileResult compileImported(const profile::TwoPlayerSetup& imported,
     setups.setups = {imported};
     const auto selection = setup::makeRuntimeSelection(
         imported, 1u, "player-1", 2u, "player-2");
-    const std::vector<plan::GameRuntimeRequirement> requirements{
-        requirement(protectedExperimental, approved)};
+    std::vector<plan::GameRuntimeRequirement> requirements;
+    if (provideLocalRequirement) {
+        requirements.push_back(requirement(protectedExperimental, approved));
+    }
     return plan::compileProviderAwareLaunchPlan(
         seats(), players(), games, setups, selection, providers, requirements);
 }
@@ -192,6 +228,50 @@ void testValidatedCommunitySetupImportsAndCompilesLocally() {
           "community source paths are replaced by local approved paths");
     check(compileImported(imported, false, false).succeeded(),
           "imported community setup compiles through the exact local P6 plan/preflight contract");
+}
+
+void testTypedCommunityImportPreservesSemanticsWithoutGrantingAuthority() {
+    const auto communityEntry = entryWithMaterialization();
+    check(validateCommunitySetupEntry(communityEntry).succeeded(),
+          "community entry accepts only validated data-only v2 materialization descriptors");
+
+    portable::ImportedSetup imported;
+    check(importCommunitySetup(communityEntry, localGame(), localBindings(), imported).succeeded(),
+          "typed community import preserves semantic-bearing setup package");
+    check(imported.setup.instances[0].arguments == sourceSetup().instances[0].arguments &&
+              imported.setup.instances[1].arguments == sourceSetup().instances[1].arguments &&
+              imported.setup.compatibility == compatibility(),
+          "community typed import preserves both argument arrays and compatibility reference");
+    check(imported.instanceMaterializations == materializations(),
+          "community typed import preserves PreSpawn/Startup/PostWindow/Runtime descriptors exactly");
+
+    profile::TwoPlayerSetup legacyOutput;
+    legacyOutput.setupId = "sentinel";
+    const auto sentinel = legacyOutput;
+    check(importCommunitySetup(communityEntry, localGame(), localBindings(), legacyOutput).code ==
+              CommunitySetupCode::LocalImportFailed &&
+              legacyOutput == sentinel,
+          "setup-only community import refuses to silently discard v2 materialization semantics");
+
+    const auto noAuthority = compileImported(imported.setup, false, false, false);
+    check(!noAuthority.succeeded() &&
+              std::any_of(noAuthority.issues.begin(), noAuthority.issues.end(),
+                          [](const plan::PlanIssue& issue) {
+                              return issue.code == plan::PlanIssueCode::MissingRequirement;
+                          }),
+          "community import alone cannot manufacture trusted local runtime requirement evidence");
+
+    const auto locallyAuthorized = compileImported(imported.setup, false, false, true);
+    check(locallyAuthorized.succeeded() && locallyAuthorized.plan.has_value(),
+          "same imported declarative setup compiles only after local requirement authority is supplied");
+    if (locallyAuthorized.plan) {
+        check(std::all_of(locallyAuthorized.plan->seats.begin(), locallyAuthorized.plan->seats.end(),
+                          [](const plan::SeatProviderLaunchPlan& seat) {
+                              return seat.requirementRevision == 9u &&
+                                     seat.launchRequest.metadataRevision == 7u;
+                          }),
+              "community package/evidence revision never replaces local requirement/provider revisions");
+    }
 }
 
 void testCommunityPopularityCannotOverrideLocalProtectionGate() {
@@ -222,6 +302,12 @@ void testMaliciousInstructionAndExternalResourceTextRejected() {
     malicious.authorAttribution = "https://example.invalid/profile";
     check(validateCommunitySetupEntry(malicious).code == CommunitySetupCode::InvalidProvenance,
           "author attribution remains passive bounded text, not an active external resource reference");
+
+    malicious = entryWithMaterialization();
+    malicious.setupPackage.instanceMaterializations[0].steps[0].scope =
+        setup::MutationScope::SharedInstallation;
+    check(validateCommunitySetupEntry(malicious).code == CommunitySetupCode::InvalidPortableSetup,
+          "community setup cannot upgrade declarative materialization into shared-install mutation authority");
 }
 
 void testSelectorProvenanceAndRemapFailuresAreTransactional() {
@@ -260,6 +346,7 @@ void testSelectorProvenanceAndRemapFailuresAreTransactional() {
 
 int main() {
     testValidatedCommunitySetupImportsAndCompilesLocally();
+    testTypedCommunityImportPreservesSemanticsWithoutGrantingAuthority();
     testCommunityPopularityCannotOverrideLocalProtectionGate();
     testMaliciousInstructionAndExternalResourceTextRejected();
     testSelectorProvenanceAndRemapFailuresAreTransactional();

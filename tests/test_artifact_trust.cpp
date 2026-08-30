@@ -7,6 +7,7 @@
 namespace {
 
 using namespace hydra::trust;
+constexpr std::string_view kPublisher = "0123456789ABCDEF0123456789ABCDEF01234567";
 
 int failures = 0;
 
@@ -26,6 +27,7 @@ TrustPolicy policy() {
     value.hostArchitecture = ArtifactArchitecture::X64;
     value.allowedSourceIds = {"official", "community-reviewed"};
     value.allowedCapabilities = {"compatibility-data", "two-player-setup", "provider-helper"};
+    value.trustedPublisherIdentities = {std::string(kPublisher)};
     return value;
 }
 
@@ -46,7 +48,7 @@ ArtifactManifest dataManifest() {
 
 ArtifactObservation dataObservation() {
     return {true, "1.0.0", ArtifactArchitecture::Any, hash('a'),
-            SignatureState::NotApplicable};
+            SignatureState::NotApplicable, {}};
 }
 
 ArtifactManifest executableManifest() {
@@ -68,7 +70,7 @@ ArtifactManifest executableManifest() {
 
 ArtifactObservation executableObservation() {
     return {true, "1.2.0", ArtifactArchitecture::X64, hash('b'),
-            SignatureState::ValidTrustedPublisher};
+            SignatureState::ValidTrustedPublisher, std::string(kPublisher)};
 }
 
 void testDataAndExecutableTrustClassesStayDifferent() {
@@ -108,6 +110,24 @@ void testTamperVersionArchitectureAndPublisherFailClosed() {
     check(evaluateArtifact(executableManifest(), unknownPublisher, policy()).code ==
               TrustCode::SignatureInvalid,
           "unknown executable publisher cannot silently become trusted");
+
+    auto wrongPublisher = executableObservation();
+    wrongPublisher.publisherIdentity = "89ABCDEF0123456789ABCDEF0123456789ABCDEF";
+    check(evaluateArtifact(executableManifest(), wrongPublisher, policy()).code ==
+              TrustCode::PublisherIdentityMismatch,
+          "validly signed executable from a different exact publisher is rejected");
+
+    auto missingPublisher = executableObservation();
+    missingPublisher.publisherIdentity.clear();
+    check(evaluateArtifact(executableManifest(), missingPublisher, policy()).code ==
+              TrustCode::SignatureMetadataMalformed,
+          "valid signature metadata without exact publisher identity is malformed");
+
+    auto noPublisherPolicy = policy();
+    noPublisherPolicy.trustedPublisherIdentities.clear();
+    check(evaluateArtifact(executableManifest(), executableObservation(), noPublisherPolicy).code ==
+              TrustCode::PublisherIdentityRequired,
+          "signed status alone is insufficient without an exact publisher trust anchor");
 }
 
 void testUnsignedDevelopmentExceptionIsExplicitAndNarrow() {
@@ -115,6 +135,7 @@ void testUnsignedDevelopmentExceptionIsExplicitAndNarrow() {
     manifest.developmentBuild = true;
     auto observation = executableObservation();
     observation.signature = SignatureState::Missing;
+    observation.publisherIdentity.clear();
 
     auto defaultPolicy = policy();
     check(evaluateArtifact(manifest, observation, defaultPolicy).code == TrustCode::SignatureRequired,

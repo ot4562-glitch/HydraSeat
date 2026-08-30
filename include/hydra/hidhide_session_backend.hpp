@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
@@ -22,10 +23,96 @@ inline constexpr std::uint32_t kHidHideSessionMinExpiryMs = 1'000u;
 inline constexpr std::uint32_t kHidHideSessionMaxExpiryMs = 60'000u;
 inline constexpr std::uint32_t kHidHideSessionNoSpareInputMaxExpiryMs = 10'000u;
 
+inline constexpr std::uint64_t kPhase3HardwareEvidenceValiditySeconds = 24u * 60u * 60u;
+inline constexpr std::uint64_t kPhase3HardwareEvidenceMaxClockSkewSeconds = 300u;
+
 // P3-D-02 is deliberately split into a portable transaction core and an
-// optional native mutation platform. The transaction core can be fully tested
-// without touching a physical device. Native mutation remains runtime-gated by
-// physicalAcceptanceRecorded + nativeMutationApproved.
+// optional native mutation platform. Native mutation is never authorized by a
+// caller-provided boolean: only a typed P3-HW evidence object produced by the
+// strict manifest loader can cross the physical-acceptance boundary.
+enum class Phase3InputDeviceCategory : std::uint8_t {
+    Keyboard = 0,
+    Mouse = 1,
+};
+
+struct Phase3SeatDeviceIdentity {
+    std::wstring stableDeviceId;
+    std::wstring deviceInstanceId;
+    Phase3InputDeviceCategory category{Phase3InputDeviceCategory::Keyboard};
+    std::uint32_t seatId{0};
+
+    bool operator==(const Phase3SeatDeviceIdentity&) const = default;
+};
+
+enum class Phase3HardwareEvidenceStatus : std::uint8_t {
+    Accepted = 0,
+    Missing = 1,
+    Malformed = 2,
+    Pending = 3,
+    Stale = 4,
+    Tampered = 5,
+    Mismatched = 6,
+    IoFailure = 7,
+};
+
+struct Phase3HardwareEvidenceLoadResult;
+
+class Phase3HardwareAcceptanceEvidence {
+public:
+    Phase3HardwareAcceptanceEvidence(const Phase3HardwareAcceptanceEvidence&) = default;
+    Phase3HardwareAcceptanceEvidence(Phase3HardwareAcceptanceEvidence&&) noexcept = default;
+    Phase3HardwareAcceptanceEvidence& operator=(const Phase3HardwareAcceptanceEvidence&) = default;
+    Phase3HardwareAcceptanceEvidence& operator=(Phase3HardwareAcceptanceEvidence&&) noexcept = default;
+
+    const std::string& sessionId() const noexcept { return sessionId_; }
+    const std::filesystem::path& manifestPath() const noexcept { return manifestPath_; }
+    const std::vector<Phase3SeatDeviceIdentity>& nativeScope() const noexcept {
+        return nativeScope_;
+    }
+    std::uint64_t validUntilUnixSeconds() const noexcept { return validUntilUnixSeconds_; }
+
+    bool operator==(const Phase3HardwareAcceptanceEvidence&) const = default;
+
+private:
+    struct ArtifactBinding {
+        std::filesystem::path path;
+        std::string sha256;
+
+        bool operator==(const ArtifactBinding&) const = default;
+    };
+
+    Phase3HardwareAcceptanceEvidence() = default;
+
+    std::string sessionId_;
+    std::filesystem::path manifestPath_;
+    std::string manifestSha256_;
+    std::filesystem::path profilePath_;
+    std::string profileSha256_;
+    std::vector<ArtifactBinding> artifacts_;
+    std::vector<Phase3SeatDeviceIdentity> nativeScope_;
+    std::uint64_t manualVerdictUnixSeconds_{0};
+    std::uint64_t validUntilUnixSeconds_{0};
+
+    friend struct Phase3HardwareEvidenceLoadResult;
+    friend Phase3HardwareEvidenceLoadResult loadPhase3HardwareAcceptanceEvidence(
+        const std::filesystem::path&, std::uint64_t);
+    friend bool validatePhase3HardwareAcceptanceEvidenceForDevices(
+        const Phase3HardwareAcceptanceEvidence&,
+        std::span<const std::wstring>,
+        std::uint64_t,
+        std::string*);
+};
+
+struct Phase3HardwareEvidenceLoadResult {
+    Phase3HardwareEvidenceStatus status{Phase3HardwareEvidenceStatus::Malformed};
+    std::optional<Phase3HardwareAcceptanceEvidence> evidence;
+    std::string diagnostic;
+
+    bool accepted() const noexcept {
+        return status == Phase3HardwareEvidenceStatus::Accepted && evidence.has_value();
+    }
+};
+
 enum class HidHideSessionPhase : std::uint8_t {
     Idle = 0,
     Prepared = 1,
@@ -63,7 +150,11 @@ struct HidHideSessionRequest {
     bool replacementPathVerified{false};
     bool recoveryReady{false};
     bool spareRecoveryInputPresent{false};
-    bool physicalAcceptanceRecorded{false};
+    std::optional<Phase3HardwareAcceptanceEvidence> physicalAcceptanceEvidence;
+    // Zero preserves the original full-manifest exact-scope rule. A nonzero
+    // value authorizes only the exact native device subset already bound to
+    // that Seat by the typed P3-HW evidence; it cannot name arbitrary devices.
+    std::uint32_t physicalEvidenceSeatId{0};
     bool nativeMutationApproved{false};
     std::uint32_t expiryMilliseconds{0};
     std::uint64_t generation{0};
@@ -152,6 +243,23 @@ private:
     std::optional<HidHideSessionPlan> plan_;
     bool sessionEntriesActive_{false};
 };
+
+Phase3HardwareEvidenceLoadResult loadPhase3HardwareAcceptanceEvidence(
+    const std::filesystem::path& manifestPath,
+    std::uint64_t nowUnixSeconds = 0u);
+bool validatePhase3HardwareAcceptanceEvidenceForDevices(
+    const Phase3HardwareAcceptanceEvidence& evidence,
+    std::span<const std::wstring> requestedDeviceInstanceIds,
+    std::uint64_t nowUnixSeconds = 0u,
+    std::string* error = nullptr);
+bool validatePhase3HardwareAcceptanceEvidenceForSeatDevices(
+    const Phase3HardwareAcceptanceEvidence& evidence,
+    std::uint32_t seatId,
+    std::span<const std::wstring> requestedDeviceInstanceIds,
+    std::uint64_t nowUnixSeconds = 0u,
+    std::string* error = nullptr);
+std::string_view phase3HardwareEvidenceStatusName(
+    Phase3HardwareEvidenceStatus status) noexcept;
 
 bool validateHidHideSessionRequest(const HidHideSessionRequest& request,
                                    std::string& error);

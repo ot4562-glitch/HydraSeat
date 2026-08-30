@@ -54,6 +54,18 @@ bool contains(const std::vector<std::string>& values, std::string_view expected)
     return std::find(values.begin(), values.end(), expected) != values.end();
 }
 
+bool validPublisherPolicy(const TrustPolicy& policy) {
+    if (policy.trustedPublisherIdentities.size() > kMaximumTrustedPublisherIdentities) return false;
+    std::set<std::string> seen;
+    for (const auto& identity : policy.trustedPublisherIdentities) {
+        if (!validId(identity) || identity.size() > kMaximumPublisherIdentityBytes ||
+            !seen.insert(identity).second) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool isDataOnly(ArtifactClass value) noexcept {
     return value == ArtifactClass::DataCatalog || value == ArtifactClass::SetupPackage;
 }
@@ -71,9 +83,10 @@ TrustEvaluation evaluateArtifact(const ArtifactManifest& manifest,
         !validArchitecture(policy.hostArchitecture) || !validId(manifest.artifactId) ||
         !validId(manifest.artifactVersion) || !validId(manifest.sourceId) ||
         !validId(manifest.licenseId) || !validSha256(manifest.expectedSha256) ||
-        manifest.capabilityScope.size() > kMaximumArtifactCapabilities) {
+        manifest.capabilityScope.size() > kMaximumArtifactCapabilities ||
+        !validPublisherPolicy(policy)) {
         return reject(TrustCode::InvalidManifest,
-                      "artifact manifest contains invalid bounded identity/version/hash fields");
+                      "artifact manifest or trust policy contains invalid bounded identity/version/hash fields");
     }
     if (artifactClassCanExecute(manifest.artifactClass) &&
         manifest.architecture == ArtifactArchitecture::Any) {
@@ -127,6 +140,23 @@ TrustEvaluation evaluateArtifact(const ArtifactManifest& manifest,
         return reject(TrustCode::InvalidManifest,
                       "artifact observation contains invalid version/hash/architecture/signature state");
     }
+    if (observation.signature == SignatureState::ValidTrustedPublisher) {
+        if (!validId(observation.publisherIdentity) ||
+            observation.publisherIdentity.size() > kMaximumPublisherIdentityBytes) {
+            return reject(TrustCode::SignatureMetadataMalformed,
+                          "valid signature metadata is missing a bounded canonical publisher identity");
+        }
+    } else if ((observation.signature == SignatureState::Missing ||
+                observation.signature == SignatureState::NotApplicable) &&
+               !observation.publisherIdentity.empty()) {
+        return reject(TrustCode::SignatureMetadataMalformed,
+                      "unsigned/not-applicable signature metadata cannot carry a publisher identity");
+    } else if (!observation.publisherIdentity.empty() &&
+               (!validId(observation.publisherIdentity) ||
+                observation.publisherIdentity.size() > kMaximumPublisherIdentityBytes)) {
+        return reject(TrustCode::SignatureMetadataMalformed,
+                      "signature metadata contains a malformed publisher identity");
+    }
     if (observation.artifactVersion != manifest.artifactVersion) {
         return reject(TrustCode::VersionMismatch,
                       "observed artifact version does not match the trusted manifest");
@@ -151,6 +181,16 @@ TrustEvaluation evaluateArtifact(const ArtifactManifest& manifest,
         return reject(TrustCode::SignatureInvalid,
                       "artifact signature/publisher trust is invalid or unknown");
     }
+    if (observation.signature == SignatureState::ValidTrustedPublisher) {
+        if (policy.trustedPublisherIdentities.empty()) {
+            return reject(TrustCode::PublisherIdentityRequired,
+                          "signature validity is insufficient without an exact trusted publisher identity policy");
+        }
+        if (!contains(policy.trustedPublisherIdentities, observation.publisherIdentity)) {
+            return reject(TrustCode::PublisherIdentityMismatch,
+                          "artifact signer identity does not match the exact trusted publisher policy");
+        }
+    }
     if (artifactClassCanExecute(manifest.artifactClass)) {
         const bool signedTrusted = observation.signature == SignatureState::ValidTrustedPublisher;
         const bool explicitDevelopmentException =
@@ -170,7 +210,7 @@ TrustEvaluation evaluateArtifact(const ArtifactManifest& manifest,
     return {TrustDecision::Accept, TrustCode::Success,
             isDataOnly(manifest.artifactClass)
                 ? "data-only artifact passed bounded hash/provenance/license policy"
-                : "executable artifact passed hash/architecture/signature/capability policy"};
+                : "executable artifact passed hash/architecture/signature/publisher/capability policy"};
 }
 
 bool artifactClassCanExecute(ArtifactClass value) noexcept {
@@ -223,6 +263,9 @@ std::string_view trustCodeName(TrustCode value) noexcept {
         case TrustCode::ArchitectureMismatch: return "ArchitectureMismatch";
         case TrustCode::SignatureRequired: return "SignatureRequired";
         case TrustCode::SignatureInvalid: return "SignatureInvalid";
+        case TrustCode::SignatureMetadataMalformed: return "SignatureMetadataMalformed";
+        case TrustCode::PublisherIdentityRequired: return "PublisherIdentityRequired";
+        case TrustCode::PublisherIdentityMismatch: return "PublisherIdentityMismatch";
         case TrustCode::SourceNotAllowed: return "SourceNotAllowed";
         case TrustCode::CapabilityNotAllowed: return "CapabilityNotAllowed";
         case TrustCode::LicenseMissing: return "LicenseMissing";

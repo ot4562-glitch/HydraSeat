@@ -17,6 +17,7 @@
 #include "hydra/management_seat.hpp"
 #include "hydra/workspace_manager.hpp"
 #include "hydra/input_router.hpp"
+#include "hydra/launcher_win32.hpp"
 
 namespace hydra {
 namespace gui {
@@ -69,19 +70,25 @@ private:
     void layoutDeviceTiles();
     void saveWorkspaceProfile();
     void loadWorkspaceProfile();
-    void applyWorkspaceProfileToTiles();
+    void applyWorkspaceProfileToTiles(const WorkspaceManager* source = nullptr);
+    bool captureWorkspaceFromTiles(WorkspaceManager& candidate) const;
     void toggleIsolationMode();
     void launchMultiseat();
     void launchGateCControlledLab();
     bool initializeControlSurface();
+    bool connectBackgroundHost(SeatId requestedSeat, bool allowBootstrap,
+                               std::string& error);
+    bool bootstrapBackgroundHost(std::string& error) const;
     void refreshControlSurface();
     void updateControlSurfaceUi();
     void applyManagementSeatPlacement();
     bool configurationEditingAllowed() const noexcept;
-    void startSession();
     void stopSessionAndReturnToWindows();
     void beginReconfigure();
-    void openGameLibrary();
+    launcher_ui::LauncherExitAction openGameLibrary();
+    launcher_ui::LauncherActivationResult activateLauncherPlan(
+        const plan::ProviderAwareLaunchPlan& plan,
+        const hostipc::ProfilePayload& profile);
     bool applyCurrentProfileToHost(bool showErrors);
 
     HWND m_hwnd{nullptr};
@@ -97,7 +104,6 @@ private:
     HWND m_gateCBtn{nullptr};
     HWND m_deviceStatusLabel{nullptr};
     HWND m_runtimeStatusLabel{nullptr};
-    HWND m_startSessionBtn{nullptr};
     HWND m_stopSessionBtn{nullptr};
     HWND m_reconfigureBtn{nullptr};
     HWND m_gameLibraryBtn{nullptr};
@@ -113,6 +119,7 @@ private:
     control::SessionControlTransition m_sessionControlTransition;
     HANDLE m_singleInstanceMutex{nullptr};
     bool m_duplicateLaunch{false};
+    bool m_profileOutOfSync{false};
 
     std::vector<DeviceInfo> m_displays;
     std::vector<DeviceInfo> m_keyboards;

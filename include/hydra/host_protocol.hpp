@@ -1,5 +1,6 @@
 #pragma once
 
+#include "hydra/production_launch_runtime.hpp"
 #include "hydra/runtime_state.hpp"
 #include "hydra/seat_game_lifecycle.hpp"
 
@@ -14,11 +15,13 @@
 namespace hydra::hostipc {
 
 constexpr std::uint32_t kHostProtocolMagic = 0x31505348u; // "HSP1" little-endian
-constexpr std::uint16_t kHostProtocolVersion = 3u;
+constexpr std::uint16_t kHostProtocolVersion = 4u;
 constexpr std::size_t kHostProtocolHeaderBytes = 24u;
 constexpr std::size_t kHostProtocolMaxPayloadBytes = 64u * 1024u;
 constexpr std::size_t kHostProtocolMaxStringBytes = 2048u;
 constexpr std::size_t kHostProtocolMaxSeats = 64u;
+constexpr std::size_t kHostProtocolMaxPlanSeats = 2u;
+constexpr std::size_t kHostProtocolMaxPlanArguments = 128u;
 constexpr std::size_t kHostProtocolMaxEvents = 128u;
 
 // Every request has exactly one response with the same nonzero correlation ID.
@@ -57,6 +60,12 @@ enum class MessageType : std::uint16_t {
     StopSeatGameResult = 30,
     ReconcileSeatGames = 31,
     ReconcileSeatGamesResult = 32,
+    GetProviderPlanRegistry = 33,
+    ProviderPlanRegistry = 34,
+    InstallProviderPlan = 35,
+    InstallProviderPlanResult = 36,
+    RemoveProviderPlan = 37,
+    RemoveProviderPlanResult = 38,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -156,6 +165,25 @@ std::vector<std::byte> encodeSeatGameCommandPayload(
     const SeatGameCommandPayload& payload);
 std::optional<SeatGameCommandPayload> decodeSeatGameCommandPayload(
     std::span<const std::byte> payload);
+
+// Protocol-v4 host-owned immutable provider-plan installation. The nested plan
+// is pointer-free, typed, and bounded independently from the frame header.
+std::vector<std::byte> encodeProviderPlanRegistrySnapshot(
+    const production::ProviderPlanRegistrySnapshot& snapshot);
+std::optional<production::ProviderPlanRegistrySnapshot>
+decodeProviderPlanRegistrySnapshot(std::span<const std::byte> payload);
+std::vector<std::byte> encodeProviderPlanInstallRequest(
+    const production::ProviderPlanInstallRequest& request);
+std::optional<production::ProviderPlanInstallRequest>
+decodeProviderPlanInstallRequest(std::span<const std::byte> payload);
+std::vector<std::byte> encodeProviderPlanRemoveRequest(
+    const production::ProviderPlanRemoveRequest& request);
+std::optional<production::ProviderPlanRemoveRequest>
+decodeProviderPlanRemoveRequest(std::span<const std::byte> payload);
+std::vector<std::byte> encodeProviderPlanInstallResult(
+    const production::ProviderPlanInstallResult& result);
+std::optional<production::ProviderPlanInstallResult>
+decodeProviderPlanInstallResult(std::span<const std::byte> payload);
 
 std::vector<std::byte> encodeSnapshot(const runtime::HostRuntimeSnapshot& snapshot);
 std::optional<runtime::HostRuntimeSnapshot> decodeSnapshot(

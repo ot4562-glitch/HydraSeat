@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hydra/watchdog_protocol.hpp"
+#include "hydra/recovery_process_attachment.hpp"
 
 #include <array>
 #include <cstddef>
@@ -22,6 +23,8 @@ inline constexpr std::uint16_t kCrashJournalSchemaVersion = 1;
 inline constexpr std::size_t kCrashJournalHeaderBytes = 24;
 inline constexpr std::size_t kCrashJournalMaxRecords = 160;
 inline constexpr std::size_t kCrashJournalMaxSnapshots = 16;
+inline constexpr std::uint64_t kRecoveryProcessAttachmentSnapshotId =
+    0x5250415454414348ull; // "RPATTACH" reserved identity binding.
 inline constexpr std::size_t kCrashJournalMaxFileBytes = 8 * 1024;
 inline constexpr std::size_t kCrashJournalHistoryDepth = 4;
 
@@ -89,6 +92,10 @@ struct SnapshotReference {
 
     bool operator==(const SnapshotReference&) const = default;
 };
+
+std::optional<SnapshotReference> makeRecoveryProcessAttachmentSnapshot(
+    const RecoveryProcessAttachmentIdentity& identity,
+    std::string* error = nullptr);
 
 struct CrashJournalState {
     watchdog::SessionId sessionId{};
@@ -203,6 +210,10 @@ bool validateCrashJournalState(const CrashJournalState& state,
 bool validateCrashJournalAgainstPlan(
     const CrashJournalState& state,
     const watchdog::RollbackPlanManifest& manifest,
+    std::string* error = nullptr);
+bool validateRecoveryProcessAttachmentJournalBinding(
+    const CrashJournalState& state,
+    const RecoveryProcessAttachmentIdentity& identity,
     std::string* error = nullptr);
 // These 256-bit deterministic digests correlate persisted evidence with the
 // canonical trusted plan/journal bytes. They are not an authentication primitive;

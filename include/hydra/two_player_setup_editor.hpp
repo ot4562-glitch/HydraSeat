@@ -12,6 +12,21 @@
 
 namespace hydra::setup {
 
+// Compatibility/setup mutations are never allowed to execute at an implicit
+// "whenever convenient" point. These four bounded phases are the public timing
+// contract consumed by the runtime materialization layer.
+enum class RecipeExecutionPhase : std::uint8_t {
+    PreSpawn = 0,
+    Startup = 1,
+    PostWindow = 2,
+    Runtime = 3,
+};
+
+enum class MutationScope : std::uint8_t {
+    SeatWritableInstance = 0,
+    SharedInstallation = 1,
+};
+
 enum class SetupIssueCode : std::uint8_t {
     Success = 0,
     InvalidGame = 1,
@@ -38,6 +53,8 @@ struct MutationIntent {
     std::string mutationId;
     std::uint32_t instanceIndex{0};
     MutationIntentKind kind{MutationIntentKind::EnsureDataRoot};
+    RecipeExecutionPhase phase{RecipeExecutionPhase::PreSpawn};
+    MutationScope scope{MutationScope::SeatWritableInstance};
     std::wstring targetPath;
 
     bool operator==(const MutationIntent&) const = default;
@@ -96,5 +113,7 @@ profile::RuntimeSessionSelection makeRuntimeSelection(
 
 std::string_view setupIssueCodeName(SetupIssueCode code) noexcept;
 std::string_view mutationIntentKindName(MutationIntentKind kind) noexcept;
+std::string_view recipeExecutionPhaseName(RecipeExecutionPhase phase) noexcept;
+std::string_view mutationScopeName(MutationScope scope) noexcept;
 
 } // namespace hydra::setup

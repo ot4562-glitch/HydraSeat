@@ -88,12 +88,13 @@ HWND createTestWindow() {
 }
 
 bool launchDescendant(int depth, int sleepMs, const std::filesystem::path& pidFile,
-                      bool breakaway) {
+                      bool breakaway, bool exitAfterSpawn) {
     const auto executable = selfPath();
     std::wstring command = quoteArgument(executable.wstring()) +
         L" --depth " + std::to_wstring(depth) +
         L" --sleep-ms " + std::to_wstring(sleepMs);
     if (!pidFile.empty()) command += L" --pid-file " + quoteArgument(pidFile.wstring());
+    if (exitAfterSpawn) command += L" --exit-after-spawn";
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
 
@@ -112,6 +113,33 @@ bool launchDescendant(int depth, int sleepMs, const std::filesystem::path& pidFi
     return true;
 }
 
+bool launchUntrustedHelper(int sleepMs, const std::filesystem::path& pidFile) {
+    std::wstring systemDirectory(32768u, L'\0');
+    const UINT length = GetSystemDirectoryW(systemDirectory.data(),
+                                            static_cast<UINT>(systemDirectory.size()));
+    if (length == 0 || length >= systemDirectory.size()) return false;
+    systemDirectory.resize(length);
+    const auto executable = std::filesystem::path(systemDirectory) / L"ping.exe";
+    const int count = std::max(2, sleepMs / 1000 + 1);
+    std::wstring command = quoteArgument(executable.wstring()) +
+        L" -n " + std::to_wstring(count) + L" -w 1000 127.0.0.1";
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\0');
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    const BOOL created = CreateProcessW(executable.c_str(), mutableCommand.data(),
+                                        nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                                        nullptr, executable.parent_path().c_str(),
+                                        &startup, &process);
+    if (created == FALSE) return false;
+    appendPid(pidFile, process.dwProcessId);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+}
+
 #endif
 
 } // namespace
@@ -121,9 +149,13 @@ int main(int argc, char** argv) {
     int depth = 0;
     int sleepMs = 1000;
     int descendantSleepMs = -1;
+    int childCount = 1;
     bool breakawayChild = false;
+    bool exitAfterSpawn = false;
+    bool spawnUntrustedHelper = false;
     bool createWindow = false;
     std::filesystem::path pidFile;
+    std::filesystem::path helperPidFile;
     std::string requiredEnvironment;
     std::string requiredValue;
 
@@ -135,12 +167,21 @@ int main(int argc, char** argv) {
             sleepMs = std::atoi(argv[++index]);
         } else if (argument == "--descendant-sleep-ms" && index + 1 < argc) {
             descendantSleepMs = std::atoi(argv[++index]);
+        } else if (argument == "--child-count" && index + 1 < argc) {
+            childCount = std::atoi(argv[++index]);
+            if (childCount < 1 || childCount > 8) return 2;
         } else if (argument == "--breakaway-child") {
             breakawayChild = true;
+        } else if (argument == "--exit-after-spawn") {
+            exitAfterSpawn = true;
+        } else if (argument == "--spawn-untrusted-helper") {
+            spawnUntrustedHelper = true;
         } else if (argument == "--window") {
             createWindow = true;
         } else if (argument == "--pid-file" && index + 1 < argc) {
             pidFile = std::filesystem::path(argv[++index]);
+        } else if (argument == "--helper-pid-file" && index + 1 < argc) {
+            helperPidFile = std::filesystem::path(argv[++index]);
         } else if (argument == "--require-env" && index + 2 < argc) {
             requiredEnvironment = argv[++index];
             requiredValue = argv[++index];
@@ -160,18 +201,28 @@ int main(int argc, char** argv) {
     }
 
     appendPid(pidFile, GetCurrentProcessId());
+    bool spawnedAny = false;
+    if (spawnUntrustedHelper) {
+        if (!launchUntrustedHelper(std::max(sleepMs, 2000), helperPidFile)) return 8;
+        spawnedAny = true;
+    }
     if (depth > 0) {
         const int childSleep = descendantSleepMs >= 0 ? descendantSleepMs : sleepMs;
-        if (!launchDescendant(depth - 1, childSleep, pidFile, breakawayChild)) {
-            if (breakawayChild) {
-                // Strict Job Objects must reject explicit breakaway. Any other
-                // failure is a fixture failure, not evidence for the policy.
-                if (GetLastError() != ERROR_ACCESS_DENIED) return 7;
-            } else {
+        for (int childIndex = 0; childIndex < childCount; ++childIndex) {
+            if (!launchDescendant(depth - 1, childSleep, pidFile, breakawayChild,
+                                  exitAfterSpawn)) {
+                if (breakawayChild) {
+                    // Strict Job Objects must reject explicit breakaway. Any other
+                    // failure is a fixture failure, not evidence for the policy.
+                    if (GetLastError() != ERROR_ACCESS_DENIED) return 7;
+                    break;
+                }
                 return 5;
             }
+            spawnedAny = true;
         }
     }
+    if (exitAfterSpawn && spawnedAny) return 0;
 
     HWND window = nullptr;
     if (createWindow) {

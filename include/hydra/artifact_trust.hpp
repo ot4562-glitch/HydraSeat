@@ -12,6 +12,8 @@ namespace hydra::trust {
 
 inline constexpr std::uint32_t kArtifactTrustManifestVersion = 1u;
 inline constexpr std::size_t kMaximumArtifactCapabilities = 32u;
+inline constexpr std::size_t kMaximumTrustedPublisherIdentities = 8u;
+inline constexpr std::size_t kMaximumPublisherIdentityBytes = 128u;
 
 enum class ArtifactClass : std::uint8_t {
     DataCatalog = 0,
@@ -62,6 +64,10 @@ struct ArtifactObservation {
     ArtifactArchitecture architecture{ArtifactArchitecture::Any};
     std::string observedSha256;
     SignatureState signature{SignatureState::NotApplicable};
+    // Canonical publisher/signing identity observed by the native verifier.
+    // For the current release pipeline this is the exact selected certificate
+    // identity, not a display name and not a caller assertion.
+    std::string publisherIdentity;
 
     bool operator==(const ArtifactObservation&) const = default;
 };
@@ -72,6 +78,9 @@ struct TrustPolicy {
     bool requireRedistributionPermission{false};
     std::vector<std::string> allowedSourceIds;
     std::vector<std::string> allowedCapabilities;
+    // Exact canonical signing identities accepted by policy. Signature validity
+    // alone never authorizes executable/helper/driver code.
+    std::vector<std::string> trustedPublisherIdentities;
 };
 
 enum class TrustDecision : std::uint8_t {
@@ -92,6 +101,9 @@ enum class TrustCode : std::uint8_t {
     ArchitectureMismatch,
     SignatureRequired,
     SignatureInvalid,
+    SignatureMetadataMalformed,
+    PublisherIdentityRequired,
+    PublisherIdentityMismatch,
     SourceNotAllowed,
     CapabilityNotAllowed,
     LicenseMissing,

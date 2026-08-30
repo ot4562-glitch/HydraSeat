@@ -173,7 +173,7 @@ CommunitySetupDiagnostic importCommunitySetup(
     const CommunitySetupEntry& entry,
     const profile::GameRecord& localGame,
     std::span<const portable::PathBinding> pathBindings,
-    profile::TwoPlayerSetup& output) {
+    portable::ImportedSetup& output) {
     const auto validation = validateCommunitySetupEntry(entry);
     if (!validation.succeeded()) return validation;
     if (entry.selector.gameId != localGame.gameId ||
@@ -188,7 +188,7 @@ CommunitySetupDiagnostic importCommunitySetup(
                     "community setup exact game version selector does not match the local Game version");
     }
 
-    profile::TwoPlayerSetup imported;
+    portable::ImportedSetup imported;
     const auto importedDiagnostic = portable::importSetup(entry.setupPackage, localGame,
                                                            pathBindings, imported);
     if (!importedDiagnostic.succeeded()) {
@@ -197,6 +197,25 @@ CommunitySetupDiagnostic importCommunitySetup(
                         importedDiagnostic.message);
     }
     output = std::move(imported);
+    return {};
+}
+
+CommunitySetupDiagnostic importCommunitySetup(
+    const CommunitySetupEntry& entry,
+    const profile::GameRecord& localGame,
+    std::span<const portable::PathBinding> pathBindings,
+    profile::TwoPlayerSetup& output) {
+    const auto validation = validateCommunitySetupEntry(entry);
+    if (!validation.succeeded()) return validation;
+    if (!entry.setupPackage.instanceMaterializations.empty()) {
+        return fail(CommunitySetupCode::LocalImportFailed,
+                    "community setup carries typed materialization semantics and requires typed import");
+    }
+
+    portable::ImportedSetup imported;
+    const auto importedDiagnostic = importCommunitySetup(entry, localGame, pathBindings, imported);
+    if (!importedDiagnostic.succeeded()) return importedDiagnostic;
+    output = std::move(imported.setup);
     return {};
 }
 

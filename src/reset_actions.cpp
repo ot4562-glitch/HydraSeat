@@ -136,7 +136,7 @@ private:
     watchdog::RollbackExecutor& m_executor;
 };
 
-recovery::Hash256 hashRuntimeResetRegistration(
+recovery::Hash256 hashRuntimeResetRegistrationLegacy(
     const RuntimeResetRegistration& registration,
     std::span<const std::byte> canonicalManifestFrame) {
     ByteWriter writer(sizeof(registration.ownerProcess.processId) +
@@ -149,11 +149,73 @@ recovery::Hash256 hashRuntimeResetRegistration(
     return recovery::hashCrashJournalBytes(canonical);
 }
 
+recovery::Hash256 hashRuntimeResetRegistrationV2(
+    const RuntimeResetRegistration& registration,
+    std::span<const std::byte> attachmentBytes,
+    std::span<const std::byte> canonicalManifestFrame) {
+    ByteWriter writer(sizeof(registration.ownerProcess.processId) +
+                      sizeof(registration.ownerProcess.creationTime100ns) +
+                      sizeof(std::uint32_t) + attachmentBytes.size() +
+                      canonicalManifestFrame.size());
+    writer.u32(registration.ownerProcess.processId);
+    writer.u64(registration.ownerProcess.creationTime100ns);
+    writer.u32(static_cast<std::uint32_t>(attachmentBytes.size()));
+    writer.raw(attachmentBytes);
+    writer.raw(canonicalManifestFrame);
+    const auto canonical = writer.take();
+    return recovery::hashCrashJournalBytes(canonical);
+}
+
+bool validateRuntimeResetRegistrationShape(
+    const RuntimeResetRegistration& registration,
+    bool requireExactAttachment,
+    std::string* error) {
+    if (registration.ownerProcess.processId == 0 ||
+        registration.ownerProcess.creationTime100ns == 0) {
+        setError(error, "runtime reset registration owner identity is incomplete");
+        return false;
+    }
+    if (!watchdog::validateRollbackPlan(registration.manifest, error)) return false;
+    for (const auto& action : registration.manifest.actions) {
+        if (action.actionId == kResetOwnerActionId) {
+            setError(error, "runtime reset manifest uses the reserved owner action id");
+            return false;
+        }
+        if (action.kind == watchdog::RollbackActionKind::TerminateOwnedProcess &&
+            action.process == registration.ownerProcess) {
+            setError(error, "runtime reset owner must not duplicate a rollback target");
+            return false;
+        }
+    }
+    if (!registration.attachment) {
+        if (requireExactAttachment) {
+            setError(error,
+                     "runtime reset v2 registration requires exact recovery attachment authority");
+            return false;
+        }
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    recovery::RecoveryProcessAttachmentRegistration attached;
+    attached.identity = *registration.attachment;
+    attached.manifest = registration.manifest;
+    if (!recovery::validateRecoveryProcessAttachmentRegistration(attached, error)) {
+        return false;
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 bool executeRegisteredActions(
     const RuntimeResetRegistration& registration,
     std::uint64_t generation,
     watchdog::RollbackExecutor& executor,
     ResetExecutionReport& report) {
+    if (!registration.attachment) {
+        report.diagnostic =
+            "legacy runtime reset registration cannot authorize process mutation";
+        return false;
+    }
 #if defined(_WIN32)
     watchdog::ProcessIdentity currentIdentity;
     std::uint32_t currentIdentityError = 0;
@@ -225,6 +287,28 @@ bool registrationMatchesJournal(
     }
     if (!recovery::validateCrashJournalAgainstPlan(
             journal, registration.manifest, error)) {
+        return false;
+    }
+    const bool journalHasAttachment = std::any_of(
+        journal.snapshots.begin(), journal.snapshots.end(), [](const auto& snapshot) {
+            return snapshot.snapshotId ==
+                   recovery::kRecoveryProcessAttachmentSnapshotId;
+        });
+    const bool journalClean =
+        journal.phase == recovery::CrashJournalPhase::Clean &&
+        journal.finalResult == recovery::CrashJournalFinalResult::Clean;
+    if (registration.attachment) {
+        if (!recovery::validateRecoveryProcessAttachmentJournalBinding(
+                journal, *registration.attachment, error)) {
+            return false;
+        }
+    } else if (journalHasAttachment) {
+        setError(error,
+                 "attachment-bound crash journal cannot be recovered by a legacy reset registration");
+        return false;
+    } else if (!journalClean) {
+        setError(error,
+                 "legacy runtime reset registration is diagnostic-only for incomplete recovery state");
         return false;
     }
     return true;
@@ -405,24 +489,8 @@ bool atomicReplaceFile(const std::filesystem::path& from,
 bool validateRuntimeResetRegistration(
     const RuntimeResetRegistration& registration,
     std::string* error) {
-    if (registration.ownerProcess.processId == 0 ||
-        registration.ownerProcess.creationTime100ns == 0) {
-        setError(error, "runtime reset registration owner identity is incomplete");
-        return false;
-    }
-    if (!watchdog::validateRollbackPlan(registration.manifest, error)) return false;
-    for (const auto& action : registration.manifest.actions) {
-        if (action.actionId == kResetOwnerActionId) {
-            setError(error, "runtime reset manifest uses the reserved owner action id");
-            return false;
-        }
-        if (action.kind == watchdog::RollbackActionKind::TerminateOwnedProcess &&
-            action.process == registration.ownerProcess) {
-            setError(error, "runtime reset owner must not duplicate a rollback target");
-            return false;
-        }
-    }
-    return true;
+    return validateRuntimeResetRegistrationShape(
+        registration, true, error);
 }
 
 std::vector<std::byte> encodeRuntimeResetRegistration(
@@ -430,8 +498,20 @@ std::vector<std::byte> encodeRuntimeResetRegistration(
     if (!validateRuntimeResetRegistration(registration, nullptr)) return {};
     const auto frame = watchdog::encodeRegisterPlan(1, registration.manifest);
     if (frame.empty() || frame.size() > watchdog::kWatchdogMaxFrameBytes) return {};
-    const auto registrationHash = hashRuntimeResetRegistration(registration, frame);
-    const auto totalBytes = kRuntimeResetRegistrationHeaderBytes + frame.size();
+
+    std::vector<std::byte> attachmentBytes;
+    if (registration.attachment) {
+        attachmentBytes = recovery::encodeRecoveryProcessAttachmentIdentity(
+            *registration.attachment);
+        if (attachmentBytes.size() !=
+            recovery::kRecoveryProcessAttachmentIdentityBytes) {
+            return {};
+        }
+    }
+    const auto registrationHash = hashRuntimeResetRegistrationV2(
+        registration, attachmentBytes, frame);
+    const auto totalBytes = kRuntimeResetRegistrationHeaderBytes +
+        attachmentBytes.size() + frame.size();
     if (totalBytes > kRuntimeResetRegistrationMaxBytes ||
         totalBytes > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return {};
@@ -445,8 +525,10 @@ std::vector<std::byte> encodeRuntimeResetRegistration(
     writer.u32(registration.ownerProcess.processId);
     writer.u64(registration.ownerProcess.creationTime100ns);
     writer.bytes(registrationHash);
+    writer.u32(static_cast<std::uint32_t>(attachmentBytes.size()));
     writer.u32(static_cast<std::uint32_t>(frame.size()));
     writer.u32(0);
+    writer.raw(attachmentBytes);
     writer.raw(frame);
     return writer.take();
 }
@@ -454,7 +536,7 @@ std::vector<std::byte> encodeRuntimeResetRegistration(
 std::optional<RuntimeResetRegistration> decodeRuntimeResetRegistration(
     std::span<const std::byte> bytes,
     std::string* error) {
-    if (bytes.size() < kRuntimeResetRegistrationHeaderBytes ||
+    if (bytes.size() < kRuntimeResetRegistrationLegacyHeaderBytes ||
         bytes.size() > kRuntimeResetRegistrationMaxBytes) {
         setError(error, "runtime reset registration size is out of bounds");
         return std::nullopt;
@@ -463,31 +545,77 @@ std::optional<RuntimeResetRegistration> decodeRuntimeResetRegistration(
     std::uint32_t magic = 0;
     std::uint16_t version = 0;
     std::uint16_t headerBytes = 0;
-    std::uint32_t totalBytes = 0;
-    RuntimeResetRegistration result;
-    recovery::Hash256 storedHash{};
-    std::uint32_t frameBytes = 0;
-    std::uint32_t reserved = 0;
-    if (!reader.u32(magic) || !reader.u16(version) || !reader.u16(headerBytes) ||
-        !reader.u32(totalBytes) || !reader.u32(result.ownerProcess.processId) ||
-        !reader.u64(result.ownerProcess.creationTime100ns) ||
-        !reader.bytes(storedHash) || !reader.u32(frameBytes) ||
-        !reader.u32(reserved)) {
+    if (!reader.u32(magic) || !reader.u16(version) || !reader.u16(headerBytes)) {
         setError(error, "runtime reset registration header is truncated");
         return std::nullopt;
     }
     if (magic != kRuntimeResetRegistrationMagic ||
-        version != kRuntimeResetRegistrationVersion ||
-        headerBytes != kRuntimeResetRegistrationHeaderBytes || reserved != 0 ||
-        totalBytes != bytes.size() ||
-        frameBytes != reader.remaining() ||
-        frameBytes > watchdog::kWatchdogMaxFrameBytes) {
+        (version != kRuntimeResetRegistrationLegacyVersion &&
+         version != kRuntimeResetRegistrationVersion)) {
+        setError(error, "runtime reset registration magic/version is unsupported");
+        return std::nullopt;
+    }
+    const std::size_t expectedHeaderBytes =
+        version == kRuntimeResetRegistrationLegacyVersion
+            ? kRuntimeResetRegistrationLegacyHeaderBytes
+            : kRuntimeResetRegistrationHeaderBytes;
+    if (headerBytes != expectedHeaderBytes) {
+        setError(error, "runtime reset registration header size is invalid");
+        return std::nullopt;
+    }
+
+    std::uint32_t totalBytes = 0;
+    RuntimeResetRegistration result;
+    recovery::Hash256 storedHash{};
+    std::uint32_t attachmentBytes = 0;
+    std::uint32_t frameBytes = 0;
+    std::uint32_t reserved = 0;
+    if (!reader.u32(totalBytes) || !reader.u32(result.ownerProcess.processId) ||
+        !reader.u64(result.ownerProcess.creationTime100ns) ||
+        !reader.bytes(storedHash)) {
+        setError(error, "runtime reset registration header is truncated");
+        return std::nullopt;
+    }
+    if (version == kRuntimeResetRegistrationVersion &&
+        !reader.u32(attachmentBytes)) {
+        setError(error, "runtime reset attachment length is truncated");
+        return std::nullopt;
+    }
+    if (version == kRuntimeResetRegistrationVersion && attachmentBytes == 0u) {
+        setError(error,
+                 "runtime reset v2 registration is missing exact recovery attachment authority");
+        return std::nullopt;
+    }
+    if (!reader.u32(frameBytes) || !reader.u32(reserved)) {
+        setError(error, "runtime reset registration payload lengths are truncated");
+        return std::nullopt;
+    }
+    if (reserved != 0u || totalBytes != bytes.size() ||
+        frameBytes > watchdog::kWatchdogMaxFrameBytes ||
+        (attachmentBytes != 0u &&
+         attachmentBytes != recovery::kRecoveryProcessAttachmentIdentityBytes) ||
+        static_cast<std::size_t>(attachmentBytes) +
+                static_cast<std::size_t>(frameBytes) != reader.remaining()) {
         setError(error, "runtime reset registration header is invalid");
         return std::nullopt;
     }
+
+    std::span<const std::byte> attachmentBytesView;
+    if (!reader.raw(attachmentBytes, attachmentBytesView)) {
+        setError(error, "runtime reset attachment payload is truncated");
+        return std::nullopt;
+    }
+    if (attachmentBytes != 0u) {
+        const auto attachment =
+            recovery::decodeRecoveryProcessAttachmentIdentity(
+                attachmentBytesView, error);
+        if (!attachment) return std::nullopt;
+        result.attachment = *attachment;
+    }
+
     std::span<const std::byte> frameBytesView;
     if (!reader.raw(frameBytes, frameBytesView) || !reader.empty()) {
-        setError(error, "runtime reset registration payload is truncated");
+        setError(error, "runtime reset registration manifest payload is truncated");
         return std::nullopt;
     }
     const auto frame = watchdog::decodeWatchdogFrame(frameBytesView);
@@ -499,11 +627,19 @@ std::optional<RuntimeResetRegistration> decodeRuntimeResetRegistration(
         }
         return std::nullopt;
     }
-    if (hashRuntimeResetRegistration(result, frameBytesView) != storedHash) {
+
+    const auto actualHash = version == kRuntimeResetRegistrationLegacyVersion
+        ? hashRuntimeResetRegistrationLegacy(result, frameBytesView)
+        : hashRuntimeResetRegistrationV2(
+              result, attachmentBytesView, frameBytesView);
+    if (actualHash != storedHash) {
         setError(error, "runtime reset registration integrity hash is invalid");
         return std::nullopt;
     }
-    if (!validateRuntimeResetRegistration(result, error)) return std::nullopt;
+    if (!validateRuntimeResetRegistrationShape(
+            result, version == kRuntimeResetRegistrationVersion, error)) {
+        return std::nullopt;
+    }
     return result;
 }
 
@@ -603,7 +739,9 @@ RuntimeRegistrationReadResult RuntimeResetRegistrationStore::load() const {
     }
     result.status = RuntimeRegistrationReadStatus::Success;
     result.registration = std::move(*registration);
-    result.diagnostic = "runtime reset registration is valid";
+    result.diagnostic = result.registration->attachment
+        ? "runtime reset registration has exact attachment authority"
+        : "legacy runtime reset registration is readable diagnostic evidence only";
     return result;
 }
 
@@ -656,9 +794,15 @@ ResetInspection inspectResetState(
             return result;
         }
         if (result.registration) {
+            if (!result.registration->attachment) {
+                result.state = ResetState::RecoveryRequired;
+                result.diagnostic =
+                    "pre-journal legacy reset registration lacks exact recovery attachment authority";
+                return result;
+            }
             result.state = ResetState::Recoverable;
             result.diagnostic =
-                "pre-journal runtime reset registration is available for exact cleanup";
+                "pre-journal exact attachment registration is available for cleanup";
             return result;
         }
         result.state = ResetState::Clean;
@@ -749,10 +893,22 @@ ResetExecutionReport executeVerifiedReset(
             // so the failure becomes durable RecoveryRequired evidence and a later
             // reset can safely retry against the same correlated manifest.
             std::string recoveryError;
-            const auto failureJournal = recovery::makeInitialCrashJournal(
-                registration.manifest,
-                registration.manifest.lease.generation,
-                {}, &recoveryError);
+            std::vector<recovery::SnapshotReference> recoverySnapshots;
+            if (registration.attachment) {
+                const auto attachmentSnapshot =
+                    recovery::makeRecoveryProcessAttachmentSnapshot(
+                        *registration.attachment, &recoveryError);
+                if (attachmentSnapshot) {
+                    recoverySnapshots.push_back(*attachmentSnapshot);
+                }
+            }
+            const auto failureJournal =
+                (!registration.attachment || !recoverySnapshots.empty())
+                ? recovery::makeInitialCrashJournal(
+                      registration.manifest,
+                      registration.manifest.lease.generation,
+                      recoverySnapshots, &recoveryError)
+                : std::optional<recovery::CrashJournalState>{};
             if (failureJournal &&
                 journalStore.beginActivation(*failureJournal, &recoveryError)) {
                 writeRecoveryRequiredMarker(

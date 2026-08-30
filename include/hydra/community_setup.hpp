@@ -65,6 +65,17 @@ CommunitySetupDiagnostic validateCommunitySetupEntry(const CommunitySetupEntry& 
 // Explicit local path bindings are still mandatory and all P6 setup validation is
 // rerun. Community evidence/popularity never supplies or overrides the local
 // GameRuntimeRequirement used later by compileProviderAwareLaunchPlan.
+// Typed import preserves any version-2 declarative instance materialization
+// templates. The imported descriptors remain untrusted data and cannot become
+// runtime/provider/physical authority without fresh local validation later.
+CommunitySetupDiagnostic importCommunitySetup(
+    const CommunitySetupEntry& entry,
+    const profile::GameRecord& localGame,
+    std::span<const portable::PathBinding> pathBindings,
+    portable::ImportedSetup& output);
+
+// Legacy convenience overload. A semantic-bearing version-2 package is rejected
+// rather than silently discarding its phase/materialization descriptors.
 CommunitySetupDiagnostic importCommunitySetup(
     const CommunitySetupEntry& entry,
     const profile::GameRecord& localGame,

@@ -1,5 +1,9 @@
 #include "hydra/provider_launch_plan.hpp"
+#include "hydra/instance_materialization.hpp"
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -324,6 +328,464 @@ void testApplicationScopedProviderBindings() {
           "a null exact binding cannot fall back to a provider-wide adapter");
 }
 
+namespace fs = std::filesystem;
+namespace mat = hydra::materialization;
+
+struct MaterializationFixture {
+    fs::path root;
+    fs::path sourceRoot;
+    fs::path instancesRoot;
+    fs::path executable;
+
+    MaterializationFixture() {
+        const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+        root = fs::temp_directory_path() /
+               fs::path("hydraseat-materialization-" + std::to_string(nonce));
+        sourceRoot = root / "source";
+        instancesRoot = root / "instances";
+        executable = sourceRoot / "game.exe";
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        fs::create_directories(sourceRoot / "defaults", ec);
+        fs::create_directories(instancesRoot, ec);
+        write(executable, "fixture executable\n");
+        write(sourceRoot / "defaults" / "settings.ini", "setting=shared\n");
+        write(sourceRoot / "defaults" / "profile.dat", "profile=shared\n");
+        write(sourceRoot / "defaults" / "window.ini", "window=shared\n");
+        write(sourceRoot / "defaults" / "runtime.ini", "runtime=shared\n");
+    }
+
+    ~MaterializationFixture() {
+        std::error_code ec;
+        fs::remove_all(root, ec);
+    }
+
+    static void write(const fs::path& path, std::string_view text) {
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+    }
+
+    static std::string read(const fs::path& path) {
+        std::ifstream stream(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(stream),
+                           std::istreambuf_iterator<char>());
+    }
+};
+
+profile::CompatibilityReference materialCompatibility() {
+    return {"compat-material", "physical-fixture", 7u};
+}
+
+GameRuntimeRequirement materialRequirement() {
+    GameRuntimeRequirement value;
+    value.gameId = "game:material";
+    value.revision = 21u;
+    value.compatibility = materialCompatibility();
+    return value;
+}
+
+ProviderAwareLaunchPlan materialProviderPlan(const MaterializationFixture& fixture) {
+    ProviderAwareLaunchPlan value;
+    const auto requirementValue = materialRequirement();
+    for (std::uint32_t index = 0u; index < 2u; ++index) {
+        SeatProviderLaunchPlan seat;
+        seat.seatId = index + 1u;
+        seat.playerId = index == 0u ? "player-1" : "player-2";
+        seat.gameId = requirementValue.gameId;
+        seat.setupId = "setup-material";
+        seat.instanceIndex = index;
+        seat.requirementRevision = requirementValue.revision;
+        seat.compatibility = requirementValue.compatibility;
+        seat.hardwareFingerprint = 100u + index;
+        seat.requirements = requirementValue.requirements;
+        seat.capabilities = requirementValue.capabilities;
+        seat.launchRequest.providerId = "fake";
+        seat.launchRequest.gameId = requirementValue.gameId;
+        seat.launchRequest.providerAppId = "material-app";
+        seat.launchRequest.metadataRevision = 41u;
+        seat.launchRequest.targetKind = LaunchTargetKind::Executable;
+        seat.launchRequest.target = fixture.executable.wstring();
+        seat.launchRequest.launchCorrelationId = "material-" + std::to_string(index + 1u);
+        value.seats.push_back(std::move(seat));
+    }
+    value.fingerprint = recomputeProviderAwareLaunchPlanFingerprint(value);
+    return value;
+}
+
+requirement::TrustedRequirementSnapshot materialTrustedSnapshot(
+    const MaterializationFixture& fixture) {
+    requirement::TrustedRequirementSnapshot snapshot;
+    snapshot.referenceMonth = "2026-08";
+    snapshot.staleAfterMonths = 1u;
+    snapshot.trust = requirement::LocalEvidenceTrust::PhysicalOnly;
+    requirement::TrustedGameRuntimeAuthority authority;
+    authority.requirement = materialRequirement();
+    authority.providerId = "fake";
+    authority.providerAppId = "material-app";
+    authority.providerMetadataRevision = 41u;
+    authority.gameVersionUtf8 = "1.0.0";
+    authority.executableSha256 =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    authority.executableCandidates = {fixture.executable.wstring()};
+    authority.evidenceResultId = "result-material";
+    authority.evidenceProvenanceId = "local-physical";
+    authority.evidenceProvenanceRevision = 9u;
+    authority.evidenceTimestampBucket = "2026-08";
+    authority.evidenceOrigin = compat::ResultOrigin::Physical;
+    snapshot.authorities = {authority};
+    snapshot.requirements = {authority.requirement};
+    return snapshot;
+}
+
+mat::CompatibilityRecipe materialRecipe(SeatId seatId) {
+    mat::CompatibilityRecipe recipe;
+    recipe.seatId = seatId;
+    recipe.gameId = "game:material";
+    recipe.providerId = "fake";
+    recipe.providerAppId = "material-app";
+    recipe.providerMetadataRevision = 41u;
+    recipe.requirementRevision = 21u;
+    recipe.compatibility = materialCompatibility();
+    recipe.steps = {
+        {"runtime-files", setup::RecipeExecutionPhase::Runtime,
+         setup::MutationScope::SeatWritableInstance,
+         {{L"defaults/runtime.ini", L"runtime/runtime.ini", 1024u}}},
+        {"pre-spawn-files", setup::RecipeExecutionPhase::PreSpawn,
+         setup::MutationScope::SeatWritableInstance,
+         {{L"defaults/settings.ini", L"config/settings.ini", 1024u}}},
+        {"post-window-files", setup::RecipeExecutionPhase::PostWindow,
+         setup::MutationScope::SeatWritableInstance,
+         {{L"defaults/window.ini", L"window/window.ini", 1024u}}},
+        {"startup-files", setup::RecipeExecutionPhase::Startup,
+         setup::MutationScope::SeatWritableInstance,
+         {{L"defaults/profile.dat", L"state/profile.dat", 1024u}}},
+    };
+    return recipe;
+}
+
+mat::MaterializationContext materialContext(const MaterializationFixture& fixture,
+                                            std::string sessionId) {
+    return {fixture.instancesRoot, std::move(sessionId)};
+}
+
+bool executeAllPhases(mat::RecipeExecutionSession& session) {
+    return session.executePhase(setup::RecipeExecutionPhase::PreSpawn).succeeded() &&
+           session.executePhase(setup::RecipeExecutionPhase::Startup).succeeded() &&
+           session.executePhase(setup::RecipeExecutionPhase::PostWindow).succeeded() &&
+           session.executePhase(setup::RecipeExecutionPhase::Runtime).succeeded();
+}
+
+void testCompatibilityRecipeCompilerIsExactAndDeterministic() {
+    MaterializationFixture fixture;
+    const auto providerPlan = materialProviderPlan(fixture);
+    const auto trusted = materialTrustedSnapshot(fixture);
+    const auto context = materialContext(fixture, "session-deterministic");
+    const auto recipe = materialRecipe(1u);
+
+    mat::InstanceMaterializationPlan first;
+    mat::InstanceMaterializationPlan second;
+    check(mat::compileInstanceMaterializationPlan(
+              recipe, providerPlan, trusted, context, first).succeeded() &&
+              mat::compileInstanceMaterializationPlan(
+                  recipe, providerPlan, trusted, context, second).succeeded(),
+          "exact trusted recipe compiles deterministically");
+    check(first == second && first.recipeFingerprint == second.recipeFingerprint,
+          "same recipe and exact authority produce the same materialization plan");
+    check(first.steps.size() == 4u &&
+              first.steps[0].phase == setup::RecipeExecutionPhase::PreSpawn &&
+              first.steps[1].phase == setup::RecipeExecutionPhase::Startup &&
+              first.steps[2].phase == setup::RecipeExecutionPhase::PostWindow &&
+              first.steps[3].phase == setup::RecipeExecutionPhase::Runtime,
+          "recipe compiler canonicalizes deterministic phase ordering");
+
+    auto invalidPhase = recipe;
+    invalidPhase.steps.front().phase = static_cast<setup::RecipeExecutionPhase>(99u);
+    mat::InstanceMaterializationPlan sentinel = first;
+    check(mat::compileInstanceMaterializationPlan(
+              invalidPhase, providerPlan, trusted, context, sentinel).code ==
+              mat::RecipeResult::UnsupportedPhase && sentinel == first,
+          "invalid timing phase is rejected without replacing prior output");
+
+    auto wrongGame = recipe;
+    wrongGame.gameId = "game:other";
+    check(mat::compileInstanceMaterializationPlan(
+              wrongGame, providerPlan, trusted, context, sentinel).code ==
+              mat::RecipeResult::WrongGameIdentity,
+          "recipe for the wrong Game identity is rejected");
+
+    auto staleProvider = recipe;
+    staleProvider.providerMetadataRevision = 40u;
+    check(mat::compileInstanceMaterializationPlan(
+              staleProvider, providerPlan, trusted, context, sentinel).code ==
+              mat::RecipeResult::StaleProviderRevision,
+          "recipe for the wrong provider revision is rejected");
+
+    auto staleRequirement = recipe;
+    staleRequirement.requirementRevision = 20u;
+    check(mat::compileInstanceMaterializationPlan(
+              staleRequirement, providerPlan, trusted, context, sentinel).code ==
+              mat::RecipeResult::StaleRequirementRevision,
+          "recipe for the wrong requirement revision is rejected");
+
+    auto conflict = recipe;
+    conflict.steps[1].files.push_back(
+        {L"defaults/profile.dat", L"config/settings.ini", 1024u});
+    check(mat::compileInstanceMaterializationPlan(
+              conflict, providerPlan, trusted, context, sentinel).code ==
+              mat::RecipeResult::ConflictingMutation,
+          "duplicate/conflicting writable destination is rejected");
+
+    auto sharedMutation = recipe;
+    sharedMutation.steps.front().scope = setup::MutationScope::SharedInstallation;
+    check(mat::compileInstanceMaterializationPlan(
+              sharedMutation, providerPlan, trusted, context, sentinel).code ==
+              mat::RecipeResult::SharedInstallationMutationDenied,
+          "shared-install destructive mutation remains fail-closed without a safe contract");
+
+    mat::InstanceMaterializationPlan seatTwo;
+    check(mat::compileInstanceMaterializationPlan(
+              materialRecipe(2u), providerPlan, trusted, context, seatTwo).succeeded() &&
+              seatTwo.instanceRoot != first.instanceRoot,
+          "Seat A and Seat B receive distinct deterministic writable destinations");
+}
+
+void testWritableMaterializationPreservesSharedSourceAndCleansIdempotently() {
+    MaterializationFixture fixture;
+    const auto providerPlan = materialProviderPlan(fixture);
+    const auto trusted = materialTrustedSnapshot(fixture);
+    mat::InstanceMaterializationPlan plan;
+    check(mat::compileInstanceMaterializationPlan(
+              materialRecipe(1u), providerPlan, trusted,
+              materialContext(fixture, "session-source-safe"), plan).succeeded(),
+          "source-safe materialization fixture compiles");
+
+    const auto settingsBefore = MaterializationFixture::read(
+        fixture.sourceRoot / "defaults" / "settings.ini");
+    const auto profileBefore = MaterializationFixture::read(
+        fixture.sourceRoot / "defaults" / "profile.dat");
+    const auto windowBefore = MaterializationFixture::read(
+        fixture.sourceRoot / "defaults" / "window.ini");
+    const auto runtimeBefore = MaterializationFixture::read(
+        fixture.sourceRoot / "defaults" / "runtime.ini");
+
+    mat::RecipeExecutionSession session(plan);
+    check(executeAllPhases(session) && session.finalized(),
+          "all bounded compatibility phases materialize and finalize transactionally");
+    mat::InstanceState state = mat::InstanceState::Unsafe;
+    check(mat::inspectInstanceMaterialization(plan, state).succeeded() &&
+              state == mat::InstanceState::Current,
+          "fully executed recipe has a current exact ownership manifest");
+    check(MaterializationFixture::read(plan.instanceRoot / "config" / "settings.ini") ==
+              settingsBefore &&
+              MaterializationFixture::read(plan.instanceRoot / "state" / "profile.dat") ==
+                  profileBefore &&
+              MaterializationFixture::read(plan.instanceRoot / "window" / "window.ini") ==
+                  windowBefore &&
+              MaterializationFixture::read(plan.instanceRoot / "runtime" / "runtime.ini") ==
+                  runtimeBefore,
+          "only declared mutable files appear in the Seat-specific writable instance");
+    check(MaterializationFixture::read(fixture.sourceRoot / "defaults" / "settings.ini") ==
+              settingsBefore &&
+              MaterializationFixture::read(fixture.sourceRoot / "defaults" / "profile.dat") ==
+                  profileBefore &&
+              MaterializationFixture::read(fixture.sourceRoot / "defaults" / "window.ini") ==
+                  windowBefore &&
+              MaterializationFixture::read(fixture.sourceRoot / "defaults" / "runtime.ini") ==
+                  runtimeBefore,
+          "shared immutable installation source remains byte-for-byte unchanged");
+
+    check(mat::cleanupInstanceMaterialization(plan).succeeded() &&
+              mat::cleanupInstanceMaterialization(plan).succeeded() &&
+              !fs::exists(plan.instanceRoot),
+          "owned instance cleanup is idempotent");
+}
+
+void testStagingAndCommitFailuresRollbackSafely() {
+    MaterializationFixture fixture;
+    const auto providerPlan = materialProviderPlan(fixture);
+    const auto trusted = materialTrustedSnapshot(fixture);
+
+    mat::InstanceMaterializationPlan stagingPlan;
+    mat::compileInstanceMaterializationPlan(
+        materialRecipe(1u), providerPlan, trusted,
+        materialContext(fixture, "session-stage-fail"), stagingPlan);
+    mat::RecipeExecutionSession stagingFailure(
+        stagingPlan,
+        [](mat::TransactionCheckpoint checkpoint, std::string& reason) {
+            if (checkpoint == mat::TransactionCheckpoint::StagingValidated) {
+                reason = "injected staging veto";
+                return false;
+            }
+            return true;
+        });
+    check(stagingFailure.executePhase(setup::RecipeExecutionPhase::PreSpawn).code ==
+              mat::RecipeResult::StagingFailed &&
+              !fs::exists(stagingPlan.instanceRoot) &&
+              !fs::exists(stagingPlan.stagingRoot),
+          "staging failure removes partial staging and leaves no committed instance");
+
+    const auto oldRecipe = materialRecipe(1u);
+    mat::InstanceMaterializationPlan oldPlan;
+    mat::compileInstanceMaterializationPlan(
+        oldRecipe, providerPlan, trusted,
+        materialContext(fixture, "session-commit-fail"), oldPlan);
+    mat::RecipeExecutionSession oldSession(oldPlan);
+    check(executeAllPhases(oldSession), "previous committed instance fixture is created");
+    const auto oldPayload = MaterializationFixture::read(
+        oldPlan.instanceRoot / "config" / "settings.ini");
+
+    auto replacementRecipe = oldRecipe;
+    replacementRecipe.steps[1].files[0].maximumBytes = 2048u;
+    mat::InstanceMaterializationPlan replacementPlan;
+    check(mat::compileInstanceMaterializationPlan(
+              replacementRecipe, providerPlan, trusted,
+              materialContext(fixture, "session-commit-fail"), replacementPlan).succeeded() &&
+              replacementPlan.instanceRoot == oldPlan.instanceRoot &&
+              replacementPlan.recipeFingerprint != oldPlan.recipeFingerprint,
+          "replacement recipe targets the same Seat/session root but has a new exact recipe revision");
+
+    mat::RecipeExecutionSession commitFailure(
+        replacementPlan,
+        [](mat::TransactionCheckpoint checkpoint, std::string& reason) {
+            if (checkpoint == mat::TransactionCheckpoint::PreviousInstanceMoved) {
+                reason = "injected commit veto";
+                return false;
+            }
+            return true;
+        });
+    check(commitFailure.executePhase(setup::RecipeExecutionPhase::PreSpawn).code ==
+              mat::RecipeResult::CommitFailed,
+          "commit failure is surfaced at the atomic previous-instance handoff");
+    mat::InstanceState oldState = mat::InstanceState::Unsafe;
+    check(mat::inspectInstanceMaterialization(oldPlan, oldState).succeeded() &&
+              oldState == mat::InstanceState::Current &&
+              MaterializationFixture::read(oldPlan.instanceRoot / "config" / "settings.ini") ==
+                  oldPayload,
+          "commit failure preserves the previous committed instance exactly");
+
+    mat::InstanceState staleState = mat::InstanceState::Unsafe;
+    check(mat::inspectInstanceMaterialization(replacementPlan, staleState).code ==
+              mat::RecipeResult::StaleInstance &&
+              staleState == mat::InstanceState::Stale,
+          "stale per-instance materialization is never reused as current");
+    check(mat::cleanupInstanceMaterialization(replacementPlan).succeeded() &&
+              mat::cleanupInstanceMaterialization(replacementPlan).succeeded() &&
+              !fs::exists(replacementPlan.instanceRoot),
+          "stale owned instance can be cleaned safely and cleanup remains idempotent");
+}
+
+void testPathAndReparseEscapesFailClosed() {
+    MaterializationFixture fixture;
+    const auto providerPlan = materialProviderPlan(fixture);
+    const auto trusted = materialTrustedSnapshot(fixture);
+    auto traversal = materialRecipe(1u);
+    traversal.steps[1].files[0].sourceRelativePath = L"../secret.ini";
+    mat::InstanceMaterializationPlan output;
+    check(mat::compileInstanceMaterializationPlan(
+              traversal, providerPlan, trusted,
+              materialContext(fixture, "session-traversal"), output).code ==
+              mat::RecipeResult::InvalidPath,
+          "path traversal in mutable source is rejected before filesystem mutation");
+
+    auto reservedDevice = materialRecipe(1u);
+    reservedDevice.steps[1].files[0].destinationRelativePath = L"config/NUL.txt";
+    check(mat::compileInstanceMaterializationPlan(
+              reservedDevice, providerPlan, trusted,
+              materialContext(fixture, "session-reserved-device"), output).code ==
+              mat::RecipeResult::InvalidPath,
+          "Windows reserved device paths are rejected before materialization");
+
+    const auto outside = fixture.root / "outside";
+    std::error_code ec;
+    fs::create_directories(outside, ec);
+    MaterializationFixture::write(outside / "secret.ini", "outside-secret\n");
+    const auto link = fixture.sourceRoot / "defaults" / "escape-link";
+    fs::create_directory_symlink(outside, link, ec);
+    if (!ec) {
+        auto symlinkRecipe = materialRecipe(1u);
+        symlinkRecipe.steps = {
+            {"pre-spawn-link", setup::RecipeExecutionPhase::PreSpawn,
+             setup::MutationScope::SeatWritableInstance,
+             {{L"defaults/escape-link/secret.ini", L"config/secret.ini", 1024u}}},
+        };
+        mat::InstanceMaterializationPlan symlinkPlan;
+        check(mat::compileInstanceMaterializationPlan(
+                  symlinkRecipe, providerPlan, trusted,
+                  materialContext(fixture, "session-reparse"), symlinkPlan).succeeded(),
+              "reparse fixture compiles because compilation remains filesystem-pure");
+        mat::RecipeExecutionSession session(symlinkPlan);
+        check(session.executePhase(setup::RecipeExecutionPhase::PreSpawn).code ==
+                  mat::RecipeResult::ReparsePointRejected &&
+                  !fs::exists(symlinkPlan.instanceRoot),
+              "symlink/junction escape is rejected before copying outside the trusted source root");
+
+        mat::InstanceMaterializationPlan cleanupPlan;
+        check(mat::compileInstanceMaterializationPlan(
+                  materialRecipe(1u), providerPlan, trusted,
+                  materialContext(fixture, "session-reparse-cleanup"), cleanupPlan).succeeded(),
+              "reparse cleanup fixture compiles from exact trusted authority");
+        mat::RecipeExecutionSession cleanupSession(cleanupPlan);
+        check(executeAllPhases(cleanupSession),
+              "reparse cleanup fixture reaches an owned committed instance");
+        const auto injectedLink = cleanupPlan.instanceRoot / "tampered-link";
+        std::error_code injectedEc;
+        fs::create_directory_symlink(outside, injectedLink, injectedEc);
+        if (!injectedEc) {
+            check(mat::cleanupInstanceMaterialization(cleanupPlan).code ==
+                      mat::RecipeResult::ReparsePointRejected &&
+                      fs::exists(outside / "secret.ini"),
+                  "owned cleanup refuses a tampered reparse descendant and preserves outside data");
+            fs::remove(injectedLink, injectedEc);
+            check(mat::cleanupInstanceMaterialization(cleanupPlan).succeeded(),
+                  "owned cleanup succeeds after the injected reparse descendant is removed");
+        }
+    } else {
+        std::cout << "symlink/junction escape fixture unavailable on this host; runtime check retained\n";
+    }
+}
+
+void testPhaseFailureReversesEarlierWorkAndRuntimeCannotJumpAhead() {
+    MaterializationFixture fixture;
+    const auto providerPlan = materialProviderPlan(fixture);
+    const auto trusted = materialTrustedSnapshot(fixture);
+    mat::InstanceMaterializationPlan plan;
+    mat::compileInstanceMaterializationPlan(
+        materialRecipe(1u), providerPlan, trusted,
+        materialContext(fixture, "session-partial-rollback"), plan);
+
+    int stagedCount = 0;
+    mat::RecipeExecutionSession session(
+        plan,
+        [&stagedCount](mat::TransactionCheckpoint checkpoint, std::string& reason) {
+            if (checkpoint != mat::TransactionCheckpoint::StagingValidated) return true;
+            ++stagedCount;
+            if (stagedCount == 2) {
+                reason = "injected Startup staging failure";
+                return false;
+            }
+            return true;
+        });
+    check(session.executePhase(setup::RecipeExecutionPhase::PreSpawn).succeeded() &&
+              fs::exists(plan.instanceRoot),
+          "PreSpawn materialization commits before later recipe phases");
+    check(session.executePhase(setup::RecipeExecutionPhase::Startup).code ==
+              mat::RecipeResult::StagingFailed &&
+              !fs::exists(plan.instanceRoot) &&
+              !fs::exists(plan.stagingRoot) &&
+              !fs::exists(plan.rollbackRoot),
+          "partial recipe failure reverses files already applied by earlier phases");
+
+    mat::InstanceMaterializationPlan earlyPlan;
+    mat::compileInstanceMaterializationPlan(
+        materialRecipe(1u), providerPlan, trusted,
+        materialContext(fixture, "session-runtime-early"), earlyPlan);
+    mat::RecipeExecutionSession early(earlyPlan);
+    check(early.executePhase(setup::RecipeExecutionPhase::Runtime).code ==
+              mat::RecipeResult::WrongPhaseOrder &&
+              !fs::exists(earlyPlan.instanceRoot),
+          "Runtime phase cannot execute before required earlier phase barriers");
+}
+
 } // namespace
 
 int main() {
@@ -332,6 +794,11 @@ int main() {
     testMaterialStalenessAndHardwareBlockPlan();
     testProviderAndAccountAmbiguityFailClosed();
     testApplicationScopedProviderBindings();
+    testCompatibilityRecipeCompilerIsExactAndDeterministic();
+    testWritableMaterializationPreservesSharedSourceAndCleansIdempotently();
+    testStagingAndCommitFailuresRollbackSafely();
+    testPathAndReparseEscapesFailClosed();
+    testPhaseFailureReversesEarlierWorkAndRuntimeCannotJumpAhead();
     if (failures != 0) {
         std::cerr << failures << " provider launch plan test(s) failed\n";
         return 1;

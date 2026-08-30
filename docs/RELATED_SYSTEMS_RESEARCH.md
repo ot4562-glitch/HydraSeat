@@ -1,6 +1,8 @@
-# Related Systems Research
+# Related Systems Design Memo
 
 ## Purpose and scope
+
+This is the decision memo layer of the research set. [`REFERENCE_RESEARCH_INDEX.md`](REFERENCE_RESEARCH_INDEX.md) is the canonical inventory/backlog, while [`NUCLEUS_COOP_2_4_2_SOURCE_RESEARCH.md`](NUCLEUS_COOP_2_4_2_SOURCE_RESEARCH.md) retains the reproducible deep source record. Avoid copying inventory or file-hash tables into this memo.
 
 This document records the systems studied for HydraSeat's Phase 3 input-isolation work. It separates:
 
@@ -9,7 +11,7 @@ This document records the systems studied for HydraSeat's Phase 3 input-isolatio
 3. **License boundaries** that determine whether code may be reused, wrapped as an optional dependency, or only studied as behavior.
 4. **HydraSeat decisions** for the next implementation stages.
 
-The reference repositories used for this study were cloned outside the HydraSeat source tree under `C:\HydraSeat\references`. They are research inputs, not vendored dependencies. Proprietary software was studied only through public documentation and ordinary observable behavior.
+The reference repositories used for this study were cloned outside the HydraSeat source tree under `C:\HydraSeat\references`. They are research inputs, not vendored dependencies. Proprietary software was studied only through public documentation and ordinary observable behavior. The current consolidated inventory, SplitScreen.Me handler/Hub findings, ViGEmClient findings, and clean-room regression backlog are maintained in [`REFERENCE_RESEARCH_INDEX.md`](REFERENCE_RESEARCH_INDEX.md).
 
 Current product interpretation: HydraSeat v1 is intentionally a two-Seat, game-only product for sharing the spare performance of one capable Windows gaming PC. Related systems may implement broader multiseat desktops or other techniques; those broader scopes are research context only and do not automatically become HydraSeat v1 requirements. `docs/PRODUCT_V1.md` and the current roadmap are authoritative.
 
@@ -196,6 +198,8 @@ Nucleus is GPL-3.0. Copying its implementation into a differently licensed Hydra
 - Consider interoperability through external files or tools only after a legal and technical boundary review.
 
 Repository reference: `https://github.com/SplitScreen-Me/splitscreenme-nucleus`
+
+Detailed local source review: [`NUCLEUS_COOP_2_4_2_SOURCE_RESEARCH.md`](NUCLEUS_COOP_2_4_2_SOURCE_RESEARCH.md). This separate record covers the locally supplied 2.4.2 archive, consulted-file hashes, input/process/window/recovery findings, current HydraSeat mapping, and research-derived regression candidates without treating GPL implementation as reusable core code.
 
 ---
 

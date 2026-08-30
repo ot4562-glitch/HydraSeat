@@ -170,7 +170,7 @@ A phase is not complete because individual packets compile. Every numbered phase
 | 7 | Minimal Seat Launcher / game-first UX | Planned | Full user flow works without exposing low-level implementation concepts |
 | 8 | Reliability / installer / privilege / updates | Planned, prerequisites partly validated | Non-developer install/recovery/update/offline operation is safe |
 | 9 | Community compatibility/setup ecosystem | Planned | Local-first evidence can be optionally shared and aggregated transparently |
-| 10 | v1 release hardening | Planned | Real hardware/product/legal/security/performance release gates pass |
+| 10 | v1 release hardening | Early foundation in progress | Real hardware/product/legal/security/performance release gates pass |
 
 Detailed packet files:
 
@@ -347,12 +347,14 @@ python tools/show_implementation_packet.py --current
 python tools/show_implementation_packet.py --current --prompt
 python tools/show_implementation_packet.py --ready
 python tools/validate_implementation_roadmap.py
+python tools/chunk_claim.py list
 ```
 
 Required reading includes:
 
 ```text
 .agents/AGENTS.md
+.agents/CHUNKS.md                 # when concurrent workers may exist
 docs/PRODUCT_V1.md
 docs/implementation/DECISIONS.md
 docs/implementation/STATUS.md
@@ -360,10 +362,10 @@ the active PHASE*.md packet
 docs/ARCHITECTURE.md
 ```
 
-Do not skip declared prerequisites or mark any packet/manual gate complete without the required evidence. Crossing from one completed packet into another actionable packet does not require a new task or user turn.
+Do not skip declared prerequisites or mark any packet/manual gate complete without the required evidence. Crossing from one completed packet into another actionable packet does not require a new task or user turn. With concurrent workers, refresh immediately before work, claim exactly one READY chunk plus concrete touched paths, and leave control-tower-only shared files to the central integrator.
 
-## 15. Current next step
+## 15. Live status lookup
 
-[`STATUS.md`](STATUS.md) is authoritative for the current default packet.
+[`STATUS.md`](STATUS.md) is authoritative for the current lookup packet and validation/integration frontier. Do not preserve a prose "next task" outside that ledger; query the current checkout through the packet helper and chunk board.
 
-As of the current development line, Phase 3 physical Gate A/B/C acceptance remains pending while selected Phase 4 runtime foundations have already been implemented early on a development branch. Those Phase 4 foundations are useful but do not waive Phase 3 close requirements and do not yet prove the complete independent per-Seat v1 game lifecycle.
+The current source line contains substantial automated/controlled implementation through the host/runtime, provider/plan, game-first UX, reliability/distribution, ecosystem, and selected release-hardening layers. The remaining frontier is therefore **not** accurately described as "early Phase 4": Phase 3 physical Gate A/B/C, real-game/physical device/display/media acceptance, clean-machine install/reboot/signing evidence, performance/soak/security/privacy completion, license/release gates, and dedicated phase-close audits remain the truthful blockers. Later automated code does not waive those earlier physical/manual gates.

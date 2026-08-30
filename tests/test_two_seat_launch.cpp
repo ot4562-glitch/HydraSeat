@@ -81,6 +81,11 @@ struct SharedResourceState {
     std::optional<std::pair<SeatId, ResourceKind>> failVerifyActive;
     std::optional<std::pair<SeatId, ResourceKind>> failRollback;
     std::optional<std::pair<SeatId, ResourceKind>> failPrepare;
+    std::optional<std::string> failLifecycleBoundary;
+    bool failLifecycleRollback{false};
+    bool failLifecycleVerifySafe{false};
+    bool lifecycleActive{false};
+    bool lifecycleRecoveryRequired{false};
     int createCalls{0};
 };
 
@@ -193,6 +198,79 @@ private:
     std::shared_ptr<SharedResourceState> state_;
 };
 
+class FakeLifecycleHook final : public ISeatActivationLifecycleHook {
+public:
+    FakeLifecycleHook(SeatId seatId, std::shared_ptr<SharedResourceState> state)
+        : seatId_(seatId), state_(std::move(state)) {}
+
+    bool prepare(const SeatActivationPlan& plan,
+                 const SeatGameBinding& binding,
+                 std::string& error) override {
+        state_->log.push_back("lifecycle:prepare:" + std::to_string(seatId_));
+        if (plan.seatId != seatId_ || binding.gameId != plan.target.gameId) {
+            error = "fixture lifecycle identity mismatch";
+            return false;
+        }
+        prepared_ = true;
+        error.clear();
+        return true;
+    }
+
+    bool preSpawn(std::string& error) override { return boundary("PreSpawn", error); }
+    bool startup(std::string& error) override { return boundary("Startup", error); }
+    bool postWindow(std::string& error) override { return boundary("PostWindow", error); }
+    bool runtime(std::string& error) override { return boundary("Runtime", error); }
+
+    bool rollback(std::string& error) noexcept override {
+        state_->log.push_back("lifecycle:rollback:" + std::to_string(seatId_));
+        if (state_->failLifecycleRollback) {
+            state_->lifecycleRecoveryRequired = true;
+            error = "injected lifecycle rollback failure";
+            return false;
+        }
+        state_->lifecycleActive = false;
+        state_->lifecycleRecoveryRequired = false;
+        error.clear();
+        return true;
+    }
+
+    bool verifySafe(std::string& error) noexcept override {
+        state_->log.push_back("lifecycle:verify-safe:" + std::to_string(seatId_));
+        if (state_->failLifecycleVerifySafe || state_->lifecycleActive) {
+            state_->lifecycleRecoveryRequired = true;
+            error = "fixture lifecycle is not verified safe";
+            return false;
+        }
+        error.clear();
+        return true;
+    }
+
+    bool recoveryRequired() const noexcept override {
+        return state_->lifecycleRecoveryRequired;
+    }
+
+private:
+    bool boundary(std::string_view name, std::string& error) {
+        state_->log.push_back("lifecycle:" + std::string(name) + ":" +
+                              std::to_string(seatId_));
+        if (!prepared_) {
+            error = "lifecycle boundary before prepare";
+            return false;
+        }
+        state_->lifecycleActive = true;
+        if (state_->failLifecycleBoundary && *state_->failLifecycleBoundary == name) {
+            error = "injected lifecycle boundary failure";
+            return false;
+        }
+        error.clear();
+        return true;
+    }
+
+    SeatId seatId_{0};
+    std::shared_ptr<SharedResourceState> state_;
+    bool prepared_{false};
+};
+
 bool allSeatResourcesInactive(const SharedResourceState& state, SeatId seatId,
                               const SeatActivationPlan& plan) {
     return std::all_of(plan.resources.begin(), plan.resources.end(),
@@ -213,6 +291,12 @@ bool allSeatResourcesActive(const SharedResourceState& state, SeatId seatId,
 
 void forceProcessExited(SharedResourceState& state, SeatId seatId) {
     state.active[key(seatId, ResourceKind::Process)] = false;
+}
+
+std::size_t eventPosition(const SharedResourceState& state, std::string_view event) {
+    const auto found = std::find(state.log.begin(), state.log.end(), event);
+    return found == state.log.end() ? state.log.size() :
+                                     static_cast<std::size_t>(found - state.log.begin());
 }
 
 SeatGamePhase phaseFor(const HostRuntimeSnapshot& snapshot, SeatId seatId) {
@@ -369,11 +453,136 @@ void testRollbackFailureRetainsRecoveryOwnership() {
           "fixture activation fails with injected rollback failure");
     check(!instance.verifyStopped(error),
           "unverified rollback is not converted to a stopped result");
+    check(std::find(state->log.begin(), state->log.end(),
+                    "verify-safe:2:controller") != state->log.end(),
+          "rollback failure still runs explicit safe-state verification");
     check(state->active[key(2, ResourceKind::Controller)],
           "failed rollback retains exact active resource ownership for recovery retry");
     state->failRollback.reset();
     check(instance.stop(error) && instance.verifyStopped(error),
           "later Seat-local recovery retry can clean the retained exact resource");
+}
+
+void testCompatibilityLifecycleBoundariesAndReverseRollback() {
+    const auto compiled = compileTwoSeatLaunchPlan(validInputs());
+    if (!compiled.plan) return;
+    const auto* plan = seatPlan(*compiled.plan, 2);
+    if (plan == nullptr) return;
+
+    {
+        auto state = std::make_shared<SharedResourceState>();
+        auto factory = std::make_shared<FakeResourceFactory>(state);
+        PlannedSeatGameInstance instance(
+            *plan, factory, std::make_unique<FakeLifecycleHook>(2, state));
+        std::string error;
+        check(instance.start(bindingFor(*plan, "luigi"), error),
+              "compatibility lifecycle hook allows a valid Seat activation");
+        check(eventPosition(*state, "lifecycle:PreSpawn:2") <
+                  eventPosition(*state, "activate:2:process") &&
+              eventPosition(*state, "verify-active:2:process") <
+                  eventPosition(*state, "lifecycle:Startup:2") &&
+              eventPosition(*state, "verify-active:2:window") <
+                  eventPosition(*state, "lifecycle:PostWindow:2") &&
+              eventPosition(*state, "verify-active:2:audio") <
+                  eventPosition(*state, "lifecycle:Runtime:2"),
+              "compatibility phases map to the exact Process/Window/final resource boundaries");
+        check(instance.stop(error) && instance.verifyStopped(error),
+              "successful lifecycle activation rolls back and verifies safe on stop");
+        check(eventPosition(*state, "rollback:2:process") <
+                  eventPosition(*state, "lifecycle:rollback:2") &&
+              eventPosition(*state, "lifecycle:rollback:2") <
+                  eventPosition(*state, "rollback:2:recovery"),
+              "reverse rollback stops Process before compatibility files and Recovery after them");
+    }
+
+    const auto runLifecycleFailure = [&](std::string boundary,
+                                         std::string forbiddenResourceEvent) {
+        auto state = std::make_shared<SharedResourceState>();
+        state->failLifecycleBoundary = boundary;
+        auto factory = std::make_shared<FakeResourceFactory>(state);
+        PlannedSeatGameInstance instance(
+            *plan, factory, std::make_unique<FakeLifecycleHook>(2, state));
+        std::string error;
+        check(!instance.start(bindingFor(*plan, "luigi"), error),
+              "injected compatibility lifecycle phase failure is surfaced");
+        check(eventPosition(*state, forbiddenResourceEvent) == state->log.size(),
+              "failed compatibility phase prevents the next lifecycle resource mutation");
+        check(instance.verifyStopped(error),
+              "lifecycle phase failure is reversed and verifies stopped");
+    };
+
+    runLifecycleFailure("PreSpawn", "activate:2:process");
+    runLifecycleFailure("Startup", "activate:2:window");
+    runLifecycleFailure("PostWindow", "activate:2:display");
+    runLifecycleFailure("Runtime", "missing:runtime-has-no-next-resource");
+
+    {
+        auto state = std::make_shared<SharedResourceState>();
+        state->failActivateAfterMutation = std::make_pair(SeatId{2}, ResourceKind::Process);
+        auto factory = std::make_shared<FakeResourceFactory>(state);
+        PlannedSeatGameInstance instance(
+            *plan, factory, std::make_unique<FakeLifecycleHook>(2, state));
+        std::string error;
+        check(!instance.start(bindingFor(*plan, "luigi"), error) &&
+                  eventPosition(*state, "lifecycle:PreSpawn:2") <
+                      eventPosition(*state, "activate:2:process") &&
+                  eventPosition(*state, "lifecycle:Startup:2") == state->log.size(),
+              "process failure happens after PreSpawn and before Startup");
+        check(instance.verifyStopped(error),
+              "process failure after PreSpawn reverses compatibility state");
+    }
+
+    {
+        auto state = std::make_shared<SharedResourceState>();
+        state->failActivateAfterMutation = std::make_pair(SeatId{2}, ResourceKind::Window);
+        auto factory = std::make_shared<FakeResourceFactory>(state);
+        PlannedSeatGameInstance instance(
+            *plan, factory, std::make_unique<FakeLifecycleHook>(2, state));
+        std::string error;
+        check(!instance.start(bindingFor(*plan, "luigi"), error) &&
+                  eventPosition(*state, "lifecycle:Startup:2") <
+                      eventPosition(*state, "activate:2:window") &&
+                  eventPosition(*state, "lifecycle:PostWindow:2") == state->log.size(),
+              "window failure happens after Startup and before PostWindow");
+        check(instance.verifyStopped(error),
+              "window failure after Startup reverses compatibility state");
+    }
+
+    for (const auto lateKind : {ResourceKind::Input, ResourceKind::Audio}) {
+        auto state = std::make_shared<SharedResourceState>();
+        state->failActivateAfterMutation = std::make_pair(SeatId{2}, lateKind);
+        auto factory = std::make_shared<FakeResourceFactory>(state);
+        PlannedSeatGameInstance instance(
+            *plan, factory, std::make_unique<FakeLifecycleHook>(2, state));
+        std::string error;
+        const auto activationEvent = std::string("activate:2:") +
+                                     std::string(resourceKindName(lateKind));
+        check(!instance.start(bindingFor(*plan, "luigi"), error) &&
+                  eventPosition(*state, "lifecycle:PostWindow:2") <
+                      eventPosition(*state, activationEvent) &&
+                  eventPosition(*state, "lifecycle:Runtime:2") == state->log.size(),
+              "Input/Audio failure happens after PostWindow and before Runtime");
+        check(instance.verifyStopped(error),
+              "later Input/Audio failure after PostWindow reverses compatibility state");
+    }
+
+    {
+        auto state = std::make_shared<SharedResourceState>();
+        state->failLifecycleBoundary = "Runtime";
+        state->failLifecycleRollback = true;
+        auto factory = std::make_shared<FakeResourceFactory>(state);
+        PlannedSeatGameInstance instance(
+            *plan, factory, std::make_unique<FakeLifecycleHook>(2, state));
+        std::string error;
+        check(!instance.start(bindingFor(*plan, "luigi"), error),
+              "Runtime failure with injected compatibility rollback failure is surfaced");
+        check(!instance.verifyStopped(error) && state->lifecycleRecoveryRequired,
+              "unverifiable compatibility rollback remains RecoveryRequired");
+        state->failLifecycleRollback = false;
+        state->lifecycleRecoveryRequired = false;
+        check(instance.stop(error) && instance.verifyStopped(error),
+              "retained compatibility recovery ownership supports a later cleanup retry");
+    }
 }
 
 void testRuntimeHostIndependentSeatIsolationAndNaturalExitCleanup() {
@@ -479,6 +688,7 @@ int main() {
     testCompilePreflightFailsBeforeMutation();
     testEveryActivationFailureRollsBackInReverse();
     testRollbackFailureRetainsRecoveryOwnership();
+    testCompatibilityLifecycleBoundariesAndReverseRollback();
     testRuntimeHostIndependentSeatIsolationAndNaturalExitCleanup();
     testOneSeatStartFailureDoesNotRollbackHealthySeat();
 

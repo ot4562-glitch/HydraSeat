@@ -14,19 +14,41 @@
     "environment",
     "profile",
     "stages",
-    "manual_verdict"
+    "manual_verdict",
+    "manual_verdict_note",
+    "manual_verdict_unix",
+    "evidence_valid_until_unix"
   ],
   "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
     "manualCheck": {
       "type": "string",
       "enum": ["PENDING", "PASS", "FAIL", "NOT_APPLICABLE"]
+    },
+    "stageVerdict": {
+      "type": "string",
+      "enum": ["PENDING", "PASS", "FAIL"]
     },
     "ownership": {
       "type": "object",
       "additionalProperties": false,
       "required": ["device_id", "category", "seat_id"],
       "properties": {
-        "device_id": { "type": "string", "minLength": 1 },
+        "device_id": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "category": { "type": "string", "enum": ["keyboard", "mouse"] },
+        "seat_id": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "nativeScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "instance_id", "category", "seat_id"],
+      "properties": {
+        "device_id": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "instance_id": { "type": "string", "minLength": 1, "maxLength": 1024 },
         "category": { "type": "string", "enum": ["keyboard", "mouse"] },
         "seat_id": { "type": "integer", "minimum": 1 }
       }
@@ -36,13 +58,17 @@
       "additionalProperties": false,
       "required": [
         "status",
+        "verdict",
         "started_utc",
         "ended_utc",
         "duration_seconds",
         "process_exit_code",
         "trace",
+        "trace_sha256",
         "metrics_report",
+        "metrics_report_sha256",
         "auxiliary_traces",
+        "auxiliary_trace_sha256",
         "manual_checks",
         "notes"
       ],
@@ -51,30 +77,49 @@
           "type": "string",
           "enum": ["PENDING", "RUNNING", "RECORDED", "FAILED", "SKIPPED"]
         },
+        "verdict": { "$ref": "#/$defs/stageVerdict" },
         "started_utc": { "type": ["string", "null"] },
         "ended_utc": { "type": ["string", "null"] },
         "duration_seconds": { "type": "number", "minimum": 0 },
         "process_exit_code": { "type": ["integer", "null"] },
         "trace": { "type": ["string", "null"] },
+        "trace_sha256": {
+          "anyOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
         "metrics_report": { "type": ["string", "null"] },
+        "metrics_report_sha256": {
+          "anyOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
         "auxiliary_traces": {
           "type": "array",
           "maxItems": 8,
           "items": { "type": "string", "minLength": 1 }
         },
+        "auxiliary_trace_sha256": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/sha256" }
+        },
         "manual_checks": {
           "type": "object",
+          "maxProperties": 16,
           "additionalProperties": { "$ref": "#/$defs/manualCheck" }
         },
-        "notes": { "type": "string" }
+        "notes": { "type": "string", "maxLength": 8192 }
       }
     }
   },
   "properties": {
     "schema_version": { "const": 1 },
     "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "created_utc": { "type": "string", "minLength": 1 },
-    "updated_utc": { "type": "string", "minLength": 1 },
+    "created_utc": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "updated_utc": { "type": "string", "minLength": 1, "maxLength": 64 },
     "state": {
       "type": "string",
       "enum": ["IN_PROGRESS", "READY_FOR_REVIEW", "MANUAL_PASS", "MANUAL_FAIL"]
@@ -93,10 +138,10 @@
       "additionalProperties": false,
       "required": ["windows_version", "windows_build", "architecture", "hardware_notes"],
       "properties": {
-        "windows_version": { "type": "string" },
-        "windows_build": { "type": "string" },
-        "architecture": { "type": "string" },
-        "hardware_notes": { "type": "string" }
+        "windows_version": { "type": "string", "maxLength": 128 },
+        "windows_build": { "type": "string", "maxLength": 128 },
+        "architecture": { "type": "string", "maxLength": 64 },
+        "hardware_notes": { "type": "string", "maxLength": 8192 }
       }
     },
     "profile": {
@@ -107,17 +152,25 @@
         "sha256",
         "schema_version",
         "expected_ownership",
+        "native_hidhide_scope",
         "shareable_resources",
         "shared_case"
       ],
       "properties": {
-        "source_path": { "type": "string" },
-        "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+        "source_path": { "type": "string", "minLength": 1, "maxLength": 32768 },
+        "sha256": { "$ref": "#/$defs/sha256" },
         "schema_version": { "const": 2 },
         "expected_ownership": {
           "type": "array",
+          "minItems": 4,
           "maxItems": 64,
           "items": { "$ref": "#/$defs/ownership" }
+        },
+        "native_hidhide_scope": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/nativeScope" }
         },
         "shareable_resources": {
           "type": "array",
@@ -127,8 +180,8 @@
             "additionalProperties": false,
             "required": ["type", "id"],
             "properties": {
-              "type": { "type": "string" },
-              "id": { "type": "string" }
+              "type": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "id": { "type": "string", "minLength": 1, "maxLength": 1024 }
             }
           }
         },
@@ -137,9 +190,9 @@
           "additionalProperties": false,
           "required": ["derived_profile", "sha256", "device_id", "category"],
           "properties": {
-            "derived_profile": { "type": "string", "minLength": 1 },
-            "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
-            "device_id": { "type": "string", "minLength": 1 },
+            "derived_profile": { "type": "string", "minLength": 1, "maxLength": 260 },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "device_id": { "type": "string", "minLength": 1, "maxLength": 1024 },
             "category": { "type": "string", "enum": ["keyboard", "mouse"] }
           }
         }
@@ -159,6 +212,14 @@
       "type": "string",
       "enum": ["PENDING", "PASS", "FAIL"]
     },
-    "manual_verdict_note": { "type": "string" }
+    "manual_verdict_note": { "type": "string", "maxLength": 8192 },
+    "manual_verdict_unix": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "evidence_valid_until_unix": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    }
   }
 }

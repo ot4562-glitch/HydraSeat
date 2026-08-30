@@ -237,7 +237,7 @@ bool readOptionalWide(Reader& reader, std::optional<std::wstring>& value) {
 
 bool validMessageType(std::uint16_t raw) {
     return raw >= static_cast<std::uint16_t>(MessageType::Hello) &&
-           raw <= static_cast<std::uint16_t>(MessageType::ReconcileSeatGamesResult);
+           raw <= static_cast<std::uint16_t>(MessageType::RemoveProviderPlanResult);
 }
 
 bool validHostPhase(std::uint8_t raw) {
@@ -347,6 +347,308 @@ std::optional<runtime::RuntimeTransition> decodeTransitionBody(
     return value;
 }
 
+bool writeBoundedString(Writer& writer, std::string_view value,
+                        bool allowEmpty = false) {
+    if ((!allowEmpty && value.empty()) || value.size() > kHostProtocolMaxStringBytes ||
+        value.find('\0') != std::string_view::npos) {
+        return false;
+    }
+    writer.string(value);
+    return true;
+}
+
+bool writeOptionalString(Writer& writer,
+                         const std::optional<std::string>& value) {
+    writer.u8(value ? 1u : 0u);
+    return !value || writeBoundedString(writer, *value);
+}
+
+bool readOptionalString(Reader& reader, std::optional<std::string>& value) {
+    std::uint8_t present = 0;
+    if (!reader.u8(present) || present > 1u) return false;
+    if (present == 0u) {
+        value.reset();
+        return true;
+    }
+    std::string decoded;
+    if (!reader.string(decoded) || decoded.empty() ||
+        decoded.find('\0') != std::string::npos) {
+        return false;
+    }
+    value = std::move(decoded);
+    return true;
+}
+
+bool writePlanWideVector(Writer& writer,
+                         const std::vector<std::wstring>& values) {
+    if (values.size() > kHostProtocolMaxPlanArguments) return false;
+    writer.u32(static_cast<std::uint32_t>(values.size()));
+    for (const auto& value : values) {
+        if (!writeWide(writer, value)) return false;
+    }
+    return true;
+}
+
+bool readPlanWideVector(Reader& reader, std::vector<std::wstring>& values) {
+    std::uint32_t count = 0;
+    if (!reader.u32(count) || count > kHostProtocolMaxPlanArguments) return false;
+    values.clear();
+    values.reserve(count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        std::wstring value;
+        if (!readWide(reader, value)) return false;
+        values.push_back(std::move(value));
+    }
+    return true;
+}
+
+std::uint8_t requirementBits(const launch::Requirements& value) noexcept {
+    return static_cast<std::uint8_t>((value.display ? 1u : 0u) |
+        (value.keyboard ? 2u : 0u) | (value.mouse ? 4u : 0u) |
+        (value.controller ? 8u : 0u) | (value.audioOutput ? 16u : 0u) |
+        (value.windowOwnership ? 32u : 0u) | (value.recovery ? 64u : 0u) |
+        (value.highRisk ? 128u : 0u));
+}
+
+launch::Requirements requirementsFromBits(std::uint8_t bits) noexcept {
+    launch::Requirements value;
+    value.display = (bits & 1u) != 0;
+    value.keyboard = (bits & 2u) != 0;
+    value.mouse = (bits & 4u) != 0;
+    value.controller = (bits & 8u) != 0;
+    value.audioOutput = (bits & 16u) != 0;
+    value.windowOwnership = (bits & 32u) != 0;
+    value.recovery = (bits & 64u) != 0;
+    value.highRisk = (bits & 128u) != 0;
+    return value;
+}
+
+std::uint8_t capabilityBits(const launch::Capabilities& value) noexcept {
+    return static_cast<std::uint8_t>((value.process ? 1u : 0u) |
+        (value.window ? 2u : 0u) | (value.display ? 4u : 0u) |
+        (value.input ? 8u : 0u) | (value.controller ? 16u : 0u) |
+        (value.audio ? 32u : 0u) | (value.recovery ? 64u : 0u));
+}
+
+launch::Capabilities capabilitiesFromBits(std::uint8_t bits) noexcept {
+    launch::Capabilities value;
+    value.process = (bits & 1u) != 0;
+    value.window = (bits & 2u) != 0;
+    value.display = (bits & 4u) != 0;
+    value.input = (bits & 8u) != 0;
+    value.controller = (bits & 16u) != 0;
+    value.audio = (bits & 32u) != 0;
+    value.recovery = (bits & 64u) != 0;
+    return value;
+}
+
+bool writeCompatibility(
+    Writer& writer,
+    const std::optional<profile::CompatibilityReference>& compatibility) {
+    writer.u8(compatibility ? 1u : 0u);
+    if (!compatibility) return true;
+    if (compatibility->evidenceRevision == 0 ||
+        !writeBoundedString(writer, compatibility->recordId) ||
+        !writeBoundedString(writer, compatibility->provenance)) {
+        return false;
+    }
+    writer.u32(compatibility->evidenceRevision);
+    return true;
+}
+
+bool readCompatibility(
+    Reader& reader,
+    std::optional<profile::CompatibilityReference>& compatibility) {
+    std::uint8_t present = 0;
+    if (!reader.u8(present) || present > 1u) return false;
+    if (present == 0u) {
+        compatibility.reset();
+        return true;
+    }
+    profile::CompatibilityReference value;
+    if (!reader.string(value.recordId) || value.recordId.empty() ||
+        !reader.string(value.provenance) || value.provenance.empty() ||
+        !reader.u32(value.evidenceRevision) || value.evidenceRevision == 0) {
+        return false;
+    }
+    compatibility = std::move(value);
+    return true;
+}
+
+bool writeInstanceRecipe(
+    Writer& writer,
+    const std::optional<profile::InstanceRecipe>& recipe) {
+    writer.u8(recipe ? 1u : 0u);
+    if (!recipe) return true;
+    return writePlanWideVector(writer, recipe->arguments) &&
+           writeOptionalWide(writer, recipe->workingDirectory) &&
+           writeOptionalWide(writer, recipe->dataRoot);
+}
+
+bool readInstanceRecipe(
+    Reader& reader,
+    std::optional<profile::InstanceRecipe>& recipe) {
+    std::uint8_t present = 0;
+    if (!reader.u8(present) || present > 1u) return false;
+    if (present == 0u) {
+        recipe.reset();
+        return true;
+    }
+    profile::InstanceRecipe value;
+    if (!readPlanWideVector(reader, value.arguments) ||
+        !readOptionalWide(reader, value.workingDirectory) ||
+        !readOptionalWide(reader, value.dataRoot)) {
+        return false;
+    }
+    recipe = std::move(value);
+    return true;
+}
+
+bool writeProviderLaunchRequest(Writer& writer,
+                                const provider::ProviderLaunchRequest& request) {
+    if (!writeBoundedString(writer, request.providerId) ||
+        !writeBoundedString(writer, request.gameId) ||
+        !writeOptionalString(writer, request.providerAppId) ||
+        !writeOptionalString(writer, request.accountRef) ||
+        request.metadataRevision == 0 ||
+        static_cast<std::uint8_t>(request.targetKind) >
+            static_cast<std::uint8_t>(provider::LaunchTargetKind::ProviderUri)) {
+        return false;
+    }
+    writer.u64(request.metadataRevision);
+    writer.u8(static_cast<std::uint8_t>(request.targetKind));
+    writer.u8(0u); writer.u16(0u);
+    if (!writeWide(writer, request.target) ||
+        !writePlanWideVector(writer, request.arguments) ||
+        !writeOptionalWide(writer, request.workingDirectory) ||
+        !writeBoundedString(writer, request.launchCorrelationId)) {
+        return false;
+    }
+    return true;
+}
+
+bool readProviderLaunchRequest(Reader& reader,
+                               provider::ProviderLaunchRequest& request) {
+    std::uint8_t targetKind = 0, reserved8 = 0;
+    std::uint16_t reserved16 = 0;
+    if (!reader.string(request.providerId) || request.providerId.empty() ||
+        !reader.string(request.gameId) || request.gameId.empty() ||
+        !readOptionalString(reader, request.providerAppId) ||
+        !readOptionalString(reader, request.accountRef) ||
+        !reader.u64(request.metadataRevision) || request.metadataRevision == 0 ||
+        !reader.u8(targetKind) ||
+        targetKind > static_cast<std::uint8_t>(provider::LaunchTargetKind::ProviderUri) ||
+        !reader.u8(reserved8) || !reader.u16(reserved16) ||
+        reserved8 != 0 || reserved16 != 0 ||
+        !readWide(reader, request.target) || request.target.empty() ||
+        !readPlanWideVector(reader, request.arguments) ||
+        !readOptionalWide(reader, request.workingDirectory) ||
+        !reader.string(request.launchCorrelationId) ||
+        request.launchCorrelationId.empty()) {
+        return false;
+    }
+    request.targetKind = static_cast<provider::LaunchTargetKind>(targetKind);
+    return true;
+}
+
+std::vector<std::byte> encodeProviderPlanBody(
+    const plan::ProviderAwareLaunchPlan& value) {
+    if (value.schemaVersion != plan::kProviderLaunchPlanSchemaVersion ||
+        value.fingerprint == 0 || value.seats.empty() ||
+        value.seats.size() > kHostProtocolMaxPlanSeats ||
+        production::providerPlanFingerprint(value) != value.fingerprint) {
+        return {};
+    }
+    std::vector<plan::SeatProviderLaunchPlan> seats = value.seats;
+    std::sort(seats.begin(), seats.end(), [](const auto& left, const auto& right) {
+        return left.seatId < right.seatId;
+    });
+    if (std::adjacent_find(seats.begin(), seats.end(), [](const auto& left, const auto& right) {
+            return left.seatId == right.seatId;
+        }) != seats.end()) {
+        return {};
+    }
+    Writer writer;
+    writer.u32(value.schemaVersion);
+    writer.u64(value.fingerprint);
+    writer.u16(static_cast<std::uint16_t>(seats.size()));
+    writer.u16(0u);
+    for (const auto& seat : seats) {
+        if (seat.seatId == 0 || seat.requirementRevision == 0 ||
+            seat.hardwareFingerprint == 0) return {};
+        writer.u32(seat.seatId);
+        if (!writeBoundedString(writer, seat.playerId) ||
+            !writeBoundedString(writer, seat.gameId) ||
+            !writeOptionalString(writer, seat.setupId)) return {};
+        writer.u32(seat.instanceIndex);
+        writer.u64(seat.requirementRevision);
+        if (!writeCompatibility(writer, seat.compatibility) ||
+            !writeInstanceRecipe(writer, seat.instanceRecipe)) return {};
+        writer.u64(seat.hardwareFingerprint);
+        writer.u8(requirementBits(seat.requirements));
+        writer.u8(capabilityBits(seat.capabilities));
+        writer.u16(0u);
+        if (!writeProviderLaunchRequest(writer, seat.launchRequest)) return {};
+    }
+    auto bytes = writer.take();
+    if (bytes.size() > kHostProtocolMaxPayloadBytes) return {};
+    return bytes;
+}
+
+std::optional<plan::ProviderAwareLaunchPlan> decodeProviderPlanBody(
+    std::span<const std::byte> payload) {
+    Reader reader(payload);
+    plan::ProviderAwareLaunchPlan value;
+    std::uint16_t count = 0, reserved16 = 0;
+    if (!reader.u32(value.schemaVersion) ||
+        value.schemaVersion != plan::kProviderLaunchPlanSchemaVersion ||
+        !reader.u64(value.fingerprint) || value.fingerprint == 0 ||
+        !reader.u16(count) || count == 0 || count > kHostProtocolMaxPlanSeats ||
+        !reader.u16(reserved16) || reserved16 != 0) {
+        return std::nullopt;
+    }
+    value.seats.reserve(count);
+    for (std::uint16_t index = 0; index < count; ++index) {
+        plan::SeatProviderLaunchPlan seat;
+        std::uint8_t requirements = 0, capabilities = 0;
+        std::uint16_t reserved = 0;
+        if (!reader.u32(seat.seatId) || seat.seatId == 0 ||
+            !reader.string(seat.playerId) || seat.playerId.empty() ||
+            !reader.string(seat.gameId) || seat.gameId.empty() ||
+            !readOptionalString(reader, seat.setupId) ||
+            !reader.u32(seat.instanceIndex) ||
+            !reader.u64(seat.requirementRevision) || seat.requirementRevision == 0 ||
+            !readCompatibility(reader, seat.compatibility) ||
+            !readInstanceRecipe(reader, seat.instanceRecipe) ||
+            !reader.u64(seat.hardwareFingerprint) || seat.hardwareFingerprint == 0 ||
+            !reader.u8(requirements) || !reader.u8(capabilities) ||
+            (capabilities & 0x80u) != 0 || !reader.u16(reserved) || reserved != 0 ||
+            !readProviderLaunchRequest(reader, seat.launchRequest)) {
+            return std::nullopt;
+        }
+        seat.requirements = requirementsFromBits(requirements);
+        seat.capabilities = capabilitiesFromBits(capabilities);
+        value.seats.push_back(std::move(seat));
+    }
+    if (!reader.done()) return std::nullopt;
+    std::sort(value.seats.begin(), value.seats.end(), [](const auto& left, const auto& right) {
+        return left.seatId < right.seatId;
+    });
+    if (std::adjacent_find(value.seats.begin(), value.seats.end(),
+                           [](const auto& left, const auto& right) {
+                               return left.seatId == right.seatId;
+                           }) != value.seats.end() ||
+        production::providerPlanFingerprint(value) != value.fingerprint) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+bool validProviderPlanInstallCode(std::uint8_t raw) noexcept {
+    return raw <= static_cast<std::uint8_t>(
+        production::ProviderPlanInstallCode::BackendFailure);
+}
+
 } // namespace
 
 std::string_view messageTypeName(MessageType type) noexcept {
@@ -383,6 +685,12 @@ std::string_view messageTypeName(MessageType type) noexcept {
         case MessageType::StopSeatGameResult: return "stop-seat-game-result";
         case MessageType::ReconcileSeatGames: return "reconcile-seat-games";
         case MessageType::ReconcileSeatGamesResult: return "reconcile-seat-games-result";
+        case MessageType::GetProviderPlanRegistry: return "get-provider-plan-registry";
+        case MessageType::ProviderPlanRegistry: return "provider-plan-registry";
+        case MessageType::InstallProviderPlan: return "install-provider-plan";
+        case MessageType::InstallProviderPlanResult: return "install-provider-plan-result";
+        case MessageType::RemoveProviderPlan: return "remove-provider-plan";
+        case MessageType::RemoveProviderPlanResult: return "remove-provider-plan-result";
     }
     return "unknown";
 }
@@ -764,6 +1072,265 @@ std::optional<SeatGameCommandPayload> decodeSeatGameCommandPayload(
     return result;
 }
 
+std::vector<std::byte> encodeProviderPlanRegistrySnapshot(
+    const production::ProviderPlanRegistrySnapshot& snapshot) {
+    if (snapshot.schemaVersion != production::kProviderPlanInstallSchemaVersion ||
+        snapshot.entries.size() > kHostProtocolMaxPlanSeats ||
+        (snapshot.sessionGeneration == 0u && !snapshot.sessionId.empty()) ||
+        (snapshot.sessionGeneration != 0u && snapshot.sessionId.empty())) {
+        return {};
+    }
+    std::vector<production::ProviderPlanRegistryEntry> entries = snapshot.entries;
+    std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+        return left.seatId < right.seatId;
+    });
+    if (std::adjacent_find(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+            return left.seatId == right.seatId;
+        }) != entries.end()) return {};
+
+    Writer writer;
+    writer.u16(1u);
+    writer.u16(static_cast<std::uint16_t>(entries.size()));
+    writer.u32(snapshot.schemaVersion);
+    writer.u64(snapshot.registryRevision);
+    writer.u64(snapshot.profileFingerprint);
+    writer.raw(std::as_bytes(std::span(snapshot.sessionId.bytes)));
+    writer.u64(snapshot.sessionGeneration);
+    for (const auto& entry : entries) {
+        if (entry.seatId == 0 || entry.installedRevision == 0 ||
+            entry.planFingerprint == 0 || entry.planRevision == 0 ||
+            entry.profileFingerprint != snapshot.profileFingerprint ||
+            entry.sessionId != snapshot.sessionId ||
+            entry.sessionGeneration != snapshot.sessionGeneration ||
+            entry.seatGameGeneration == 0 || entry.playerId.empty() ||
+            entry.playerId.size() > kHostProtocolMaxStringBytes ||
+            entry.playerId.find('\0') != std::string::npos ||
+            entry.gameId.empty() ||
+            entry.gameId.size() > kHostProtocolMaxStringBytes ||
+            entry.gameId.find('\0') != std::string::npos) {
+            return {};
+        }
+        writer.u32(entry.seatId);
+        writer.u64(entry.installedRevision);
+        writer.u64(entry.planFingerprint);
+        writer.u64(entry.planRevision);
+        writer.u64(entry.profileFingerprint);
+        writer.raw(std::as_bytes(std::span(entry.sessionId.bytes)));
+        writer.u64(entry.sessionGeneration);
+        writer.u64(entry.seatGameGeneration);
+        // Strings are written after all fixed fields for deterministic decoding.
+        // Re-emit them here because prevalidation above intentionally does not
+        // mutate the wire layout.
+        writer.string(entry.playerId);
+        writer.string(entry.gameId);
+    }
+    auto bytes = writer.take();
+    if (bytes.size() > kHostProtocolMaxPayloadBytes) return {};
+    return bytes;
+}
+
+std::optional<production::ProviderPlanRegistrySnapshot>
+decodeProviderPlanRegistrySnapshot(std::span<const std::byte> payload) {
+    Reader reader(payload);
+    production::ProviderPlanRegistrySnapshot snapshot;
+    std::uint16_t version = 0, count = 0;
+    if (!reader.u16(version) || version != 1u || !reader.u16(count) ||
+        count > kHostProtocolMaxPlanSeats ||
+        !reader.u32(snapshot.schemaVersion) ||
+        snapshot.schemaVersion != production::kProviderPlanInstallSchemaVersion ||
+        !reader.u64(snapshot.registryRevision) ||
+        !reader.u64(snapshot.profileFingerprint) ||
+        !reader.raw(std::as_writable_bytes(std::span(snapshot.sessionId.bytes))) ||
+        !reader.u64(snapshot.sessionGeneration) ||
+        (snapshot.sessionGeneration == 0u && !snapshot.sessionId.empty()) ||
+        (snapshot.sessionGeneration != 0u && snapshot.sessionId.empty())) {
+        return std::nullopt;
+    }
+    snapshot.entries.reserve(count);
+    for (std::uint16_t index = 0; index < count; ++index) {
+        production::ProviderPlanRegistryEntry entry;
+        if (!reader.u32(entry.seatId) || entry.seatId == 0 ||
+            !reader.u64(entry.installedRevision) || entry.installedRevision == 0 ||
+            !reader.u64(entry.planFingerprint) || entry.planFingerprint == 0 ||
+            !reader.u64(entry.planRevision) || entry.planRevision == 0 ||
+            !reader.u64(entry.profileFingerprint) ||
+            !reader.raw(std::as_writable_bytes(std::span(entry.sessionId.bytes))) ||
+            !reader.u64(entry.sessionGeneration) ||
+            !reader.u64(entry.seatGameGeneration) || entry.seatGameGeneration == 0 ||
+            !reader.string(entry.playerId) || entry.playerId.empty() ||
+            !reader.string(entry.gameId) || entry.gameId.empty() ||
+            entry.profileFingerprint != snapshot.profileFingerprint ||
+            entry.sessionId != snapshot.sessionId ||
+            entry.sessionGeneration != snapshot.sessionGeneration) {
+            return std::nullopt;
+        }
+        snapshot.entries.push_back(std::move(entry));
+    }
+    if (!reader.done()) return std::nullopt;
+    std::sort(snapshot.entries.begin(), snapshot.entries.end(),
+              [](const auto& left, const auto& right) {
+                  return left.seatId < right.seatId;
+              });
+    if (std::adjacent_find(snapshot.entries.begin(), snapshot.entries.end(),
+                           [](const auto& left, const auto& right) {
+                               return left.seatId == right.seatId;
+                           }) != snapshot.entries.end()) return std::nullopt;
+    return snapshot;
+}
+
+std::vector<std::byte> encodeProviderPlanInstallRequest(
+    const production::ProviderPlanInstallRequest& request) {
+    if (request.schemaVersion != production::kProviderPlanInstallSchemaVersion ||
+        request.seatId == 0 || request.planFingerprint == 0 ||
+        request.planRevision == 0 || request.profileFingerprint == 0 ||
+        request.sessionId.empty() || request.sessionGeneration == 0 ||
+        request.seatGameGeneration == 0 ||
+        request.plan.fingerprint != request.planFingerprint) {
+        return {};
+    }
+    const auto planBytes = encodeProviderPlanBody(request.plan);
+    if (planBytes.empty()) return {};
+    Writer writer;
+    writer.u16(1u); writer.u16(0u);
+    writer.u32(request.schemaVersion);
+    writer.u32(request.seatId);
+    writer.u64(request.expectedRegistryRevision);
+    writer.u64(request.planFingerprint);
+    writer.u64(request.planRevision);
+    writer.u64(request.profileFingerprint);
+    writer.raw(std::as_bytes(std::span(request.sessionId.bytes)));
+    writer.u64(request.sessionGeneration);
+    writer.u64(request.seatGameGeneration);
+    writer.u32(static_cast<std::uint32_t>(planBytes.size()));
+    writer.raw(planBytes);
+    auto bytes = writer.take();
+    if (bytes.size() > kHostProtocolMaxPayloadBytes) return {};
+    return bytes;
+}
+
+std::optional<production::ProviderPlanInstallRequest>
+decodeProviderPlanInstallRequest(std::span<const std::byte> payload) {
+    Reader reader(payload);
+    production::ProviderPlanInstallRequest request;
+    std::uint16_t version = 0, reserved16 = 0;
+    std::uint32_t planLength = 0;
+    std::vector<std::byte> planBytes;
+    if (!reader.u16(version) || version != 1u ||
+        !reader.u16(reserved16) || reserved16 != 0 ||
+        !reader.u32(request.schemaVersion) ||
+        request.schemaVersion != production::kProviderPlanInstallSchemaVersion ||
+        !reader.u32(request.seatId) || request.seatId == 0 ||
+        !reader.u64(request.expectedRegistryRevision) ||
+        !reader.u64(request.planFingerprint) || request.planFingerprint == 0 ||
+        !reader.u64(request.planRevision) || request.planRevision == 0 ||
+        !reader.u64(request.profileFingerprint) || request.profileFingerprint == 0 ||
+        !reader.raw(std::as_writable_bytes(std::span(request.sessionId.bytes))) ||
+        request.sessionId.empty() ||
+        !reader.u64(request.sessionGeneration) || request.sessionGeneration == 0 ||
+        !reader.u64(request.seatGameGeneration) || request.seatGameGeneration == 0 ||
+        !reader.u32(planLength) || planLength == 0 ||
+        planLength > kHostProtocolMaxPayloadBytes ||
+        !reader.rawVector(planLength, planBytes) || !reader.done()) {
+        return std::nullopt;
+    }
+    auto plan = decodeProviderPlanBody(planBytes);
+    if (!plan || plan->fingerprint != request.planFingerprint) return std::nullopt;
+    request.plan = std::move(*plan);
+    const auto selected = std::find_if(
+        request.plan.seats.begin(), request.plan.seats.end(),
+        [&](const auto& seat) { return seat.seatId == request.seatId; });
+    if (selected == request.plan.seats.end() ||
+        production::providerPlanRevision(*selected) != request.planRevision) {
+        return std::nullopt;
+    }
+    return request;
+}
+
+std::vector<std::byte> encodeProviderPlanRemoveRequest(
+    const production::ProviderPlanRemoveRequest& request) {
+    if (request.schemaVersion != production::kProviderPlanInstallSchemaVersion ||
+        request.seatId == 0 || request.planFingerprint == 0 ||
+        request.planRevision == 0 || request.profileFingerprint == 0 ||
+        request.sessionId.empty() || request.sessionGeneration == 0 ||
+        request.seatGameGeneration == 0) return {};
+    Writer writer;
+    writer.u16(1u); writer.u16(0u);
+    writer.u32(request.schemaVersion);
+    writer.u32(request.seatId);
+    writer.u64(request.expectedRegistryRevision);
+    writer.u64(request.planFingerprint);
+    writer.u64(request.planRevision);
+    writer.u64(request.profileFingerprint);
+    writer.raw(std::as_bytes(std::span(request.sessionId.bytes)));
+    writer.u64(request.sessionGeneration);
+    writer.u64(request.seatGameGeneration);
+    return writer.take();
+}
+
+std::optional<production::ProviderPlanRemoveRequest>
+decodeProviderPlanRemoveRequest(std::span<const std::byte> payload) {
+    Reader reader(payload);
+    production::ProviderPlanRemoveRequest request;
+    std::uint16_t version = 0, reserved16 = 0;
+    if (!reader.u16(version) || version != 1u ||
+        !reader.u16(reserved16) || reserved16 != 0 ||
+        !reader.u32(request.schemaVersion) ||
+        request.schemaVersion != production::kProviderPlanInstallSchemaVersion ||
+        !reader.u32(request.seatId) || request.seatId == 0 ||
+        !reader.u64(request.expectedRegistryRevision) ||
+        !reader.u64(request.planFingerprint) || request.planFingerprint == 0 ||
+        !reader.u64(request.planRevision) || request.planRevision == 0 ||
+        !reader.u64(request.profileFingerprint) || request.profileFingerprint == 0 ||
+        !reader.raw(std::as_writable_bytes(std::span(request.sessionId.bytes))) ||
+        request.sessionId.empty() ||
+        !reader.u64(request.sessionGeneration) || request.sessionGeneration == 0 ||
+        !reader.u64(request.seatGameGeneration) || request.seatGameGeneration == 0 ||
+        !reader.done()) return std::nullopt;
+    return request;
+}
+
+std::vector<std::byte> encodeProviderPlanInstallResult(
+    const production::ProviderPlanInstallResult& result) {
+    if (!validProviderPlanInstallCode(static_cast<std::uint8_t>(result.code)) ||
+        result.diagnostic.size() > kHostProtocolMaxStringBytes ||
+        result.diagnostic.find('\0') != std::string::npos) return {};
+    const auto registry = encodeProviderPlanRegistrySnapshot(result.registry);
+    if (registry.empty()) return {};
+    Writer writer;
+    writer.u8(static_cast<std::uint8_t>(result.code));
+    writer.u8(0u); writer.u16(0u);
+    writer.u32(static_cast<std::uint32_t>(registry.size()));
+    writer.raw(registry);
+    writer.string(result.diagnostic);
+    auto bytes = writer.take();
+    if (bytes.size() > kHostProtocolMaxPayloadBytes) return {};
+    return bytes;
+}
+
+std::optional<production::ProviderPlanInstallResult>
+decodeProviderPlanInstallResult(std::span<const std::byte> payload) {
+    Reader reader(payload);
+    production::ProviderPlanInstallResult result;
+    std::uint8_t code = 0, reserved8 = 0;
+    std::uint16_t reserved16 = 0;
+    std::uint32_t registryLength = 0;
+    std::vector<std::byte> registryBytes;
+    if (!reader.u8(code) || !validProviderPlanInstallCode(code) ||
+        !reader.u8(reserved8) || !reader.u16(reserved16) ||
+        reserved8 != 0 || reserved16 != 0 ||
+        !reader.u32(registryLength) || registryLength == 0 ||
+        registryLength > kHostProtocolMaxPayloadBytes ||
+        !reader.rawVector(registryLength, registryBytes) ||
+        !reader.string(result.diagnostic) || !reader.done()) {
+        return std::nullopt;
+    }
+    auto registry = decodeProviderPlanRegistrySnapshot(registryBytes);
+    if (!registry) return std::nullopt;
+    result.code = static_cast<production::ProviderPlanInstallCode>(code);
+    result.registry = std::move(*registry);
+    return result;
+}
+
 std::vector<std::byte> encodeSnapshot(const runtime::HostRuntimeSnapshot& snapshot) {
     if (snapshot.seats.size() > kHostProtocolMaxSeats ||
         snapshot.configuredSeats.size() > kHostProtocolMaxSeats ||
@@ -1021,6 +1588,8 @@ bool isMutatingRequest(MessageType type) noexcept {
         case MessageType::StartSeatGame:
         case MessageType::StopSeatGame:
         case MessageType::ReconcileSeatGames:
+        case MessageType::InstallProviderPlan:
+        case MessageType::RemoveProviderPlan:
             return true;
         default:
             return false;
@@ -1042,6 +1611,9 @@ MessageType responseTypeFor(MessageType request) noexcept {
         case MessageType::StartSeatGame: return MessageType::StartSeatGameResult;
         case MessageType::StopSeatGame: return MessageType::StopSeatGameResult;
         case MessageType::ReconcileSeatGames: return MessageType::ReconcileSeatGamesResult;
+        case MessageType::GetProviderPlanRegistry: return MessageType::ProviderPlanRegistry;
+        case MessageType::InstallProviderPlan: return MessageType::InstallProviderPlanResult;
+        case MessageType::RemoveProviderPlan: return MessageType::RemoveProviderPlanResult;
         case MessageType::SubscribeEvents: return MessageType::SubscribeAck;
         case MessageType::Ping: return MessageType::Pong;
         default: return MessageType::Error;

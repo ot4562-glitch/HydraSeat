@@ -73,14 +73,29 @@ watchdog::RollbackPlanManifest sampleManifest(
 
     watchdog::RollbackActionDescriptor second;
     second.actionId = 20;
-    second.kind = watchdog::RollbackActionKind::TerminateOwnedProcess;
+    second.kind = watchdog::RollbackActionKind::ReleaseOverlayState;
     second.activationOrdinal = 2;
     second.timeoutMilliseconds = 500;
     second.generation = 7;
-    second.process = {42020, 0x2000200020002000ull};
+    second.resourceId = 0x2000200020002000ull;
 
     manifest.actions = {first, second};
     return manifest;
+}
+
+recovery::RecoveryProcessAttachmentIdentity attachmentIdentity(
+    const watchdog::RollbackPlanManifest& manifest = sampleManifest()) {
+    recovery::RecoveryProcessAttachmentIdentity identity;
+    identity.seatId = 1u;
+    for (std::size_t index = 0; index < identity.hostSessionId.bytes.size(); ++index) {
+        identity.hostSessionId.bytes[index] =
+            static_cast<std::uint8_t>(0xa0u + index + 1u);
+    }
+    identity.sessionGeneration = 11u;
+    identity.seatGameGeneration = 13u;
+    identity.process = manifest.actions.front().process;
+    identity.recoveryEpoch = manifest.lease.generation;
+    return identity;
 }
 
 reset::RuntimeResetRegistration sampleRegistration(
@@ -88,7 +103,111 @@ reset::RuntimeResetRegistration sampleRegistration(
     reset::RuntimeResetRegistration registration;
     registration.ownerProcess = {40000, 0x9000900090009000ull};
     registration.manifest = manifest;
+    registration.attachment = attachmentIdentity(manifest);
     return registration;
+}
+
+reset::RuntimeResetRegistration legacyRegistration(
+    const watchdog::RollbackPlanManifest& manifest = sampleManifest()) {
+    auto registration = sampleRegistration(manifest);
+    registration.attachment.reset();
+    return registration;
+}
+
+watchdog::RollbackPlanManifest attachmentManifest() {
+    auto manifest = sampleManifest();
+    manifest.actions.resize(1u);
+    return manifest;
+}
+
+reset::RuntimeResetRegistration attachedRegistration() {
+    return sampleRegistration(attachmentManifest());
+}
+
+void appendU16(std::vector<std::byte>& bytes, std::uint16_t value) {
+    bytes.push_back(static_cast<std::byte>(value & 0xffu));
+    bytes.push_back(static_cast<std::byte>((value >> 8u) & 0xffu));
+}
+
+void appendU32(std::vector<std::byte>& bytes, std::uint32_t value) {
+    for (unsigned shift = 0; shift < 32; shift += 8) {
+        bytes.push_back(static_cast<std::byte>((value >> shift) & 0xffu));
+    }
+}
+
+void appendU64(std::vector<std::byte>& bytes, std::uint64_t value) {
+    for (unsigned shift = 0; shift < 64; shift += 8) {
+        bytes.push_back(static_cast<std::byte>((value >> shift) & 0xffu));
+    }
+}
+
+std::vector<std::byte> legacyRegistrationBytes(
+    const reset::RuntimeResetRegistration& registration) {
+    const auto frame = watchdog::encodeRegisterPlan(1u, registration.manifest);
+    std::vector<std::byte> hashInput;
+    appendU32(hashInput, registration.ownerProcess.processId);
+    appendU64(hashInput, registration.ownerProcess.creationTime100ns);
+    hashInput.insert(hashInput.end(), frame.begin(), frame.end());
+    const auto digest = recovery::hashCrashJournalBytes(hashInput);
+
+    std::vector<std::byte> bytes;
+    bytes.reserve(reset::kRuntimeResetRegistrationLegacyHeaderBytes + frame.size());
+    appendU32(bytes, reset::kRuntimeResetRegistrationMagic);
+    bytes.push_back(static_cast<std::byte>(
+        reset::kRuntimeResetRegistrationLegacyVersion & 0xffu));
+    bytes.push_back(static_cast<std::byte>(
+        (reset::kRuntimeResetRegistrationLegacyVersion >> 8u) & 0xffu));
+    bytes.push_back(static_cast<std::byte>(
+        reset::kRuntimeResetRegistrationLegacyHeaderBytes & 0xffu));
+    bytes.push_back(static_cast<std::byte>(
+        (reset::kRuntimeResetRegistrationLegacyHeaderBytes >> 8u) & 0xffu));
+    appendU32(bytes, static_cast<std::uint32_t>(
+        reset::kRuntimeResetRegistrationLegacyHeaderBytes + frame.size()));
+    appendU32(bytes, registration.ownerProcess.processId);
+    appendU64(bytes, registration.ownerProcess.creationTime100ns);
+    for (const auto value : digest) bytes.push_back(static_cast<std::byte>(value));
+    appendU32(bytes, static_cast<std::uint32_t>(frame.size()));
+    appendU32(bytes, 0u);
+    bytes.insert(bytes.end(), frame.begin(), frame.end());
+    return bytes;
+}
+
+std::vector<std::byte> attachmentlessV2RegistrationBytes(
+    const reset::RuntimeResetRegistration& registration) {
+    const auto frame = watchdog::encodeRegisterPlan(1u, registration.manifest);
+    std::vector<std::byte> hashInput;
+    appendU32(hashInput, registration.ownerProcess.processId);
+    appendU64(hashInput, registration.ownerProcess.creationTime100ns);
+    appendU32(hashInput, 0u);
+    hashInput.insert(hashInput.end(), frame.begin(), frame.end());
+    const auto digest = recovery::hashCrashJournalBytes(hashInput);
+
+    std::vector<std::byte> bytes;
+    bytes.reserve(reset::kRuntimeResetRegistrationHeaderBytes + frame.size());
+    appendU32(bytes, reset::kRuntimeResetRegistrationMagic);
+    appendU16(bytes, reset::kRuntimeResetRegistrationVersion);
+    appendU16(bytes, static_cast<std::uint16_t>(
+        reset::kRuntimeResetRegistrationHeaderBytes));
+    appendU32(bytes, static_cast<std::uint32_t>(
+        reset::kRuntimeResetRegistrationHeaderBytes + frame.size()));
+    appendU32(bytes, registration.ownerProcess.processId);
+    appendU64(bytes, registration.ownerProcess.creationTime100ns);
+    for (const auto value : digest) bytes.push_back(static_cast<std::byte>(value));
+    appendU32(bytes, 0u);
+    appendU32(bytes, static_cast<std::uint32_t>(frame.size()));
+    appendU32(bytes, 0u);
+    bytes.insert(bytes.end(), frame.begin(), frame.end());
+    return bytes;
+}
+
+void writeRegistrationBytes(const std::filesystem::path& path,
+                            const std::vector<std::byte>& bytes) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!bytes.empty()) {
+        output.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+    }
+    check(static_cast<bool>(output), "reset registration fixture bytes are written");
 }
 
 class FakeExecutor final : public watchdog::RollbackExecutor {
@@ -160,8 +279,14 @@ recovery::CrashJournalState seedActiveJournal(
     recovery::CrashJournalStore& store,
     const watchdog::RollbackPlanManifest& manifest) {
     std::string error;
+    const auto attachmentSnapshot =
+        recovery::makeRecoveryProcessAttachmentSnapshot(
+            attachmentIdentity(manifest), &error);
+    check(attachmentSnapshot.has_value(),
+          "initial reset test attachment snapshot is valid: " + error);
+    const std::array snapshots{*attachmentSnapshot};
     auto state = recovery::makeInitialCrashJournal(
-        manifest, manifest.lease.generation, {}, &error);
+        manifest, manifest.lease.generation, snapshots, &error);
     check(state.has_value(), "initial reset test journal is valid: " + error);
     check(store.beginActivation(*state, &error),
           "reset test journal begins: " + error);
@@ -196,16 +321,55 @@ void testRegistrationCodecAndStorage() {
               encoded.size() <= reset::kRuntimeResetRegistrationMaxBytes,
           "runtime reset registration encoding is bounded");
     const auto decoded = reset::decodeRuntimeResetRegistration(encoded, &error);
-    check(decoded && *decoded == registration,
-          "runtime reset registration round trips exactly");
+    check(decoded && *decoded == registration && decoded->attachment,
+          "runtime reset v2 registration round trips with exact attachment authority");
+
+    const auto attached = attachedRegistration();
+    check(reset::validateRuntimeResetRegistration(attached, &error),
+          "single-process attachment-bound runtime reset registration validates");
+    const auto attachedBytes = reset::encodeRuntimeResetRegistration(attached);
+    check(attachedBytes.size() >=
+              reset::kRuntimeResetRegistrationHeaderBytes +
+                  recovery::kRecoveryProcessAttachmentIdentityBytes,
+          "attachment-bound runtime reset registration persists full exact identity");
+    const auto attachedDecoded =
+        reset::decodeRuntimeResetRegistration(attachedBytes, &error);
+    check(attachedDecoded && *attachedDecoded == attached,
+          "attachment-bound runtime reset v2 registration round trips exactly");
+
+    const auto legacy = legacyRegistration();
+    const auto legacyBytes = legacyRegistrationBytes(legacy);
+    const auto legacyDecoded =
+        reset::decodeRuntimeResetRegistration(legacyBytes, &error);
+    check(legacyDecoded && *legacyDecoded == legacy &&
+              !legacyDecoded->attachment,
+          "legacy runtime reset v1 registration remains explicitly readable");
+    check(!reset::validateRuntimeResetRegistration(*legacyDecoded, &error),
+          "decoded legacy registration is not current process-mutation authority");
+    check(reset::encodeRuntimeResetRegistration(legacy).empty(),
+          "current v2 writer refuses attachment-less downgrade authority");
+    const auto attachmentlessV2 = attachmentlessV2RegistrationBytes(legacy);
+    check(!reset::decodeRuntimeResetRegistration(attachmentlessV2, &error),
+          "well-formed v2 registration without exact attachment authority is rejected");
+
+    auto mismatchedAttachment = attached;
+    ++mismatchedAttachment.attachment->process.creationTime100ns;
+    check(!reset::validateRuntimeResetRegistration(mismatchedAttachment, &error),
+          "reset attachment process identity must match its exact rollback action");
 
     auto badMagic = encoded;
     badMagic[0] = std::byte{0};
     check(!reset::decodeRuntimeResetRegistration(badMagic, &error),
           "runtime reset registration bad magic is rejected");
 
+    auto futureVersion = encoded;
+    futureVersion[4] = std::byte{3};
+    futureVersion[5] = std::byte{0};
+    check(!reset::decodeRuntimeResetRegistration(futureVersion, &error),
+          "future runtime reset registration version is rejected");
+
     auto badReserved = encoded;
-    badReserved[60] = std::byte{1};
+    badReserved[64] = std::byte{1};
     check(!reset::decodeRuntimeResetRegistration(badReserved, &error),
           "runtime reset registration nonzero reserved field is rejected");
 
@@ -236,6 +400,8 @@ void testRegistrationCodecAndStorage() {
 
     TempDirectory temp("codec");
     reset::RuntimeResetRegistrationStore store(temp.path());
+    check(!store.write(legacy, &error),
+          "runtime reset store refuses to persist legacy-shaped mutation authority");
     check(store.write(registration, &error),
           "runtime reset registration is durably written: " + error);
     const auto loaded = store.load();
@@ -246,6 +412,34 @@ void testRegistrationCodecAndStorage() {
     check(store.load().status == reset::RuntimeRegistrationReadStatus::Missing,
           "runtime reset registration removal is idempotently visible");
     check(store.remove(&error), "repeated runtime reset registration removal succeeds");
+}
+
+void testLegacyRegistrationIsDiagnosticOnly() {
+    TempDirectory temp("legacy-diagnostic-only");
+    recovery::NativeCrashJournalStorage storage(temp.path());
+    recovery::CrashJournalStore journalStore(storage);
+    reset::RuntimeResetRegistrationStore registrationStore(temp.path());
+    const auto legacy = legacyRegistration();
+    writeRegistrationBytes(
+        temp.path() / "reset-runtime.bin",
+        legacyRegistrationBytes(legacy));
+
+    const auto loaded = registrationStore.load();
+    check(loaded.status == reset::RuntimeRegistrationReadStatus::Success &&
+              loaded.registration && !loaded.registration->attachment,
+          "legacy v1 registration remains readable as diagnostic evidence");
+    const auto inspection = reset::inspectResetState(journalStore, registrationStore);
+    check(inspection.state == reset::ResetState::RecoveryRequired,
+          "pre-journal legacy registration is not promoted to recovery authority");
+
+    FakeExecutor executor;
+    const auto report = reset::executeVerifiedReset(
+        journalStore, registrationStore, executor);
+    check(!report.success && executor.calls.empty(),
+          "legacy registration cannot authorize any process/resource mutation");
+    check(registrationStore.load().status ==
+              reset::RuntimeRegistrationReadStatus::Success,
+          "failed legacy authority check retains evidence for diagnosis/support");
 }
 
 void testPreJournalRegistrationRecovery() {
@@ -295,6 +489,10 @@ void testPreJournalFailurePersistsRecoveryRequiredAndRetries() {
     check(failureJournal &&
               failureJournal->phase == recovery::CrashJournalPhase::Preparing,
           "pre-journal cleanup failure promotes registration into durable Preparing journal");
+    check(failureJournal && registration.attachment &&
+              recovery::validateRecoveryProcessAttachmentJournalBinding(
+                  *failureJournal, *registration.attachment, &error),
+          "pre-journal failure preserves exact attachment authority in durable journal evidence");
     const auto marker = journalStore.loadSafeMode(&error);
     check(marker && marker->reason == recovery::SafeModeReason::RecoveryRequired &&
               marker->sessionId == registration.manifest.lease.sessionId &&
@@ -310,6 +508,94 @@ void testPreJournalFailurePersistsRecoveryRequiredAndRetries() {
     check(retry.success && retry.journalClean && retry.safeModeCleared &&
               retry.registrationCleared,
           "pre-journal RecoveryRequired state remains safely retryable");
+}
+
+void testAttachmentBoundJournalRejectsDowngradeAndMismatch() {
+    TempDirectory temp("attachment-binding");
+    recovery::NativeCrashJournalStorage storage(temp.path());
+    recovery::CrashJournalStore journalStore(storage);
+    reset::RuntimeResetRegistrationStore registrationStore(temp.path());
+    const auto manifest = attachmentManifest();
+    const auto identity = attachmentIdentity(manifest);
+    std::string error;
+    const auto attachmentSnapshot =
+        recovery::makeRecoveryProcessAttachmentSnapshot(identity, &error);
+    check(attachmentSnapshot.has_value(),
+          "attachment-bound reset fixture creates exact journal binding");
+    const std::array snapshots{*attachmentSnapshot};
+    const auto state = recovery::makeInitialCrashJournal(
+        manifest, manifest.lease.generation, snapshots, &error);
+    check(state && journalStore.beginActivation(*state, &error),
+          "attachment-bound reset fixture persists its journal");
+
+    auto exact = sampleRegistration(manifest);
+    exact.attachment = identity;
+    check(registrationStore.write(exact, &error),
+          "attachment-bound reset registration persists");
+    check(reset::inspectResetState(journalStore, registrationStore).state ==
+              reset::ResetState::Recoverable,
+          "exact attachment registration and journal are recoverable");
+
+    const auto downgraded = legacyRegistration(manifest);
+    check(!registrationStore.write(downgraded, &error),
+          "current writer refuses attachment-less downgrade authority");
+    writeRegistrationBytes(
+        temp.path() / "reset-runtime.bin",
+        legacyRegistrationBytes(downgraded));
+    check(reset::inspectResetState(journalStore, registrationStore).state ==
+              reset::ResetState::RecoveryRequired,
+          "attachment-bound journal rejects readable legacy registration downgrade");
+
+    auto mismatched = exact;
+    ++mismatched.attachment->hostSessionId.bytes[0];
+    check(registrationStore.write(mismatched, &error),
+          "mismatched but individually valid attachment registration persists");
+    check(reset::inspectResetState(journalStore, registrationStore).state ==
+              reset::ResetState::RecoveryRequired,
+          "journal rejects reset registration from another host attachment epoch");
+
+    check(registrationStore.write(exact, &error),
+          "exact attachment registration can be restored for verification");
+    check(reset::inspectResetState(journalStore, registrationStore).state ==
+              reset::ResetState::Recoverable,
+          "exact attachment registration restores correlated recoverability");
+}
+
+void testAttachmentPreJournalFailurePreservesExactBinding() {
+    TempDirectory temp("attachment-pre-journal");
+    recovery::NativeCrashJournalStorage storage(temp.path());
+    recovery::CrashJournalStore journalStore(storage);
+    reset::RuntimeResetRegistrationStore registrationStore(temp.path());
+    const auto registration = attachedRegistration();
+    std::string error;
+    check(registrationStore.write(registration, &error),
+          "attachment pre-journal registration persists before risky activation");
+
+    FakeExecutor executor;
+    executor.results[registration.manifest.actions.front().actionId] =
+        watchdog::RollbackActionResult::Failed;
+    const auto failed = reset::executeVerifiedReset(
+        journalStore, registrationStore, executor);
+    check(!failed.success && failed.ownerSatisfied && !failed.rollbackSatisfied,
+          "attachment pre-journal rollback failure is not reported clean");
+    const auto failureJournal = journalStore.loadCurrent(&error);
+    check(failureJournal &&
+              recovery::validateRecoveryProcessAttachmentJournalBinding(
+                  *failureJournal, *registration.attachment, &error),
+          "pre-journal failure promotes exact attachment identity into durable journal evidence");
+    check(registrationStore.load().status ==
+              reset::RuntimeRegistrationReadStatus::Success,
+          "failed attachment recovery retains exact reset registration for retry");
+
+    executor.results.clear();
+    const auto retry = reset::executeVerifiedReset(
+        journalStore, registrationStore, executor);
+    check(retry.success && retry.journalClean && retry.registrationCleared,
+          "attachment-bound pre-journal recovery remains exactly retryable");
+    const auto clean = journalStore.loadCurrent(&error);
+    check(clean && recovery::validateRecoveryProcessAttachmentJournalBinding(
+                       *clean, *registration.attachment, &error),
+          "verified reset keeps exact attachment binding in terminal clean evidence");
 }
 
 void testNoSessionAndRepeatedReset() {
@@ -634,8 +920,11 @@ void testUnsupportedRollbackResultFailsClosed() {
 
 int main() {
     testRegistrationCodecAndStorage();
+    testLegacyRegistrationIsDiagnosticOnly();
     testPreJournalRegistrationRecovery();
     testPreJournalFailurePersistsRecoveryRequiredAndRetries();
+    testAttachmentBoundJournalRejectsDowngradeAndMismatch();
+    testAttachmentPreJournalFailurePreservesExactBinding();
     testNoSessionAndRepeatedReset();
     testActiveSessionResetAndCleanup();
     testSessionMismatchAndRegistrationMismatchFailClosed();

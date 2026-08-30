@@ -1,3 +1,4 @@
+#include "hydra/recovery_process_attachment.hpp"
 #include "hydra/rollback_registry.hpp"
 #include "hydra/watchdog_protocol.hpp"
 
@@ -459,17 +460,37 @@ void testLeaseExpiryRollsBackOwnedTarget() {
     auto identity = processIdentity(target.processId());
     auto session = startWatchdog(identity, 200, 0x20);
 
+    hydra::recovery::RecoveryProcessAttachmentIdentity attachment;
+    attachment.seatId = 1u;
+    attachment.hostSessionId.bytes = makeSession(0x21u);
+    attachment.sessionGeneration = 1u;
+    attachment.seatGameGeneration = 1u;
+    attachment.process = identity;
+    attachment.recoveryEpoch = session.manifest.lease.generation;
+    hydra::recovery::RecoveryProcessAttachmentRegistration registration;
+    registration.identity = attachment;
+    registration.manifest = session.manifest;
+    hydra::recovery::RecoveryProcessAttachmentAuthority authority;
+    check(authority.registerAttachment(registration).succeeded(),
+          "real watchdog process plan registers against exact Seat/process attachment");
+
     WatchdogStatus status;
     check(waitStatus(session.statusRead.get(), status) &&
               status.state == WatchdogRunState::RollbackComplete &&
               status.reason == WatchdogTriggerReason::LeaseExpired &&
-              status.completedActions == 1,
-          "lease expiry produces successful rollback status");
+              status.completedActions == 1 &&
+              status.sessionId == session.manifest.lease.sessionId &&
+              status.generation == attachment.recoveryEpoch,
+          "lease expiry preserves the exact registered recovery lease identity");
     DWORD exitCode = 0;
     check(session.watchdog.wait(kTestWaitMilliseconds, &exitCode) && exitCode == 10,
           "lease expiry exits with rollback-complete code");
     check(target.wait(kTestWaitMilliseconds),
           "lease expiry terminates the exact owned target");
+    check(authority.verifyArmed(attachment, session.manifest.lease).succeeded(),
+          "watchdog expiry does not silently discard host attachment ownership");
+    check(authority.disarm(attachment, session.manifest.lease).succeeded(),
+          "verified external cleanup permits exact attachment disarm");
 }
 
 void testProtocolViolationFailsClosedIntoRollback() {

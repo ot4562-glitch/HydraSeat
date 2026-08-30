@@ -204,6 +204,19 @@ void testExitFaultDuplicateAndMalformedBindings() {
               seat(fault, 1)->phase == SeatGamePhase::Playing &&
               !fault.wholeMachineReturnRequested,
           "one Seat fault degrades only that Seat and preserves the healthy Seat");
+
+    // Seat 1 is generation two after its restart above. A delayed generation-one
+    // process-exit signal must not be allowed to clean the current instance even
+    // if that current process happens to be observed exited at the same moment.
+    seatOne->live = false;
+    const auto staleExit = lifecycle.observeTargetExit(
+        1, 1u, false, "delayed old-generation exit", 20);
+    check(staleExit.code == SeatGameResultCode::InvalidState &&
+              seat(staleExit, 1)->phase == SeatGamePhase::Playing &&
+              seat(staleExit, 1)->generation == 2u,
+          "stale target-exit generation cannot consume a newer Seat game instance");
+    seatOne->live = true;
+
     const auto acknowledgedFault = lifecycle.stop(2, 21);
     check(acknowledgedFault.succeeded() &&
               seat(acknowledgedFault, 2)->phase == SeatGamePhase::Idle && seatOne->live,

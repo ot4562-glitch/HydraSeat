@@ -116,7 +116,8 @@ SeatGameCommandResult SeatGameLifecycle::start(SeatId seatId,
     std::string error;
     std::unique_ptr<ISeatGameInstance> instance;
     try {
-        instance = factory_->create(seatId, error);
+        instance = factory_->createForBinding(
+            seatId, *entry->state.binding, entry->state.generation + 1u, error);
     } catch (const std::exception& exception) {
         error = std::string("factory exception: ") + exception.what();
     } catch (...) {
@@ -232,6 +233,13 @@ SeatGameCommandResult SeatGameLifecycle::stop(SeatId seatId,
 SeatGameCommandResult SeatGameLifecycle::observeTargetExit(
     SeatId seatId, bool cleanExit, std::string diagnostic,
     std::uint64_t correlationId) {
+    return observeTargetExit(seatId, 0u, cleanExit, std::move(diagnostic),
+                             correlationId);
+}
+
+SeatGameCommandResult SeatGameLifecycle::observeTargetExit(
+    SeatId seatId, std::uint64_t expectedGeneration, bool cleanExit,
+    std::string diagnostic, std::uint64_t correlationId) {
     std::unique_lock lock(mutex_, std::try_to_lock);
     if (!lock.owns_lock()) return {SeatGameResultCode::Busy, {}, false,
                                    "another Seat lifecycle mutation is in progress"};
@@ -245,6 +253,11 @@ SeatGameCommandResult SeatGameLifecycle::observeTargetExit(
     auto* entry = findLocked(seatId);
     if (!entry) return rejectLocked(SeatGameResultCode::InvalidSeat,
                                     "Seat is not configured for this v1 runtime");
+    if (expectedGeneration != 0u &&
+        entry->state.generation != expectedGeneration) {
+        return rejectLocked(SeatGameResultCode::InvalidState,
+                            "stale target-exit generation rejected");
+    }
     if (entry->state.phase != SeatGamePhase::Playing || !entry->instance) {
         return rejectLocked(SeatGameResultCode::InvalidState,
                             "target exit observation requires a Playing Seat");

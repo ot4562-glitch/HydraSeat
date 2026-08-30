@@ -1,4 +1,3 @@
-#include "hydra/display_manager.hpp"
 #include "hydra/hardware_detector.hpp"
 #include "hydra/hid_usage.hpp"
 #include "hydra/input_router.hpp"
@@ -6,9 +5,16 @@
 #include "hydra/workspace_manager.hpp"
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
+#include <string>
 #include <string_view>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 static_assert(hydra::hid::classifyCollection(0x01, 0x02) == hydra::hid::CollectionKind::Mouse);
 static_assert(hydra::hid::classifyCollection(0x0D, 0x05) == hydra::hid::CollectionKind::Touchpad);
@@ -29,6 +35,15 @@ void check(bool condition, std::string_view message) {
     }
 }
 
+std::string readFileBytes(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    check(static_cast<bool>(input), "test fixture file can be opened for reading");
+    std::ostringstream bytes;
+    bytes << input.rdbuf();
+    check(static_cast<bool>(bytes), "test fixture file can be read completely");
+    return bytes.str();
+}
+
 void checkDetectorQuery(const hydra::HardwareDetector& detector, std::string_view category) {
     if (detector.lastError()) {
         std::cerr << "[FAIL] HardwareDetector query failed for " << category
@@ -36,6 +51,107 @@ void checkDetectorQuery(const hydra::HardwareDetector& detector, std::string_vie
         std::exit(EXIT_FAILURE);
     }
 }
+
+#ifdef _WIN32
+struct StartupWindowProbe {
+    DWORD processId{0};
+    HWND visibleWindow{nullptr};
+};
+
+BOOL CALLBACK findVisibleProcessWindow(HWND hwnd, LPARAM parameter) {
+    auto* probe = reinterpret_cast<StartupWindowProbe*>(parameter);
+    if (probe == nullptr || !IsWindowVisible(hwnd)) return TRUE;
+
+    DWORD windowProcessId = 0;
+    GetWindowThreadProcessId(hwnd, &windowProcessId);
+    if (windowProcessId != probe->processId) return TRUE;
+
+    probe->visibleWindow = hwnd;
+    return FALSE;
+}
+
+HWND visibleProcessWindow(DWORD processId) {
+    StartupWindowProbe probe;
+    probe.processId = processId;
+    EnumWindows(findVisibleProcessWindow, reinterpret_cast<LPARAM>(&probe));
+    return probe.visibleWindow;
+}
+
+int runStartupWindowProbe(const char* executableArgument) {
+    constexpr DWORD kFirstWindowDeadlineMs = 5000u;
+    constexpr DWORD kGracefulExitDeadlineMs = 5000u;
+
+    std::error_code pathError;
+    const auto executable = std::filesystem::absolute(executableArgument, pathError);
+    check(!pathError && std::filesystem::is_regular_file(executable, pathError) && !pathError,
+          "startup probe executable exists as a regular file");
+
+    std::wstring commandLine = L"\"" + executable.wstring() + L"\"";
+    const std::wstring workingDirectory = executable.parent_path().wstring();
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    check(CreateProcessW(executable.c_str(), commandLine.data(), nullptr, nullptr, FALSE, 0,
+                         nullptr, workingDirectory.c_str(), &startup, &process) != FALSE,
+          "startup probe launches the real HydraSeat executable");
+    CloseHandle(process.hThread);
+
+    const ULONGLONG startedAt = GetTickCount64();
+    HWND firstWindow = nullptr;
+    while (GetTickCount64() - startedAt < kFirstWindowDeadlineMs) {
+        firstWindow = visibleProcessWindow(process.dwProcessId);
+        if (firstWindow != nullptr) break;
+        if (WaitForSingleObject(process.hProcess, 25u) == WAIT_OBJECT_0) break;
+    }
+
+    if (firstWindow == nullptr) {
+        DWORD exitCode = STILL_ACTIVE;
+        (void)GetExitCodeProcess(process.hProcess, &exitCode);
+        if (exitCode != STILL_ACTIVE) {
+            CloseHandle(process.hProcess);
+            const std::string message =
+                "HydraSeat exited before exposing any visible top-level startup window (exit code " +
+                std::to_string(exitCode) + ")";
+            check(false, message);
+        }
+
+        (void)TerminateProcess(process.hProcess, 0xEEu);
+        (void)WaitForSingleObject(process.hProcess, kGracefulExitDeadlineMs);
+        CloseHandle(process.hProcess);
+        check(false,
+              "HydraSeat remained alive without a visible top-level window for 5000 ms");
+    }
+
+    DWORD_PTR responsivenessResult = 0;
+    if (SendMessageTimeoutW(firstWindow, WM_NULL, 0, 0,
+                            SMTO_ABORTIFHUNG | SMTO_BLOCK, 500u,
+                            &responsivenessResult) == 0) {
+        (void)TerminateProcess(process.hProcess, 0xEDu);
+        (void)WaitForSingleObject(process.hProcess, kGracefulExitDeadlineMs);
+        CloseHandle(process.hProcess);
+        check(false, "HydraSeat exposed a visible startup window but its UI thread was unresponsive");
+    }
+
+    wchar_t className[128]{};
+    wchar_t title[256]{};
+    (void)GetClassNameW(firstWindow, className, static_cast<int>(std::size(className)));
+    (void)GetWindowTextW(firstWindow, title, static_cast<int>(std::size(title)));
+    const ULONGLONG firstWindowMs = GetTickCount64() - startedAt;
+    std::wcout << L"[Test] HydraSeat first visible window in " << firstWindowMs
+               << L" ms | class=" << className << L" | title=" << title << std::endl;
+
+    (void)PostMessageW(firstWindow, WM_CLOSE, 0, 0);
+    if (WaitForSingleObject(process.hProcess, kGracefulExitDeadlineMs) != WAIT_OBJECT_0) {
+        (void)TerminateProcess(process.hProcess, 0xEFu);
+        (void)WaitForSingleObject(process.hProcess, kGracefulExitDeadlineMs);
+        CloseHandle(process.hProcess);
+        check(false, "HydraSeat did not exit after its probed startup window was closed");
+    }
+    CloseHandle(process.hProcess);
+    std::cout << "[Test] HydraSeat startup-window process probe passed." << std::endl;
+    return EXIT_SUCCESS;
+}
+#endif
 
 void testHidUsageClassification() {
     std::cout << "[Test] HID usage classification tests passed." << std::endl;
@@ -76,6 +192,18 @@ void testHardwareDetector() {
 void testWorkspaceManager() {
     const std::string roundTripPath = "hydra_seat_roundtrip_test.json";
     const std::string malformedPath = "hydra_seat_malformed_test.json";
+    const std::string legacyRuntimePath = "hydra_seat_legacy_runtime_test.json";
+    const std::string deterministicAPath = "hydra_seat_deterministic_a_test.json";
+    const std::string deterministicBPath = "hydra_seat_deterministic_b_test.json";
+    const std::string oversizedPath = "hydra_seat_oversized_test.json";
+    const std::string exhaustedIdPath = "hydra_seat_exhausted_id_test.json";
+    const std::string atomicPath = "hydra_seat_atomic_test.json";
+
+    hydra::WorkspaceManager defaults;
+    const auto defaultSeat = defaults.createSeat();
+    check(defaults.getSeat(defaultSeat) != nullptr &&
+              defaults.getSeat(defaultSeat)->name == L"Seat 1",
+          "default Seat names do not conflate Seat hardware with Player identity");
 
     hydra::WorkspaceManager mgr;
     const auto seat1 = mgr.createSeat(L"민성");
@@ -102,22 +230,60 @@ void testWorkspaceManager() {
 
     check(mgr.assignAudioOutput(seat1, L"Audio:Headset"), "audio output assignment succeeds");
     check(mgr.assignAudioInput(seat1, L"Audio:Mic"), "audio input assignment succeeds");
+    check(mgr.assignTargetWindow(seat1, 0x12345678u),
+          "runtime target window can be associated before persistence");
 
     const auto* config = mgr.getSeat(seat1);
     check(config != nullptr, "created seat can be retrieved");
     check(config->displayIds.size() == 2, "seat retains multiple displays");
     check(config->primaryDisplayId && *config->primaryDisplayId == L"Display:Samsung",
           "explicit primary display is retained");
+    check(config->targetHwnd == 0x12345678u,
+          "runtime target window remains available before persistence");
 
     check(mgr.saveToFile(roundTripPath), "seat profile saves as JSON");
     hydra::WorkspaceManager loaded;
     check(loaded.loadFromFile(roundTripPath), "saved seat profile loads successfully");
-    check(loaded.getAllSeats() == mgr.getAllSeats(), "save/load preserves all seat configuration");
+    auto expectedPersistedSeats = mgr.getAllSeats();
+    for (auto& seat : expectedPersistedSeats) seat.targetHwnd = 0u;
+    check(loaded.getAllSeats() == expectedPersistedSeats,
+          "save/load preserves stable seat configuration while discarding runtime HWND identity");
+    check(loaded.getSeat(seat1) != nullptr && loaded.getSeat(seat1)->targetHwnd == 0u,
+          "saved runtime target HWND is never restored from the profile");
     check(loaded.managementSeatId() == seat2,
           "save/load preserves the explicit Management Seat");
     check(loaded.isDeviceShareable(hydra::SeatDeviceType::Keyboard, L"Keyboard:Shared"),
           "save/load preserves shareable-device policy");
     check(loaded.createSeat(L"After Load") == 3, "next seat ID advances after load");
+
+    {
+        std::ofstream legacy(legacyRuntimePath, std::ios::binary | std::ios::trunc);
+        legacy << R"json({
+  "schema_version": 2,
+  "management_seat_id": 1,
+  "shareable_resources": [],
+  "seats": [
+    {
+      "id": 1,
+      "name": "Legacy Seat",
+      "active": true,
+      "target_hwnd": 305419896,
+      "displays": [],
+      "primary_display": null,
+      "keyboards": [],
+      "mice": [],
+      "controllers": [],
+      "audio_output": null,
+      "audio_input": null
+    }
+  ]
+})json";
+    }
+    hydra::WorkspaceManager legacyLoaded;
+    check(legacyLoaded.loadFromFile(legacyRuntimePath),
+          "historical schema-v2 profile with a nonzero HWND still parses");
+    check(legacyLoaded.getSeat(1) != nullptr && legacyLoaded.getSeat(1)->targetHwnd == 0u,
+          "historical persisted HWND is discarded instead of becoming live ownership state");
 
     const auto beforeMalformed = loaded.getAllSeats();
     {
@@ -126,6 +292,89 @@ void testWorkspaceManager() {
     }
     check(!loaded.loadFromFile(malformedPath), "malformed JSON is rejected");
     check(loaded.getAllSeats() == beforeMalformed, "failed load is transactional");
+
+    hydra::WorkspaceManager deterministicA;
+    hydra::WorkspaceManager deterministicB;
+    check(deterministicA.createSeat() == 1 && deterministicB.createSeat() == 1,
+          "deterministic profile fixtures create the same Seat identity");
+    check(deterministicA.setDeviceShareable(
+              hydra::SeatDeviceType::Mouse, L"Mouse:Z", true) &&
+              deterministicA.setDeviceShareable(
+                  hydra::SeatDeviceType::Keyboard, L"Keyboard:A", true),
+          "first deterministic fixture accepts shareable resources");
+    check(deterministicB.setDeviceShareable(
+              hydra::SeatDeviceType::Keyboard, L"Keyboard:A", true) &&
+              deterministicB.setDeviceShareable(
+                  hydra::SeatDeviceType::Mouse, L"Mouse:Z", true),
+          "second deterministic fixture accepts the same resources in reverse order");
+    check(deterministicA.saveToFile(deterministicAPath) &&
+              deterministicB.saveToFile(deterministicBPath),
+          "logically equivalent Seat profiles save successfully");
+    check(readFileBytes(deterministicAPath) == readFileBytes(deterministicBPath),
+          "profile serialization is deterministic regardless of unordered insertion order");
+
+    const auto beforeBoundedFailure = loaded.getAllSeats();
+    const auto managementBeforeBoundedFailure = loaded.managementSeatId();
+    {
+        std::ofstream oversized(oversizedPath, std::ios::binary | std::ios::trunc);
+        oversized.seekp(static_cast<std::streamoff>(1024u * 1024u));
+        oversized.put('x');
+    }
+    check(!loaded.loadFromFile(oversizedPath),
+          "profile larger than the bounded input limit is rejected before parsing");
+    check(loaded.getAllSeats() == beforeBoundedFailure &&
+              loaded.managementSeatId() == managementBeforeBoundedFailure,
+          "oversized profile rejection leaves the live Seat state untouched");
+
+    {
+        std::ofstream exhausted(exhaustedIdPath, std::ios::binary | std::ios::trunc);
+        exhausted << R"json({
+  "schema_version": 2,
+  "management_seat_id": 4294967295,
+  "shareable_resources": [],
+  "seats": [
+    {
+      "id": 4294967295,
+      "name": "Exhausted Seat",
+      "active": true,
+      "target_hwnd": 0,
+      "displays": [],
+      "primary_display": null,
+      "keyboards": [],
+      "mice": [],
+      "controllers": [],
+      "audio_output": null,
+      "audio_input": null
+    }
+  ]
+})json";
+    }
+    check(!loaded.loadFromFile(exhaustedIdPath),
+          "profile that would exhaust and wrap Seat IDs is rejected");
+    check(loaded.getAllSeats() == beforeBoundedFailure &&
+              loaded.managementSeatId() == managementBeforeBoundedFailure,
+          "Seat ID exhaustion rejection remains transactional");
+
+    hydra::WorkspaceManager atomic;
+    const auto atomicSeat = atomic.createSeat(L"Original Seat");
+    check(atomicSeat == 1 && atomic.saveToFile(atomicPath),
+          "baseline profile for atomic-save failure test is committed");
+    const auto originalAtomicBytes = readFileBytes(atomicPath);
+    const std::filesystem::path blockedStaging = atomicPath + ".tmp";
+    std::filesystem::create_directories(blockedStaging);
+    {
+        std::ofstream blocker(blockedStaging / "keep", std::ios::binary | std::ios::trunc);
+        blocker << "prevent stale-stage cleanup";
+    }
+    check(atomic.renameSeat(atomicSeat, L"Changed Seat"),
+          "atomic-save fixture mutates in-memory state before the injected failure");
+    check(!atomic.saveToFile(atomicPath),
+          "save fails closed when its staging path cannot be safely replaced");
+    check(readFileBytes(atomicPath) == originalAtomicBytes,
+          "failed staged save preserves the previously committed profile bytes");
+    std::error_code cleanupError;
+    std::filesystem::remove_all(blockedStaging, cleanupError);
+    check(!cleanupError, "atomic-save test staging directory is cleaned up");
 
     check(mgr.unassignKeyboard(seat1, L"Keyboard:A"), "device can be unassigned");
     check(mgr.assignKeyboard(seat2, L"Keyboard:A"), "unassignment releases exclusive ownership");
@@ -136,6 +385,12 @@ void testWorkspaceManager() {
 
     std::remove(roundTripPath.c_str());
     std::remove(malformedPath.c_str());
+    std::remove(legacyRuntimePath.c_str());
+    std::remove(deterministicAPath.c_str());
+    std::remove(deterministicBPath.c_str());
+    std::remove(oversizedPath.c_str());
+    std::remove(exhaustedIdPath.c_str());
+    std::remove(atomicPath.c_str());
     std::cout << "[Test] Seat/WorkspaceManager tests passed." << std::endl;
 }
 
@@ -175,7 +430,15 @@ void testInputIsolationSkeleton() {
 
 } // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    if (argc == 3 && std::string_view(argv[1]) == "--startup-window-probe") {
+        return runStartupWindowProbe(argv[2]);
+    }
+#else
+    (void)argc;
+    (void)argv;
+#endif
     std::cout << "Running HydraSeat Engine Tests..." << std::endl;
     testHidUsageClassification();
     testHardwareDetector();

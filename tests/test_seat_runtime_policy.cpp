@@ -186,6 +186,85 @@ void testCrossSeatAndRemovalSafety() {
     check(clean.snapshot(7).trackedWindows == 0u, "removed window leaves no owned policy state");
 }
 
+void testStaleWindowIdentityAndInvalidSequenceDoNotPoisonState() {
+    FakeExecutor executor;
+    SeatRuntimePolicyCoordinator coordinator(executor);
+    std::string error;
+    check(coordinator.setWindowPolicy(8, primaryPolicy(), &error),
+          "stale-window Seat policy is accepted");
+
+    RuntimePolicyEvent display{1, RuntimePolicyEventKind::DisplayLayoutChanged, 8};
+    display.displayGroup = makeGroup(8);
+    check(coordinator.consume(display, &error), "stale-window Seat display resolves");
+
+    auto first = makeWindow(8, 0x800u);
+    first.identity.trackerGeneration = 10u;
+    RuntimePolicyEvent firstChanged{2, RuntimePolicyEventKind::WindowChanged, 8};
+    firstChanged.window = first;
+    check(coordinator.consume(firstChanged, &error), "first exact HWND instance is tracked");
+
+    auto replacement = first;
+    replacement.identity.trackerGeneration = 11u;
+    replacement.identity.threadId = 12u;
+    replacement.identity.process.processId += 1000u;
+    replacement.identity.process.creationTime100ns += 1000u;
+    RuntimePolicyEvent replacementChanged{3, RuntimePolicyEventKind::WindowChanged, 8};
+    replacementChanged.window = replacement;
+    check(coordinator.consume(replacementChanged, &error),
+          "newer exact HWND generation replaces stale placement identity");
+    const auto actionsAfterReplacement = executor.actions.size();
+
+    RuntimePolicyEvent staleRemove{4, RuntimePolicyEventKind::WindowRemoved, 8};
+    staleRemove.window = first;
+    check(coordinator.consume(staleRemove, &error),
+          "late remove for the old HWND generation is ignored safely");
+    check(coordinator.snapshot(8).trackedWindows == 1u,
+          "stale remove cannot erase the replacement HWND instance");
+
+    RuntimePolicyEvent staleChange{5, RuntimePolicyEventKind::WindowChanged, 8};
+    staleChange.window = first;
+    check(coordinator.consume(staleChange, &error),
+          "late change for the old HWND generation is ignored safely");
+    check(executor.actions.size() == actionsAfterReplacement,
+          "stale HWND change cannot replay placement for an old process identity");
+
+    RuntimePolicyEvent malformed{1000, RuntimePolicyEventKind::WindowChanged, 8};
+    malformed.window = makeWindow(9, 0x900u);
+    check(!coordinator.consume(malformed, &error),
+          "malformed high-sequence cross-Seat event is rejected");
+    check(coordinator.snapshot(8).lastEventSequence == 5u,
+          "rejected payload cannot poison the accepted event-sequence watermark");
+
+    RuntimePolicyEvent validAfterMalformed{6, RuntimePolicyEventKind::Reconcile, 8};
+    check(coordinator.consume(validAfterMalformed, &error) &&
+              coordinator.snapshot(8).lastEventSequence == 6u,
+          "valid event after rejected high sequence is not misclassified as stale");
+
+    FakeExecutor conflictExecutor;
+    SeatRuntimePolicyCoordinator conflict(conflictExecutor);
+    check(conflict.setWindowPolicy(10, primaryPolicy(), &error),
+          "same-generation conflict fixture accepts policy");
+    RuntimePolicyEvent conflictDisplay{1, RuntimePolicyEventKind::DisplayLayoutChanged, 10};
+    conflictDisplay.displayGroup = makeGroup(10);
+    check(conflict.consume(conflictDisplay, &error),
+          "same-generation conflict fixture resolves display");
+    auto owned = makeWindow(10, 0xA00u);
+    owned.identity.trackerGeneration = 20u;
+    RuntimePolicyEvent ownedChanged{2, RuntimePolicyEventKind::WindowChanged, 10};
+    ownedChanged.window = owned;
+    check(conflict.consume(ownedChanged, &error),
+          "same-generation conflict fixture tracks exact owner");
+    auto impossible = owned;
+    impossible.identity.process.processId += 2000u;
+    impossible.identity.process.creationTime100ns += 2000u;
+    RuntimePolicyEvent conflictingChanged{3, RuntimePolicyEventKind::WindowChanged, 10};
+    conflictingChanged.window = impossible;
+    check(!conflict.consume(conflictingChanged, &error) &&
+              conflict.snapshot(10).health == RuntimePolicyHealth::RecoveryRequired &&
+              conflict.snapshot(10).trackedWindows == 1u,
+          "different exact owner at the same tracker generation fails closed without replacing ownership");
+}
+
 } // namespace
 
 int main() {
@@ -193,6 +272,7 @@ int main() {
     testDisplayDegradationAndRecovery();
     testBoundedRetryAndFailureVisibility();
     testCrossSeatAndRemovalSafety();
+    testStaleWindowIdentityAndInvalidSequenceDoNotPoisonState();
 
     if (failures != 0) {
         std::cerr << failures << " runtime-policy test(s) failed\n";

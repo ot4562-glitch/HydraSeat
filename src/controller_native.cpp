@@ -170,6 +170,7 @@ SourceDescriptor xInputSource(DWORD slot) noexcept {
 
     XINPUT_CAPABILITIES capabilities{};
     if (XInputGetCapabilities(slot, 0, &capabilities) == ERROR_SUCCESS) {
+        descriptor.capabilitiesAvailable = true;
         descriptor.capabilities.type = gatec::XInputCapabilityType::Gamepad;
         descriptor.capabilities.subtype = capabilities.SubType;
         descriptor.capabilities.flags = capabilities.Flags;
@@ -191,11 +192,13 @@ SourceDescriptor xInputSource(DWORD slot) noexcept {
     XINPUT_BATTERY_INFORMATION battery{};
     if (XInputGetBatteryInformation(slot, BATTERY_DEVTYPE_GAMEPAD, &battery) ==
         ERROR_SUCCESS) {
-        descriptor.battery.available =
-            battery.BatteryType != BATTERY_TYPE_DISCONNECTED;
-        descriptor.battery.deviceType = gatec::XInputBatteryDeviceType::Gamepad;
-        descriptor.battery.batteryType = batteryType(battery.BatteryType);
-        descriptor.battery.batteryLevel = batteryLevel(battery.BatteryLevel);
+        descriptor.batteryInformationAvailable = true;
+        if (battery.BatteryType != BATTERY_TYPE_DISCONNECTED) {
+            descriptor.battery.available = true;
+            descriptor.battery.deviceType = gatec::XInputBatteryDeviceType::Gamepad;
+            descriptor.battery.batteryType = batteryType(battery.BatteryType);
+            descriptor.battery.batteryLevel = batteryLevel(battery.BatteryLevel);
+        }
     }
     return descriptor;
 }

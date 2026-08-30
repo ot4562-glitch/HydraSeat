@@ -45,16 +45,16 @@ bool validSha256(std::string_view value) noexcept {
     return true;
 }
 
-std::uint32_t expectedContentSchema(EntryKind kind) noexcept {
+bool validContentSchema(EntryKind kind, std::uint32_t version) noexcept {
     switch (kind) {
         case EntryKind::CompatibilityResult:
-            return compat::kCompatibilityResultSchemaVersion;
+            return version == compat::kCompatibilityResultSchemaVersion;
         case EntryKind::TwoPlayerSetup:
-            return portable::kSetupPackageVersion;
+            return portable::isSupportedSetupPackageVersion(version);
         case EntryKind::CatalogSnapshot:
-            return profile::kProfileSchemaVersion;
+            return version == profile::kProfileSchemaVersion;
     }
-    return 0u;
+    return false;
 }
 
 std::vector<std::string> capabilityScopeFor(const CommunityPackageManifest& manifest) {
@@ -117,7 +117,7 @@ PackageDiagnostic validateCommunityPackageManifest(const CommunityPackageManifes
     for (const auto& entry : manifest.entries) {
         if (!validKind(entry.kind) || !validId(entry.entryId) ||
             !validSha256(entry.expectedSha256) ||
-            entry.contentSchemaVersion != expectedContentSchema(entry.kind)) {
+            !validContentSchema(entry.kind, entry.contentSchemaVersion)) {
             return fail(PackageCode::InvalidEntry,
                         "community package entry has invalid kind/id/hash/schema version");
         }

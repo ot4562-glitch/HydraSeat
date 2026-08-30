@@ -235,6 +235,79 @@ VirtualXInputResult VirtualXInputContext::applySourceState(
     return VirtualXInputResult::Success;
 }
 
+VirtualXInputResult VirtualXInputContext::applySourceSnapshot(
+    std::uint64_t sequence, const ControllerSourceIdentity& source,
+    std::uint64_t sourceGeneration,
+    const NormalizedXInputGamepad& gamepad,
+    const NormalizedXInputCapabilities* capabilities,
+    const NormalizedXInputBattery* battery) {
+    std::scoped_lock lock(m_mutex);
+    if (!validControllerSourceIdentity(source)) {
+        return VirtualXInputResult::InvalidSource;
+    }
+    if ((capabilities != nullptr && !validXInputCapabilities(*capabilities)) ||
+        (battery != nullptr && !validXInputBattery(*battery))) {
+        return VirtualXInputResult::InvalidState;
+    }
+    if (!sequenceAccepted(sequence)) {
+        return VirtualXInputResult::StaleSequence;
+    }
+    auto* slot = findSource(source);
+    if (slot == nullptr) return VirtualXInputResult::NotMapped;
+
+    const auto generationResult =
+        validateGeneration(*slot, sourceGeneration, true);
+    if (generationResult != VirtualXInputResult::Success) {
+        return generationResult;
+    }
+
+    const bool routingChanged = slot->mapping.source != source;
+    if (routingChanged && slot->mapping.mappingGeneration ==
+                              std::numeric_limits<std::uint64_t>::max()) {
+        return VirtualXInputResult::GenerationOverflow;
+    }
+    const bool generationChanged =
+        sourceGeneration != slot->mapping.sourceGeneration;
+    const bool stateChanged = routingChanged || generationChanged ||
+                              !slot->connected || slot->gamepad != gamepad;
+
+    if (routingChanged || generationChanged) {
+        clearConnectionState(*slot);
+    }
+    if (routingChanged) {
+        ++slot->mapping.mappingGeneration;
+        slot->mapping.source = source;
+    }
+    slot->mapping.sourceGeneration = sourceGeneration;
+    slot->connected = true;
+    slot->requiresNewGeneration = false;
+    slot->gamepad = gamepad;
+
+    if (capabilities != nullptr) {
+        slot->capabilities = *capabilities;
+        slot->capabilitiesAvailable = true;
+    } else {
+        slot->capabilities = {};
+        slot->capabilitiesAvailable = false;
+        slot->vibration = {};
+    }
+    if (battery != nullptr) {
+        slot->battery = *battery;
+        slot->batteryAvailable = true;
+    } else {
+        slot->battery = {};
+        slot->batteryAvailable = false;
+    }
+    if (capabilities != nullptr && !capabilities->vibrationSupported) {
+        slot->vibration = {};
+    }
+    if (stateChanged) {
+        slot->packetNumber = nextXInputPacketNumber(slot->packetNumber);
+    }
+    m_lastAppliedSequence = sequence;
+    return VirtualXInputResult::Success;
+}
+
 VirtualXInputResult VirtualXInputContext::applySourceCapabilities(
     std::uint64_t sequence, const ControllerSourceIdentity& source,
     std::uint64_t sourceGeneration,

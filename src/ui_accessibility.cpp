@@ -1,4 +1,5 @@
 #include "hydra/ui_accessibility.hpp"
+#include "hydra/launcher_layout.hpp"
 
 #include <algorithm>
 #include <array>
@@ -54,8 +55,8 @@ LayoutAssessment assessLayout(const LayoutRequest& request) {
     std::uint32_t logicalHeight = 0;
     switch (request.surface) {
         case Surface::ManagementGames:
-            logicalWidth = 900u;
-            logicalHeight = 600u;
+            logicalWidth = 860u;
+            logicalHeight = 640u;
             result.focusOrder = {
                 FocusAction::GameList,
                 FocusAction::AddExecutable,
@@ -92,6 +93,28 @@ LayoutAssessment assessLayout(const LayoutRequest& request) {
     }
     if (!request.pointerInput && !request.keyboardInput && !request.controllerInput) {
         addIssue(result, AccessibilityIssue::NoInputModality);
+    }
+
+    if (request.surface == Surface::ManagementGames &&
+        request.widthPx <= static_cast<std::uint32_t>(INT32_MAX) &&
+        request.heightPx <= static_cast<std::uint32_t>(INT32_MAX)) {
+        const auto layout = computeLauncherLayout(
+            static_cast<int>(request.widthPx), static_cast<int>(request.heightPx), request.dpi);
+        if (!layout.valid ||
+            !rectFitsClient(layout.play, static_cast<int>(request.widthPx),
+                            static_cast<int>(request.heightPx)) ||
+            !rectFitsClient(layout.seat1Player, static_cast<int>(request.widthPx),
+                            static_cast<int>(request.heightPx)) ||
+            !rectFitsClient(layout.seat2Player, static_cast<int>(request.widthPx),
+                            static_cast<int>(request.heightPx))) {
+            addIssue(result, AccessibilityIssue::ViewportOverflow);
+        }
+        const auto metrics = launcherThemeMetrics(request.dpi);
+        if (layout.play.height < metrics.minimumTarget ||
+            layout.refresh.height < metrics.minimumTarget ||
+            layout.addExecutable.height < metrics.minimumTarget) {
+            addIssue(result, AccessibilityIssue::HitTargetTooSmall);
+        }
     }
 
     if (request.surface != Surface::SeatLauncherCompact) {
@@ -146,6 +169,8 @@ std::string_view accessibilityIssueName(AccessibilityIssue issue) noexcept {
         case AccessibilityIssue::NoInputModality: return "NoInputModality";
         case AccessibilityIssue::CriticalActionHidden: return "CriticalActionHidden";
         case AccessibilityIssue::LocalizedActionTooLong: return "LocalizedActionTooLong";
+        case AccessibilityIssue::ViewportOverflow: return "ViewportOverflow";
+        case AccessibilityIssue::HitTargetTooSmall: return "HitTargetTooSmall";
     }
     return "Unknown";
 }

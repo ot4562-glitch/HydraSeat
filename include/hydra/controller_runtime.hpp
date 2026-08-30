@@ -45,6 +45,8 @@ struct SourceDescriptor {
     bool connected{false};
     std::uint64_t sourceGeneration{0};
     bool stateAvailable{false};
+    bool capabilitiesAvailable{false};
+    bool batteryInformationAvailable{false};
     bool vibrationSupported{false};
     gatec::NormalizedXInputGamepad gamepad{};
     gatec::NormalizedXInputCapabilities capabilities{};
@@ -56,6 +58,7 @@ struct SourceDescriptor {
 struct SourceSnapshot {
     std::uint64_t generation{0};
     std::uint64_t pollSequence{0};
+    bool authoritative{false};
     std::vector<SourceDescriptor> sources;
 
     bool operator==(const SourceSnapshot&) const = default;
@@ -91,6 +94,15 @@ public:
     bool running() const noexcept;
 
 private:
+    struct SourceAuthoritySnapshot {
+        ApiSurface api{ApiSurface::XInput};
+        IdentityQuality identityQuality{IdentityQuality::RuntimeOnly};
+        std::optional<std::wstring> persistentId;
+
+        bool operator==(const SourceAuthoritySnapshot&) const = default;
+    };
+
+    void invalidateSnapshot() noexcept;
     void loop(std::chrono::milliseconds interval) noexcept;
 
     std::shared_ptr<SourceBackend> backend_;
@@ -99,6 +111,7 @@ private:
     SourceSnapshot snapshot_;
     std::unordered_map<std::string, bool> previousConnected_;
     std::unordered_map<std::string, std::uint8_t> previousRuntimeSlots_;
+    std::unordered_map<std::string, SourceAuthoritySnapshot> previousAuthorities_;
     std::unordered_map<std::string, std::uint64_t> sourceGenerations_;
     std::thread thread_;
     bool stopRequested_{false};

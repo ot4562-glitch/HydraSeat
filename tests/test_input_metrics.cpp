@@ -202,10 +202,10 @@ void testBleedAndMissingStages() {
           "partial trace remains reportable instead of fabricating stages");
     check(report.uniqueInputEvents == 1u && report.completeInputEvents == 0u &&
               report.missingStageEvents == 1u &&
-              report.receiverVerifiedEvents == 1u &&
-              report.missingReceiverEvidenceEvents == 0u &&
+              report.receiverVerifiedEvents == 0u &&
+              report.missingReceiverEvidenceEvents == 1u &&
               report.crossSeatEvents == 1u && report.crossProcessEvents == 1u,
-          "missing stages and verified expected-owner versus receiver bleed are explicit");
+          "missing target query evidence stays unverified while observed receiver bleed remains explicit");
     check(report.endToEnd.count == 0u,
           "missing target query never fabricates an end-to-end latency");
 }
@@ -233,6 +233,23 @@ void testRouteIntentDoesNotMasqueradeAsReceiverEvidence() {
               report.missingReceiverEvidenceEvents == 1u &&
               report.crossSeatEvents == 0u && report.crossProcessEvents == 0u,
           "host routing intent remains unverified until target apply/query receiver identity is observed");
+}
+
+void testCompleteStagesStillRequireBothReceiverIdentities() {
+    InputMetricsSnapshot snapshot;
+    appendCompleteEvent(snapshot, 13u, 100u, 100u);
+    auto& queried = snapshot.samples.back();
+    queried.receivingSeatId = 0u;
+    queried.receivingProcessId = 0u;
+
+    InputMetricsReport report;
+    check(buildInputMetricsReport(snapshot, report) ==
+              InputMetricsReportResult::Success &&
+              report.completeInputEvents == 1u &&
+              report.receiverVerifiedEvents == 0u &&
+              report.missingReceiverEvidenceEvents == 1u &&
+              report.crossSeatEvents == 0u && report.crossProcessEvents == 0u,
+          "complete stage timing cannot hide a missing target query receiver identity");
 }
 
 void testTimestampOrderingAndWrapFailClosed() {
@@ -319,6 +336,7 @@ int main() {
     testDeterministicPercentileReport();
     testBleedAndMissingStages();
     testRouteIntentDoesNotMasqueradeAsReceiverEvidence();
+    testCompleteStagesStillRequireBothReceiverIdentities();
     testTimestampOrderingAndWrapFailClosed();
     testDroppedRouteDoesNotFabricateEnqueueLatency();
     testQueueDropsAreSummedPerTargetQueueWithoutDoubleCounting();

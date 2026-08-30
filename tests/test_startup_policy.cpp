@@ -58,7 +58,12 @@ void testDuplicateHostAndInvalidAutoConfig() {
     auto environment = StartupEnvironment{};
     environment.existingHostProcesses = 1u;
     check(evaluateStartup(config(StartupMode::BackgroundIdle), environment).action == StartupAction::ReuseExistingHost,
-          "existing host prevents duplicate host process creation");
+          "exactly one existing host is reused instead of creating a duplicate");
+    environment.existingHostProcesses = 2u;
+    const auto ambiguousHosts = evaluateStartup(config(StartupMode::BackgroundIdle), environment);
+    check(ambiguousHosts.action == StartupAction::DoNotStart &&
+              ambiguousHosts.reason == StartupReason::DuplicateHost,
+          "multiple existing hosts fail closed instead of selecting an ambiguous control authority");
     auto invalid = config(StartupMode::AutoActivateValidatedSession);
     invalid.validatedSessionId.reset();
     check(evaluateStartup(invalid, StartupEnvironment{}).reason == StartupReason::InvalidConfig,

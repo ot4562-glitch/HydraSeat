@@ -166,10 +166,45 @@ public:
         std::string& error) = 0;
 };
 
+// Optional stateful hook for lifecycle-scoped compatibility work. Filesystem or
+// compatibility policy stays behind the hook implementation; the generic launch
+// transaction only exposes the four real activation boundaries. The hook's
+// rollback lifetime is nested inside Recovery and outside Process/Window/later
+// resources, so owned processes are stopped before their writable instance is
+// restored or removed.
+class ISeatActivationLifecycleHook {
+public:
+    virtual ~ISeatActivationLifecycleHook() = default;
+
+    // prepare() must not perform an externally visible mutation. It binds the
+    // hook to the exact immutable Seat launch plan and temporary game binding.
+    virtual bool prepare(const SeatActivationPlan& plan,
+                         const runtime::SeatGameBinding& binding,
+                         std::string& error) = 0;
+    virtual bool preSpawn(std::string& error) = 0;
+    virtual bool startup(std::string& error) = 0;
+    virtual bool postWindow(std::string& error) = 0;
+    virtual bool runtime(std::string& error) = 0;
+    virtual bool rollback(std::string& error) noexcept = 0;
+    virtual bool verifySafe(std::string& error) noexcept = 0;
+    virtual bool recoveryRequired() const noexcept = 0;
+};
+
+class ISeatActivationLifecycleHookFactory {
+public:
+    virtual ~ISeatActivationLifecycleHookFactory() = default;
+
+    virtual std::unique_ptr<ISeatActivationLifecycleHook> create(
+        const SeatActivationPlan& plan,
+        std::string& error) = 0;
+};
+
 class PlannedSeatGameInstance final : public runtime::ISeatGameInstance {
 public:
-    PlannedSeatGameInstance(SeatActivationPlan plan,
-                            std::shared_ptr<ISeatActivationResourceFactory> factory);
+    PlannedSeatGameInstance(
+        SeatActivationPlan plan,
+        std::shared_ptr<ISeatActivationResourceFactory> factory,
+        std::unique_ptr<ISeatActivationLifecycleHook> lifecycleHook = {});
     ~PlannedSeatGameInstance() override;
 
     bool start(const runtime::SeatGameBinding& binding,
@@ -181,11 +216,15 @@ public:
     const SeatActivationPlan& plan() const noexcept { return plan_; }
 
 private:
-    bool rollbackResources(std::string& error) noexcept;
-    bool verifySafeResources(std::string& error) noexcept;
+    bool rollbackActivation(std::string& error) noexcept;
+    bool verifySafeActivation(std::string& error) noexcept;
+    bool invokeLifecycleBoundary(const char* boundary,
+                                 bool (ISeatActivationLifecycleHook::*callback)(std::string&),
+                                 std::string& error);
 
     SeatActivationPlan plan_;
     std::shared_ptr<ISeatActivationResourceFactory> factory_;
+    std::unique_ptr<ISeatActivationLifecycleHook> lifecycleHook_;
     std::vector<std::unique_ptr<ISeatActivationResource>> resources_;
     bool started_{false};
     bool recoveryRequired_{false};
@@ -196,7 +235,8 @@ class PlannedSeatGameInstanceFactory final
 public:
     PlannedSeatGameInstanceFactory(
         TwoSeatLaunchPlan plan,
-        std::shared_ptr<ISeatActivationResourceFactory> resources);
+        std::shared_ptr<ISeatActivationResourceFactory> resources,
+        std::shared_ptr<ISeatActivationLifecycleHookFactory> lifecycleHooks = {});
 
     std::unique_ptr<runtime::ISeatGameInstance> create(
         SeatId seatId, std::string& error) override;
@@ -206,6 +246,7 @@ public:
 private:
     TwoSeatLaunchPlan plan_;
     std::shared_ptr<ISeatActivationResourceFactory> resources_;
+    std::shared_ptr<ISeatActivationLifecycleHookFactory> lifecycleHooks_;
 };
 
 std::string_view resourceKindName(ResourceKind kind) noexcept;

@@ -39,7 +39,7 @@ Release candidate/GA must prove at least:
 
 ## P10-SCOPE-01 — Freeze supported platform and v1 product scope
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -77,6 +77,15 @@ Freeze what HydraSeat v1 actually promises so release testing is finite and hone
 **Done when**
 
 One release-scope document/machine-readable matrix defines every v1 supported/experimental/deferred platform boundary and all other release packets test that same scope.
+
+**Implementation evidence — 2026-08-29**
+
+- `config/release-scope-v1.json` freezes the qualification matrix separately from support claims: exactly two active Seats, x64 Windows host, x64/x86 target-process compatibility, explicit Windows build families, physical-display/input/controller/audio boundaries, Steam/custom-EXE initial provider scope, same-title/protected-title policy, offline/update/privilege rules, installer guarantees, and canonical v1 non-goals.
+- `release-target` explicitly means "inside release qualification" rather than "already supported". Physical zero-bleed, real-game/provider/audio/controller/display, clean-machine installer, performance, security, and RC evidence therefore remain mandatory downstream and cannot be inferred from this packet.
+- `tools/validate_release_scope.py` is fail-closed on unknown/missing fields and freezes high-risk product invariants. Its self-test proves rejection of three-Seat promotion, x86 GA-host promotion, implicit Windows 10 GA promotion, virtual-display promotion, general privileged command execution, and removal of the no-bypass non-goal.
+- `tools/validate_implementation_roadmap.py` now validates the release-scope matrix on every normal roadmap validation run, so later roadmap edits cannot silently drift from the frozen product boundary.
+- `docs/RELEASE_SCOPE_V1.md` is the human-readable companion and records the official Microsoft platform-documentation provenance used only for the dated Windows build-family snapshot; no external source code was copied or adapted.
+- Local `python.exe tools/validate_release_scope.py --self-test`, direct scope validation, and the complete implementation-roadmap validator pass. This packet defines the automated qualification contract only; P10-COMPAT-01 must re-check vendor servicing status and actual release evidence before any GA support claim.
 
 ---
 
@@ -196,7 +205,7 @@ Critical/high findings are fixed or the affected capability is removed/deferred 
 
 ## P10-PRIV-01 — Privacy, data retention, and optional community-sharing policy
 
-**State:** BLOCKED
+**State:** IN_PROGRESS
 
 **Goal**
 
@@ -222,6 +231,19 @@ Make the local-first privacy model explicit and testable across logs, diagnostic
 **Done when**
 
 Privacy fixtures, UI settings/preview/delete/export flows, and documentation agree on what is stored locally, what may leave the machine, and how the user controls it.
+
+**Implementation progress — 2026-08-29**
+
+- `CompatibilityShareModel` owns explicit privacy settings with community sharing disabled by default plus bounded local-result retention (default 32, maximum 64). Zero/oversized retention values fail closed rather than causing implicit deletion or unbounded growth.
+- Privacy settings now have a versioned 1 KiB persistence contract. Strict restore accepts field reordering/whitespace but rejects duplicate/unknown/future/wrong-type/oversized input transactionally without changing the previous settings.
+- Exact redacted preview approval remains independent from the network setting: submission cannot begin while sharing is disabled, and disabling sharing before transport guarantees the transport is not called.
+- The model exposes canonical local-result export, delete-by-result-ID, and clear-all operations. Deleting an active result never silently promotes stale history into the active sharing state.
+- Local technical-result history now has a bounded versioned JSONL persistence contract for up to 64 canonical `CompatibilityResult` records. It deliberately excludes preview/receipt/transport state, rejects malformed/future/duplicate/empty/oversized stores transactionally, preserves Protected/Experimental truth, applies the current retention limit on restore, and restarts the latest technical result at `LocalResultAvailable` so network consent is never restored across restart. Focused testing exposed and fixed a `header\n` empty-result truncation bug that could otherwise have cleared prior evidence.
+- The Win32 Management Games surface now renders localized `en-US`/`ko-KR`/`zh-CN` privacy controls for optional community sharing and retained-result count. Settings load from a fixed per-user `%LOCALAPPDATA%\\HydraSeat\\privacy-settings.json` path; writes use a bounded staged JSON file and `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` so a failed save does not mutate the in-memory privacy state.
+- The same Management surface now opens the fixed per-user `CompatibilityLocalStore`, restores canonical retained technical results, renders the local-result list, exports the selected canonical JSON, and performs delete/clear through staged model mutation plus transactional store save. Save failure restores the prior in-memory history rather than presenting an unpersisted deletion as success; corrupt history is not silently overwritten.
+- `tests/test_compatibility_share_model.cpp` and `tests/test_compatibility_local_store.cpp` cover default-off sharing, disable-before-transport, settings persistence, retention rotation/bounds, canonical offline export, delete/clear, strict local-history persistence, duplicate/future/malformed stores, transactional file replacement, and prior offline/retry/protected-experiment semantics. Portable/focused tests, localization tests, and the actual Windows `HydraSeat.exe` target build path cover the current controls.
+- `docs/PRIVACY.md` records current local data/sharing/diagnostic/provider/update boundaries and explicitly distinguishes local deletion from remote-service withdrawal.
+- Remaining before `CODE_COMPLETE`: finish installed-product log/trace/support/provider/update/installer-retention review, prove the exact visible payload/approval path end to end, and define deployed community-service retention/withdrawal terms if such a service ships. No finished deployed-service privacy claim is made yet.
 
 ---
 

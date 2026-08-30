@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote
 
+from validate_release_scope import validate as validate_release_scope_file
+
 PACKET_RE = re.compile(r"\b(P\d+-[A-Z0-9]+-\d+[A-Z]?)\b")
 PACKET_HEADING_RE = re.compile(
     r"^##\s+(P\d+-[A-Z0-9]+-\d+[A-Z]?)\s+—\s+(.+?)\s*$",
@@ -323,6 +325,15 @@ def validate(root: Path) -> tuple[Validation, dict[str, Packet]]:
         for phase_file in sorted(PHASE_FILES):
             if f"({phase_file})" not in master_text:
                 result.error(f"{master_path}: does not link {phase_file}")
+
+    release_scope_path = root / "config" / "release-scope-v1.json"
+    if not release_scope_path.exists():
+        result.error(f"missing v1 release scope: {release_scope_path}")
+    else:
+        try:
+            validate_release_scope_file(release_scope_path)
+        except (OSError, ValueError) as exc:
+            result.error(f"invalid v1 release scope: {exc}")
 
     return result, packets_by_id
 

@@ -104,6 +104,8 @@ SetupDiagnostic generateCandidate(const GenerateSetupInput& input,
                                 std::to_string(index) + "-data-root";
             intent.instanceIndex = static_cast<std::uint32_t>(index);
             intent.kind = MutationIntentKind::EnsureDataRoot;
+            intent.phase = RecipeExecutionPhase::PreSpawn;
+            intent.scope = MutationScope::SeatWritableInstance;
             intent.targetPath = *recipe.dataRoot;
             candidate.intendedMutations.push_back(std::move(intent));
         }
@@ -172,6 +174,24 @@ std::string_view mutationIntentKindName(MutationIntentKind kind) noexcept {
     switch (kind) {
     case MutationIntentKind::EnsureWorkingDirectory: return "EnsureWorkingDirectory";
     case MutationIntentKind::EnsureDataRoot: return "EnsureDataRoot";
+    }
+    return "Unknown";
+}
+
+std::string_view recipeExecutionPhaseName(RecipeExecutionPhase phase) noexcept {
+    switch (phase) {
+    case RecipeExecutionPhase::PreSpawn: return "PreSpawn";
+    case RecipeExecutionPhase::Startup: return "Startup";
+    case RecipeExecutionPhase::PostWindow: return "PostWindow";
+    case RecipeExecutionPhase::Runtime: return "Runtime";
+    }
+    return "Unknown";
+}
+
+std::string_view mutationScopeName(MutationScope scope) noexcept {
+    switch (scope) {
+    case MutationScope::SeatWritableInstance: return "SeatWritableInstance";
+    case MutationScope::SharedInstallation: return "SharedInstallation";
     }
     return "Unknown";
 }

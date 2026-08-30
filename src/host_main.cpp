@@ -1,3 +1,4 @@
+#include "hydra/game_runtime_requirement_resolver.hpp"
 #include "hydra/host_transport.hpp"
 #include "hydra/runtime_host.hpp"
 #include "hydra/workspace_manager.hpp"
@@ -6,6 +7,7 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -125,7 +127,10 @@ int main(int argc, char** argv) {
     }
 
     if (serve) {
-        hydra::hostipc::HostControlServer server(host);
+        auto trustedRequirements =
+            hydra::requirement::makeDefaultProductionTrustedRequirementSource();
+        hydra::hostipc::HostControlServer server(
+            host, std::move(trustedRequirements));
         std::string error;
         if (!server.serve(&error)) {
             std::cerr << "Host IPC server failed: " << error << '\n';

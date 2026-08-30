@@ -38,6 +38,8 @@ enum class AccessibilityIssue : std::uint8_t {
     NoInputModality,
     CriticalActionHidden,
     LocalizedActionTooLong,
+    ViewportOverflow,
+    HitTargetTooSmall,
 };
 
 struct LayoutRequest {

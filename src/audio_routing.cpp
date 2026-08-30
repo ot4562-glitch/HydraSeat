@@ -146,15 +146,31 @@ bool processTreeHasExactIdentity(const process::ProcessTreeSnapshot& tree,
 bool verifyBeforeEndpoints(const OwnedSessionEvidence& before,
                            const OwnedSessionEvidence& after,
                            std::string& error) {
+    const auto sameSessionIdentity = [](const SessionRecord& left,
+                                        const SessionRecord& right) {
+        return canonical(left.sessionInstanceId) ==
+                   canonical(right.sessionInstanceId) &&
+               left.processId == right.processId &&
+               left.processCreationTime100ns == right.processCreationTime100ns;
+    };
+
+    for (const auto& current : after.ownedSessions) {
+        const auto captured = std::find_if(
+            before.ownedSessions.begin(), before.ownedSessions.end(),
+            [&](const SessionRecord& original) {
+                return sameSessionIdentity(current, original);
+            });
+        if (captured == before.ownedSessions.end()) {
+            error = "an exact owned audio session appeared after route state capture; its rollback endpoint is unknown";
+            return false;
+        }
+    }
+
     for (const auto& original : before.ownedSessions) {
         const auto found = std::find_if(
             after.ownedSessions.begin(), after.ownedSessions.end(),
             [&](const SessionRecord& current) {
-                return canonical(current.sessionInstanceId) ==
-                           canonical(original.sessionInstanceId) &&
-                       current.processId == original.processId &&
-                       current.processCreationTime100ns ==
-                           original.processCreationTime100ns;
+                return sameSessionIdentity(current, original);
             });
         if (found == after.ownedSessions.end()) {
             error = "an originally owned audio session disappeared before rollback could be verified";
@@ -380,7 +396,11 @@ RouteStatus RouteTransaction::attempt(const EndpointSnapshot& endpoints,
     status_.rollbackVerified = false;
 
     if (!validateRequest(endpoints, localError)) {
-        status_.phase = RoutePhase::Failed;
+        // Once a backend mutation has occurred, losing the target endpoint (or
+        // another request precondition) is no longer an ordinary preflight
+        // failure. Retain exact recovery ownership until rollback is verified.
+        status_.phase = status_.mutated ? RoutePhase::RecoveryRequired
+                                        : RoutePhase::Failed;
         if (error != nullptr) *error = std::move(localError);
         return status_;
     }
@@ -394,7 +414,15 @@ RouteStatus RouteTransaction::attempt(const EndpointSnapshot& endpoints,
             return status_;
         }
         status_.evidence = evidence;
-        if (evidence.ownedSessions.empty() || evidence.allOwnedSessionsOnTarget) {
+        if (evidence.ownedSessions.empty()) {
+            status_.phase = RoutePhase::RecoveryRequired;
+            status_.error = RouteError::VerificationFailed;
+            if (error != nullptr) {
+                *error = "owned audio sessions disappeared after routing mutation; active route state cannot be verified";
+            }
+            return status_;
+        }
+        if (evidence.allOwnedSessionsOnTarget) {
             status_.phase = RoutePhase::Applied;
             status_.error = RouteError::None;
             status_.capability = RouteCapability::Mutable;

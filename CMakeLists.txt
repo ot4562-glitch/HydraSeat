@@ -8,6 +8,9 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(CompilerWarnings)
+
 if(MSVC)
     string(TOLOWER "${MSVC_CXX_ARCHITECTURE_ID}" hydra_compiler_arch)
 else()
@@ -53,27 +56,11 @@ endif()
 
 # Windows system libraries for Win32 Raw Input, SetupAPI, DXGI, and Comctl32 GUI
 if(WIN32)
-    add_compile_definitions(_UNICODE UNICODE WIN32_LEAN_AND_MEAN)
+    add_compile_definitions(_UNICODE UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
     set(WIN32_LIBS User32.lib Cfgmgr32.lib Dxgi.lib Setupapi.lib Hid.lib Xinput.lib Comctl32.lib Comdlg32.lib)
 endif()
 
-# Find Qt6 components if available
-find_package(Qt6 COMPONENTS Core Widgets QUIET)
 find_package(Threads REQUIRED)
-
-if(Qt6_FOUND)
-    set(CMAKE_AUTOMOC ON)
-    set(CMAKE_AUTOUIC ON)
-    set(CMAKE_AUTORCC ON)
-    set(UI_SOURCES
-        ui/workspace_widget.cpp
-        ui/main_window.cpp
-    )
-    set(UI_HEADERS
-        ui/workspace_widget.hpp
-        ui/main_window.hpp
-    )
-endif()
 
 # Source files
 set(HYDRA_HARDWARE_SOURCES
@@ -82,14 +69,9 @@ set(HYDRA_HARDWARE_SOURCES
 )
 
 set(HYDRA_SOURCES
-    src/input_router.cpp
     src/input_isolation.cpp
     src/input_observation.cpp
-    src/display_manager.cpp
-    src/workspace_manager.cpp
-    src/game_launcher.cpp
     src/gui_win32.cpp
-    ${UI_SOURCES}
 )
 if(WIN32)
     list(APPEND HYDRA_SOURCES src/launcher_win32.cpp)
@@ -109,12 +91,10 @@ set(HYDRA_HEADERS
     include/hydra/input_router.hpp
     include/hydra/input_isolation.hpp
     include/hydra/input_observation.hpp
-    include/hydra/display_manager.hpp
     include/hydra/workspace_manager.hpp
-    include/hydra/game_launcher.hpp
+    include/hydra/seat_assignment_projection.hpp
     include/hydra/gui_win32.hpp
     ${HYDRA_HARDWARE_HEADERS}
-    ${UI_HEADERS}
 )
 
 add_library(hydra_hardware STATIC
@@ -124,6 +104,30 @@ add_library(hydra_hardware STATIC
 if(WIN32)
     target_link_libraries(hydra_hardware PRIVATE User32.lib Cfgmgr32.lib Setupapi.lib Xinput.lib)
 endif()
+
+# Canonical Raw Input router ownership. Production activation bridges and the
+# existing GUI/lab/Gate-C consumers all reuse this implementation instead of
+# compiling another copy of input_router.cpp into each executable.
+add_library(hydra_input_router STATIC
+    src/input_router.cpp
+    include/hydra/input_router.hpp
+)
+target_link_libraries(hydra_input_router PRIVATE hydra_hardware)
+if(WIN32)
+    target_link_libraries(hydra_input_router PRIVATE User32.lib)
+endif()
+hydra_enable_strict_warnings(hydra_input_router)
+
+# Portable Seat configuration ownership and projection. The Win32 setup surface
+# supplies only visible assignment intent; persistence and hidden profile state
+# stay outside the GUI layer.
+add_library(hydra_workspace STATIC
+    src/workspace_manager.cpp
+    src/seat_assignment_projection.cpp
+    include/hydra/workspace_manager.hpp
+    include/hydra/seat_assignment_projection.hpp
+)
+hydra_enable_strict_warnings(hydra_workspace)
 
 # P4-RUN-01 authoritative, headless production runtime state machine. The
 # library is UI-independent and all mutable backends are injected explicitly.
@@ -136,12 +140,7 @@ add_library(hydra_runtime STATIC
     include/hydra/seat_game_lifecycle.hpp
 )
 target_link_libraries(hydra_runtime PUBLIC Threads::Threads)
-if(MSVC)
-    target_compile_options(hydra_runtime PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_runtime PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_runtime)
 
 # P4-IPC-01 portable fixed-width host protocol codec. Transport/authentication
 # lives in a separate Windows-aware component so codec tests remain portable.
@@ -150,12 +149,7 @@ add_library(hydra_host_protocol STATIC
     include/hydra/host_protocol.hpp
 )
 target_link_libraries(hydra_host_protocol PUBLIC hydra_runtime)
-if(MSVC)
-    target_compile_options(hydra_host_protocol PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_host_protocol PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_host_protocol)
 
 add_library(hydra_host_transport STATIC
     src/host_transport.cpp
@@ -165,12 +159,7 @@ target_link_libraries(hydra_host_transport PUBLIC hydra_host_protocol)
 if(WIN32)
     target_link_libraries(hydra_host_transport PRIVATE Advapi32.lib Bcrypt.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_host_transport PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_host_transport PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_host_transport)
 
 # P4-PROC-01 Seat-owned process trees. Windows Job Objects provide exact
 # descendant containment and completion notifications; weaker capabilities are
@@ -185,12 +174,7 @@ target_link_libraries(hydra_process PUBLIC hydra_runtime Threads::Threads)
 if(WIN32)
     target_link_libraries(hydra_process PRIVATE User32.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_process PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_process PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_process)
 
 # P5-LAUNCH-01 immutable exactly-two-Seat launch plan and Seat-local activation
 # transaction. Production resource backends are injected behind a typed factory;
@@ -200,12 +184,7 @@ add_library(hydra_two_seat_launch STATIC
     include/hydra/two_seat_launch.hpp
 )
 target_link_libraries(hydra_two_seat_launch PUBLIC hydra_process hydra_runtime)
-if(MSVC)
-    target_compile_options(hydra_two_seat_launch PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_two_seat_launch PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_two_seat_launch)
 
 # P4-WIN-01 process-identity-backed top-level window inventory. WinEvent
 # callbacks only enqueue bounded hints; ownership/classification work stays on a
@@ -219,12 +198,7 @@ target_link_libraries(hydra_window_tracking PUBLIC hydra_process Threads::Thread
 if(WIN32)
     target_link_libraries(hydra_window_tracking PRIVATE User32.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_window_tracking PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_window_tracking PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_window_tracking)
 
 # P4-DIS-01 read-only DisplayConfig + DXGI topology inventory. Stable target
 # identity never relies on enumeration order and disconnected targets are kept.
@@ -236,12 +210,7 @@ add_library(hydra_display_topology STATIC
 if(WIN32)
     target_link_libraries(hydra_display_topology PRIVATE User32.lib Dxgi.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_display_topology PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_display_topology PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_display_topology)
 
 # P4-DIS-02 stable Seat display groups and reversible coordinate transforms.
 add_library(hydra_seat_display_layout STATIC
@@ -249,12 +218,7 @@ add_library(hydra_seat_display_layout STATIC
     include/hydra/seat_display_layout.hpp
 )
 target_link_libraries(hydra_seat_display_layout PUBLIC hydra_display_topology hydra_runtime)
-if(MSVC)
-    target_compile_options(hydra_seat_display_layout PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_seat_display_layout PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_seat_display_layout)
 
 # P4-WIN-02 typed placement planning and ownership-validated Win32 mutation.
 # The policy surface is portable; the engine applies only to currently owned
@@ -269,12 +233,7 @@ target_link_libraries(hydra_window_placement PUBLIC hydra_window_tracking hydra_
 if(WIN32)
     target_link_libraries(hydra_window_placement PRIVATE User32.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_window_placement PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_window_placement PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_window_placement)
 
 # P4-POL-01 serialized desired-vs-observed Seat runtime policy coordinator.
 add_library(hydra_seat_runtime_policy STATIC
@@ -282,12 +241,7 @@ add_library(hydra_seat_runtime_policy STATIC
     include/hydra/seat_runtime_policy.hpp
 )
 target_link_libraries(hydra_seat_runtime_policy PUBLIC hydra_window_placement)
-if(MSVC)
-    target_compile_options(hydra_seat_runtime_policy PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_seat_runtime_policy PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_seat_runtime_policy)
 
 # P4-DIS-03 deterministic display hot-plug degradation and recovery planning.
 add_library(hydra_display_recovery STATIC
@@ -295,16 +249,9 @@ add_library(hydra_display_recovery STATIC
     include/hydra/display_recovery.hpp
 )
 target_link_libraries(hydra_display_recovery PUBLIC hydra_seat_display_layout hydra_seat_runtime_policy)
-if(MSVC)
-    target_compile_options(hydra_display_recovery PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_display_recovery PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_display_recovery)
 
-if(MSVC)
-    target_compile_options(hydra_hardware PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(hydra_hardware)
 
 # P4-CTRL-01 Management Seat placement and global-control permission model.
 add_library(hydra_management_seat STATIC
@@ -315,12 +262,7 @@ target_link_libraries(hydra_management_seat PUBLIC hydra_seat_display_layout)
 if(WIN32)
     target_link_libraries(hydra_management_seat PRIVATE User32.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_management_seat PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_management_seat PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_management_seat)
 
 # P4-CTRL-01 authoritative host/config-backed control-surface presentation model.
 add_library(hydra_control_surface STATIC
@@ -328,12 +270,7 @@ add_library(hydra_control_surface STATIC
     include/hydra/control_surface_model.hpp
 )
 target_link_libraries(hydra_control_surface PUBLIC hydra_management_seat hydra_runtime)
-if(MSVC)
-    target_compile_options(hydra_control_surface PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_control_surface PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_control_surface)
 
 # P4-CTRL-02 verified Stop/Reconfigure/Save+Start control-surface state model.
 add_library(hydra_session_control STATIC
@@ -341,12 +278,7 @@ add_library(hydra_session_control STATIC
     include/hydra/session_control_transition.hpp
 )
 target_link_libraries(hydra_session_control PUBLIC hydra_management_seat hydra_host_transport)
-if(MSVC)
-    target_compile_options(hydra_session_control PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_session_control PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_session_control)
 
 # P3-CTRL-01 bounded, process-local normalized XInput state. This component
 # contains no physical polling and performs no ordinary XInput API hooking.
@@ -357,12 +289,7 @@ add_library(hydra_virtual_xinput STATIC
 set_target_properties(hydra_virtual_xinput PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
-if(MSVC)
-    target_compile_options(hydra_virtual_xinput PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_virtual_xinput PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_virtual_xinput)
 
 # P3-CTRL-02 bounded, process-local DirectInput enumeration/visibility policy.
 # The core is portable and owns no DirectInput COM object or physical device.
@@ -373,12 +300,7 @@ add_library(hydra_directinput_policy STATIC
 set_target_properties(hydra_directinput_policy PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
-if(MSVC)
-    target_compile_options(hydra_directinput_policy PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_directinput_policy PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_directinput_policy)
 
 # P5-CTRL-01 production controller source inventory/polling and Seat mapping.
 # XInput slot numbers remain runtime-only hints; stable persistent identity is
@@ -395,12 +317,7 @@ if(WIN32)
     target_link_libraries(hydra_controller_runtime PRIVATE
         Dinput8.lib Dxguid.lib Xinput.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_controller_runtime PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_controller_runtime PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_controller_runtime)
 
 # P3-D-01 read-only HidHide availability probe. The portable core interprets
 # bounded observations; the Windows path uses only service/interface/version
@@ -413,12 +330,7 @@ if(WIN32)
     target_link_libraries(hydra_hidhide_probe PRIVATE
         Advapi32.lib Cfgmgr32.lib Version.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_hidhide_probe PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_hidhide_probe PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_hidhide_probe)
 
 # P3-D-02 guarded session-cloak transaction. The native Windows boundary uses
 # HidHide's process-lifetime session blacklist; HydraSeat never appends session
@@ -430,12 +342,7 @@ add_library(hydra_hidhide_session STATIC
     include/hydra/hidhide_session_backend.hpp
 )
 target_link_libraries(hydra_hidhide_session PUBLIC hydra_hidhide_probe)
-if(MSVC)
-    target_compile_options(hydra_hidhide_session PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_hidhide_session PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_hidhide_session)
 
 # P3-MET-01 fixed-capacity, process-local metrics recorder and deterministic
 # off-path report generator. The recorder performs no I/O on the input path.
@@ -446,12 +353,7 @@ add_library(hydra_input_metrics STATIC
 set_target_properties(hydra_input_metrics PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
-if(MSVC)
-    target_compile_options(hydra_input_metrics PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_input_metrics PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_input_metrics)
 
 # P5-MET-01 bounded privacy-safe integrated two-Seat evidence report. This
 # aggregates existing input metrics plus Seat capability/timing outcomes and
@@ -461,12 +363,7 @@ add_library(hydra_session_metrics STATIC
     include/hydra/session_metrics.hpp
 )
 target_link_libraries(hydra_session_metrics PUBLIC hydra_input_metrics)
-if(MSVC)
-    target_compile_options(hydra_session_metrics PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_session_metrics PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_session_metrics)
 
 # P6-SCHEMA-01 bounded versioned persistence/runtime schema family. This keeps
 # Seat hardware, Player identity, Game metadata, two-player recipes, and
@@ -475,12 +372,7 @@ add_library(hydra_profile_schema STATIC
     src/profile_schema.cpp
     include/hydra/profile_schema.hpp
 )
-if(MSVC)
-    target_compile_options(hydra_profile_schema PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_profile_schema PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_profile_schema)
 
 # P6-MIG-01 read-only legacy parser plus staged, byte-preserving backup and
 # directory-level transactional commit/rollback for the separated v1 stores.
@@ -489,12 +381,7 @@ add_library(hydra_profile_migration STATIC
     include/hydra/profile_migration.hpp
 )
 target_link_libraries(hydra_profile_migration PUBLIC hydra_profile_schema)
-if(MSVC)
-    target_compile_options(hydra_profile_migration PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_profile_migration PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_profile_migration)
 
 # P6-CATALOG-01 provider-neutral, read-only candidate reconciliation into bounded
 # stable GameRecords plus catalog-only icon/architecture/staleness metadata.
@@ -503,12 +390,7 @@ add_library(hydra_game_catalog STATIC
     include/hydra/game_catalog.hpp
 )
 target_link_libraries(hydra_game_catalog PUBLIC hydra_profile_schema)
-if(MSVC)
-    target_compile_options(hydra_game_catalog PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_game_catalog PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_game_catalog)
 
 # P6-PROV-01 bounded lawful launcher-provider boundary. Provider-specific I/O
 # stays behind this contract; the core validates discovery, account references,
@@ -518,12 +400,7 @@ add_library(hydra_provider_adapter STATIC
     include/hydra/provider_adapter.hpp
 )
 target_link_libraries(hydra_provider_adapter PUBLIC hydra_game_catalog)
-if(MSVC)
-    target_compile_options(hydra_provider_adapter PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_provider_adapter PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_provider_adapter)
 
 # P6-PROV-02 independently implemented read-only Steam metadata adapter.
 # It parses bounded local KeyValues metadata, creates normal steam://run plans,
@@ -544,18 +421,8 @@ add_library(hydra_custom_executable_provider STATIC
     include/hydra/custom_executable_provider.hpp
 )
 target_link_libraries(hydra_custom_executable_provider PUBLIC hydra_provider_adapter)
-if(MSVC)
-    target_compile_options(hydra_custom_executable_provider PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_custom_executable_provider PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
-if(MSVC)
-    target_compile_options(hydra_steam_provider PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_steam_provider PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_custom_executable_provider)
+hydra_enable_strict_warnings(hydra_steam_provider)
 
 # P6-PLAN-01 pure immutable provider-aware plan compiler. It resolves bounded
 # Seat/Player/Game/setup/provider snapshots and performs exact hardware/capability
@@ -566,12 +433,7 @@ add_library(hydra_provider_launch_plan STATIC
 )
 target_link_libraries(hydra_provider_launch_plan PUBLIC
     hydra_provider_adapter hydra_profile_schema hydra_two_seat_launch)
-if(MSVC)
-    target_compile_options(hydra_provider_launch_plan PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_provider_launch_plan PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_provider_launch_plan)
 
 # P6-PREFLIGHT-01 deterministic normal/expert requirement, risk, and typed
 # mutation preview. The preview surface cannot carry arbitrary mutation payloads.
@@ -580,12 +442,7 @@ add_library(hydra_plan_preflight STATIC
     include/hydra/plan_preflight.hpp
 )
 target_link_libraries(hydra_plan_preflight PUBLIC hydra_provider_launch_plan)
-if(MSVC)
-    target_compile_options(hydra_plan_preflight PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_plan_preflight PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_plan_preflight)
 
 # P6-PROFILE-01 typed two-player setup generation/editor model. Automatic
 # generation is pure/read-only, while manual Save is transactional and keeps the
@@ -595,27 +452,19 @@ add_library(hydra_two_player_setup_editor STATIC
     include/hydra/two_player_setup_editor.hpp
 )
 target_link_libraries(hydra_two_player_setup_editor PUBLIC hydra_profile_schema)
-if(MSVC)
-    target_compile_options(hydra_two_player_setup_editor PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_two_player_setup_editor PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_two_player_setup_editor)
 
 # P7-I18N-01 stable UI-string catalog. Protocol/schema/diagnostic identifiers stay
 # canonical English while presentation strings have en-US/ko-KR/zh-CN entries.
 add_library(hydra_ui_localization STATIC
     src/ui_localization.cpp
     src/ui_accessibility.cpp
+    src/launcher_layout.cpp
     include/hydra/ui_localization.hpp
     include/hydra/ui_accessibility.hpp
+    include/hydra/launcher_layout.hpp
 )
-if(MSVC)
-    target_compile_options(hydra_ui_localization PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_ui_localization PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_ui_localization)
 
 # P6-UI-01 Qt-independent product-flow model. UI state is exercised with fake
 # providers and immutable snapshots; the model performs no launch or mutation.
@@ -625,12 +474,7 @@ add_library(hydra_launcher_ui_model STATIC
 )
 target_link_libraries(hydra_launcher_ui_model PUBLIC
     hydra_plan_preflight hydra_two_player_setup_editor hydra_game_catalog)
-if(MSVC)
-    target_compile_options(hydra_launcher_ui_model PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_launcher_ui_model PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_launcher_ui_model)
 
 # P7-SHELL-01 pure per-Seat presentation/policy state and its capability-
 # restricted host adapter. Neither surface exposes whole-machine commands.
@@ -650,12 +494,7 @@ add_library(hydra_seat_launcher STATIC
 )
 target_link_libraries(hydra_seat_launcher PUBLIC
     hydra_host_transport hydra_launcher_ui_model)
-if(MSVC)
-    target_compile_options(hydra_seat_launcher PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_seat_launcher PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_seat_launcher)
 
 # P6-IMPORT-01 versioned portable two-player setup package with provenance,
 # path-variable redaction, strict decode, explicit local remap, and revalidation.
@@ -664,12 +503,7 @@ add_library(hydra_setup_package STATIC
     include/hydra/setup_package.hpp
 )
 target_link_libraries(hydra_setup_package PUBLIC hydra_two_player_setup_editor)
-if(MSVC)
-    target_compile_options(hydra_setup_package PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_setup_package PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_setup_package)
 
 # P6-CLI-01 deterministic expert renderer plus redacted stable plan snapshots.
 add_library(hydra_profile_cli STATIC
@@ -677,21 +511,11 @@ add_library(hydra_profile_cli STATIC
     include/hydra/profile_cli.hpp
 )
 target_link_libraries(hydra_profile_cli PUBLIC hydra_profile_schema hydra_provider_launch_plan)
-if(MSVC)
-    target_compile_options(hydra_profile_cli PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_profile_cli PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_profile_cli)
 
 add_executable(hydraseat_profilectl src/profilectl_main.cpp)
 target_link_libraries(hydraseat_profilectl PRIVATE hydra_profile_cli)
-if(MSVC)
-    target_compile_options(hydraseat_profilectl PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydraseat_profilectl PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydraseat_profilectl)
 
 # P9-SDK-01 public data-only compatibility result boundary. It canonicalizes a
 # bounded privacy-safe JSON schema and can derive it from Phase 5 session metrics.
@@ -702,12 +526,30 @@ add_library(hydra_compatibility_result STATIC
     include/hydra/compatibility_aggregation.hpp
 )
 target_link_libraries(hydra_compatibility_result PUBLIC hydra_session_metrics)
-if(MSVC)
-    target_compile_options(hydra_compatibility_result PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_compatibility_result PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+hydra_enable_strict_warnings(hydra_compatibility_result)
+
+# P6-PLAN-01/P7-LAUNCH-01 trusted local runtime-requirement authority. It resolves
+# exact current catalog/provider/local-evidence revisions into the immutable
+# GameRuntimeRequirement snapshot consumed by the launcher and never treats
+# community popularity/imported results as runtime authority.
+add_library(hydra_game_runtime_requirement_resolver STATIC
+    src/game_runtime_requirement_resolver.cpp
+    include/hydra/game_runtime_requirement_resolver.hpp
+)
+target_link_libraries(hydra_game_runtime_requirement_resolver PUBLIC
+    hydra_compatibility_result
+    hydra_game_catalog
+    hydra_provider_launch_plan
+)
+target_link_libraries(hydra_game_runtime_requirement_resolver PRIVATE
+    hydra_steam_provider
+    hydra_custom_executable_provider
+    hydra_community_submission
+)
+if(WIN32)
+    target_link_libraries(hydra_game_runtime_requirement_resolver PRIVATE Bcrypt.lib)
 endif()
+hydra_enable_strict_warnings(hydra_game_runtime_requirement_resolver)
 
 # P8-TRUST-01 pure optional artifact/data trust evaluator. It separates data-only
 # hashes/provenance/license policy from executable architecture/signature/recovery policy.
@@ -715,12 +557,7 @@ add_library(hydra_artifact_trust STATIC
     src/artifact_trust.cpp
     include/hydra/artifact_trust.hpp
 )
-if(MSVC)
-    target_compile_options(hydra_artifact_trust PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_artifact_trust PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_artifact_trust)
 
 # P9-PKG-01 data-only community package manifest/lifecycle. Package entries are
 # compatibility results, TwoPlayerSetup data, or catalog snapshots only.
@@ -735,12 +572,7 @@ add_library(hydra_community_package STATIC
 target_link_libraries(hydra_community_package PUBLIC
     hydra_artifact_trust hydra_compatibility_result hydra_setup_package
     hydra_provider_launch_plan)
-if(MSVC)
-    target_compile_options(hydra_community_package PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_community_package PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_community_package)
 
 # P8-DATA-01 pure optional compatibility/setup catalog cache lifecycle. Network/file
 # code supplies observations; offline/disabled/tampered refreshes preserve local state.
@@ -749,24 +581,14 @@ add_library(hydra_catalog_cache STATIC
     include/hydra/catalog_cache.hpp
 )
 target_link_libraries(hydra_catalog_cache PUBLIC hydra_artifact_trust)
-if(MSVC)
-    target_compile_options(hydra_catalog_cache PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_catalog_cache PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_catalog_cache)
 
 # P9-TEST-01 contributor-facing conformance CLI. It validates/canonicalizes the
 # public compatibility result or portable setup package without networking.
 add_executable(hydraseat_community_validate src/community_validate_main.cpp)
 target_link_libraries(hydraseat_community_validate PRIVATE
     hydra_compatibility_result hydra_setup_package)
-if(MSVC)
-    target_compile_options(hydraseat_community_validate PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydraseat_community_validate PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydraseat_community_validate)
 
 # P8-WATCH-01 versioned lease/rollback protocol and idempotent rollback registry.
 # The portable core contains no arbitrary command execution or persistent-state I/O.
@@ -776,12 +598,7 @@ add_library(hydra_watchdog_core STATIC
     include/hydra/watchdog_protocol.hpp
     include/hydra/rollback_registry.hpp
 )
-if(MSVC)
-    target_compile_options(hydra_watchdog_core PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_watchdog_core PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_watchdog_core)
 
 # P3-D-02 durable recovery record + narrow RestoreSnapshotState executor. The
 # watchdog/reset path restores only a numeric resource ID from the bounded
@@ -792,12 +609,7 @@ add_library(hydra_hidhide_session_recovery STATIC
 )
 target_link_libraries(hydra_hidhide_session_recovery PUBLIC
     hydra_hidhide_session hydra_watchdog_core)
-if(MSVC)
-    target_compile_options(hydra_hidhide_session_recovery PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_hidhide_session_recovery PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_hidhide_session_recovery)
 
 # P5-AUD-01 read-only Core Audio endpoint inventory and two-Seat assignment
 # validation. This target deliberately exposes no default-device, volume, or
@@ -811,12 +623,7 @@ target_link_libraries(hydra_audio_inventory PUBLIC Threads::Threads)
 if(WIN32)
     target_link_libraries(hydra_audio_inventory PUBLIC Ole32.lib Uuid.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_audio_inventory PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_audio_inventory PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_audio_inventory)
 
 # P5-AUD-02 exact-owned audio session observation and typed route transaction.
 # The native Windows implementation is observation-only until a documented,
@@ -827,12 +634,94 @@ add_library(hydra_audio_routing STATIC
     include/hydra/audio_routing.hpp
 )
 target_link_libraries(hydra_audio_routing PUBLIC hydra_audio_inventory)
-if(MSVC)
-    target_compile_options(hydra_audio_routing PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_audio_routing PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+hydra_enable_strict_warnings(hydra_audio_routing)
+
+# P10-RC-01 acceptance evidence orchestration. The campaign core never turns
+# synthetic/controlled evidence into physical validation and binds every child
+# record to one exact RC artifact/scenario identity.
+add_library(hydra_acceptance_campaign STATIC
+    src/acceptance_campaign.cpp
+    include/hydra/acceptance_campaign.hpp
+)
+hydra_enable_strict_warnings(hydra_acceptance_campaign)
+
+add_executable(hydraseat_acceptance_campaignctl
+    src/acceptance_campaignctl_main.cpp)
+target_link_libraries(hydraseat_acceptance_campaignctl PRIVATE
+    hydra_acceptance_campaign)
+hydra_enable_strict_warnings(hydraseat_acceptance_campaignctl)
+
+# Read-only installed-RC acceptance probe. It verifies exact owned artifacts,
+# observes exact process identities/resources, and inventories current physical
+# endpoints without becoming a mutation or release-validation authority.
+add_library(hydra_acceptance_probe STATIC
+    src/acceptance_probe.cpp
+    include/hydra/acceptance_probe.hpp
+)
+target_link_libraries(hydra_acceptance_probe PUBLIC
+    hydra_audio_inventory
+    hydra_controller_runtime
+    hydra_display_topology
+)
+if(WIN32)
+    target_link_libraries(hydra_acceptance_probe PRIVATE
+        Bcrypt.lib Wintrust.lib Psapi.lib)
 endif()
+hydra_enable_strict_warnings(hydra_acceptance_probe)
+
+add_executable(hydraseat_acceptance_probe
+    src/acceptance_probe_main.cpp)
+target_link_libraries(hydraseat_acceptance_probe PRIVATE hydra_acceptance_probe)
+hydra_enable_strict_warnings(hydraseat_acceptance_probe)
+
+# Typed compatibility lifecycle adapter. It owns the implementation once and is
+# consumed by the production launch runtime; recipe compilation remains in the
+# existing provider-plan/materialization authority.
+add_library(hydra_production_compatibility_activation STATIC
+    src/production_compatibility_activation.cpp
+    include/hydra/production_compatibility_activation.hpp
+)
+target_link_libraries(hydra_production_compatibility_activation PUBLIC
+    hydra_provider_launch_plan
+    hydra_two_seat_launch
+)
+hydra_enable_strict_warnings(hydra_production_compatibility_activation)
+
+# P5-LAUNCH-01/P7-LAUNCH-01 host-owned immutable provider-plan registry and
+# production Seat activation factory. It reuses the existing process/window/
+# display/controller/audio transaction boundaries and fails closed when a required
+# production input bridge or other mutation capability is unavailable.
+add_library(hydra_production_launch_runtime STATIC
+    src/production_launch_runtime.cpp
+    include/hydra/production_launch_runtime.hpp
+)
+target_link_libraries(hydra_production_launch_runtime PUBLIC
+    hydra_two_seat_launch
+    hydra_provider_launch_plan
+    hydra_window_placement
+    hydra_controller_runtime
+    hydra_audio_routing
+)
+target_link_libraries(hydra_production_launch_runtime PRIVATE
+    hydra_production_compatibility_activation)
+hydra_enable_strict_warnings(hydra_production_launch_runtime)
+
+# P7-LAUNCH-01 narrow UI/Seat-client -> authoritative Host provider-plan
+# transaction. The installer resnapshots the Host and never launches a target
+# itself; rollback removes only the exact idle Seat plan epoch it installed.
+add_library(hydra_production_launch_installer STATIC
+    src/production_launch_installer.cpp
+    include/hydra/production_launch_installer.hpp
+)
+target_link_libraries(hydra_production_launch_installer PUBLIC
+    hydra_seat_launcher
+    hydra_production_launch_runtime
+)
+hydra_enable_strict_warnings(hydra_production_launch_installer)
+
+# Host protocol v4 serializes and validates production provider-plan registry
+# requests/results, including host-side fingerprint revalidation.
+target_link_libraries(hydra_host_protocol PUBLIC hydra_production_launch_runtime)
 
 # P8-JOURNAL-01 bounded durable crash journal and safe-mode marker. The journal
 # is evidence only: action IDs are validated against the trusted watchdog plan
@@ -845,12 +734,7 @@ target_link_libraries(hydra_crash_journal PUBLIC hydra_watchdog_core)
 if(WIN32)
     target_link_libraries(hydra_crash_journal PRIVATE Shell32.lib Ole32.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_crash_journal PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_crash_journal PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_crash_journal)
 
 # P8-DIAG-01 privacy-redacted support bundle. It accepts only already-bounded
 # public/aggregate evidence and binds export approval to the exact preview bytes.
@@ -860,24 +744,14 @@ add_library(hydra_support_bundle STATIC
 )
 target_link_libraries(hydra_support_bundle PUBLIC
     hydra_compatibility_result hydra_crash_journal hydra_session_metrics)
-if(MSVC)
-    target_compile_options(hydra_support_bundle PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_support_bundle PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_support_bundle)
 
 # P8-BOOT-01 user-approved startup policy and transactional fixed-target registration.
 add_library(hydra_startup_policy STATIC
     src/startup_policy.cpp
     include/hydra/startup_policy.hpp
 )
-if(MSVC)
-    target_compile_options(hydra_startup_policy PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_startup_policy PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_startup_policy)
 
 # P8-PRIV-01 narrow typed elevated broker core. The unelevated caller can name
 # only compiled resources/operations; broker-owned trust plus capture/verify/rollback
@@ -887,28 +761,40 @@ add_library(hydra_privilege_broker STATIC
     include/hydra/privilege_broker.hpp
 )
 target_link_libraries(hydra_privilege_broker PUBLIC hydra_artifact_trust)
-if(MSVC)
-    target_compile_options(hydra_privilege_broker PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_privilege_broker PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_privilege_broker)
+
+# P8-INST-01 fixed owned-component installer transaction core. Native packaging
+# resolves Program Files/ProgramData/uninstall locations; the core handles only
+# trusted component enums, startup choice, verification and rollback.
+add_library(hydra_installer_transaction STATIC
+    src/installer_transaction.cpp
+    include/hydra/installer_transaction.hpp
+)
+target_link_libraries(hydra_installer_transaction PUBLIC
+    hydra_artifact_trust hydra_startup_policy)
+hydra_enable_strict_warnings(hydra_installer_transaction)
+
+# P8-UPD-01 user-approved executable update/rollback contract layered over the
+# fixed trusted installer transaction. Compatibility/setup data refresh remains P8-DATA.
+add_library(hydra_update_transaction STATIC
+    src/update_transaction.cpp
+    include/hydra/update_transaction.hpp
+)
+target_link_libraries(hydra_update_transaction PUBLIC hydra_installer_transaction)
+hydra_enable_strict_warnings(hydra_update_transaction)
 
 # P9-RPC-01 explicit opt-in community submission boundary. Local evidence is
 # canonicalized first; transport invocation requires approval of the exact JSON preview.
 add_library(hydra_community_submission STATIC
     src/community_submission.cpp
     src/compatibility_share_model.cpp
+    src/compatibility_local_store.cpp
     include/hydra/community_submission.hpp
     include/hydra/compatibility_share_model.hpp
+    include/hydra/compatibility_local_store.hpp
 )
 target_link_libraries(hydra_community_submission PUBLIC hydra_compatibility_result)
-if(MSVC)
-    target_compile_options(hydra_community_submission PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_community_submission PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_community_submission)
 
 # P8-RESET-01 bounded runtime reset registration and verified emergency-reset
 # execution. The crash journal remains evidence-only; reset authority is the
@@ -919,12 +805,7 @@ add_library(hydra_reset_actions STATIC
 )
 target_link_libraries(hydra_reset_actions PUBLIC
     hydra_crash_journal hydra_watchdog_core)
-if(MSVC)
-    target_compile_options(hydra_reset_actions PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_reset_actions PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_reset_actions)
 
 # P3-REC-01 Gate C recovery contract. The trusted rollback manifest contains
 # only exact controlled-process termination identities; process-local shim and
@@ -935,12 +816,7 @@ add_library(hydra_gate_c_recovery STATIC
 )
 target_link_libraries(hydra_gate_c_recovery PUBLIC
     hydra_crash_journal hydra_watchdog_core)
-if(MSVC)
-    target_compile_options(hydra_gate_c_recovery PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_gate_c_recovery PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_gate_c_recovery)
 
 # Phase 3 controlled-process protocol and virtual input-state core.
 add_library(hydra_gate_c_core STATIC
@@ -963,21 +839,40 @@ if(WIN32)
     target_link_libraries(hydra_gate_c_core PUBLIC Bcrypt.lib)
 endif()
 
+# Production Recovery/Input bridge composition. The implementation reuses the
+# existing exact-process recovery, Gate-C, HidHide, and Raw Input authorities;
+# hydra_host reaches it through this single canonical production owner.
+add_library(hydra_production_activation_bridges STATIC
+    src/production_activation_bridges.cpp
+    include/hydra/production_activation_bridges.hpp
+)
+target_link_libraries(hydra_production_activation_bridges PUBLIC
+    hydra_production_launch_runtime
+)
+target_link_libraries(hydra_production_activation_bridges PRIVATE
+    hydra_input_router
+    hydra_hidhide_session
+    hydra_hidhide_session_recovery
+    hydra_watchdog_core
+    hydra_crash_journal
+    hydra_reset_actions
+    hydra_gate_c_recovery
+    hydra_gate_c_core
+    Threads::Threads
+)
+if(WIN32)
+    target_link_libraries(hydra_production_activation_bridges PRIVATE User32.lib)
+endif()
+hydra_enable_strict_warnings(hydra_production_activation_bridges)
+
 # P3-RAW-01 fixed-width, versioned, bounded trace/parser contract. This
 # library is portable and contains no Raw Input virtualization.
 add_library(hydra_raw_input_probe_trace STATIC
     src/raw_input_probe_trace.cpp
     include/hydra/raw_input_probe_trace.hpp
 )
-if(MSVC)
-    target_compile_options(hydra_raw_input_probe_trace PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_raw_input_probe_trace PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
-if(MSVC)
-    target_compile_options(hydra_gate_c_core PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(hydra_raw_input_probe_trace)
+hydra_enable_strict_warnings(hydra_gate_c_core)
 
 # P3-RAW-02 bounded process-local registration, synthetic-handle, packet, and
 # queue model. Win32 API interposition remains in the startup-loaded shim.
@@ -988,12 +883,7 @@ add_library(hydra_virtual_raw_input STATIC
 set_target_properties(hydra_virtual_raw_input PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
-if(MSVC)
-    target_compile_options(hydra_virtual_raw_input PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_virtual_raw_input PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_virtual_raw_input)
 
 # Process-local Gate C adapter boundary. The controlled target links this
 # shared library normally; no process injection is performed.
@@ -1007,9 +897,7 @@ target_compile_definitions(hydra_gate_c_adapter PRIVATE
 target_link_libraries(hydra_gate_c_adapter PRIVATE
     hydra_gate_c_core hydra_virtual_raw_input)
 hydra_set_gate_c_output(hydra_gate_c_adapter)
-if(MSVC)
-    target_compile_options(hydra_gate_c_adapter PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(hydra_gate_c_adapter)
 
 # P3-API-02/03 and P3-RAW-02 bounded polling, cursor/focus, and Raw Input IAT
 # transaction support. The startup-loaded DLL is selected per architecture
@@ -1025,9 +913,7 @@ add_library(hydra_gate_c_shim_support STATIC
 set_target_properties(hydra_gate_c_shim_support PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
-if(MSVC)
-    target_compile_options(hydra_gate_c_shim_support PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(hydra_gate_c_shim_support)
 
 add_library(hydra_gate_c_shim SHARED
     src/gate_c_shim.cpp
@@ -1043,9 +929,7 @@ set_target_properties(hydra_gate_c_shim PROPERTIES
     OUTPUT_NAME hydra_gate_c_shim
 )
 hydra_set_gate_c_output(hydra_gate_c_shim)
-if(MSVC)
-    target_compile_options(hydra_gate_c_shim PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(hydra_gate_c_shim)
 
 # P3-E-01 narrow bridge for a newly created, suspended, non-protected external
 # acceptance target. It is not an attach/general injection surface and reuses
@@ -1062,9 +946,7 @@ if(WIN32)
         OUTPUT_NAME hydra_gate_c_external_bridge
     )
     hydra_set_gate_c_output(hydra_gate_c_external_bridge)
-    if(MSVC)
-        target_compile_options(hydra_gate_c_external_bridge PRIVATE /W4 /permissive-)
-    endif()
+    hydra_enable_strict_warnings(hydra_gate_c_external_bridge)
 
     add_executable(hydra_gate_c_external_harness
         src/gate_c_external_harness.cpp
@@ -1074,9 +956,7 @@ if(WIN32)
         hydra_gate_c_core User32.lib
     )
     hydra_set_gate_c_output(hydra_gate_c_external_harness)
-    if(MSVC)
-        target_compile_options(hydra_gate_c_external_harness PRIVATE /W4 /permissive-)
-    endif()
+    hydra_enable_strict_warnings(hydra_gate_c_external_harness)
     add_test(NAME GateCExternalHarnessHelp
         COMMAND hydra_gate_c_external_harness --help)
 endif()
@@ -1084,9 +964,10 @@ endif()
 # Core Executable target (Windows GUI subsystem)
 add_executable(HydraSeat WIN32 src/main.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(HydraSeat PRIVATE
-    hydra_hardware hydra_host_transport hydra_control_surface hydra_session_control
+    hydra_hardware hydra_input_router hydra_workspace hydra_host_transport hydra_control_surface hydra_session_control
     hydra_launcher_ui_model hydra_steam_provider hydra_custom_executable_provider
-    hydra_ui_localization)
+    hydra_ui_localization hydra_community_submission
+    hydra_game_runtime_requirement_resolver hydra_production_launch_installer)
 
 if(WIN32)
     target_link_libraries(HydraSeat PRIVATE ${WIN32_LIBS})
@@ -1096,25 +977,20 @@ endif()
 # GUI dependency; P4-IPC-01 will add the long-lived local control transport.
 add_executable(hydra_host
     src/host_main.cpp
-    src/workspace_manager.cpp
-    include/hydra/workspace_manager.hpp
 )
-target_link_libraries(hydra_host PRIVATE hydra_runtime hydra_host_transport)
-if(MSVC)
-    target_compile_options(hydra_host PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_host PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+target_link_libraries(hydra_host PRIVATE
+    hydra_workspace hydra_runtime hydra_host_transport
+    hydra_game_runtime_requirement_resolver hydra_production_activation_bridges)
+hydra_enable_strict_warnings(hydra_host)
+if(WIN32)
+    # The normal GUI bootstraps the per-user runtime authority on first run.
+    # Keep the sibling executable present whenever HydraSeat itself is built.
+    add_dependencies(HydraSeat hydra_host)
 endif()
 
 add_executable(hydra_hostctl src/hostctl_main.cpp)
 target_link_libraries(hydra_hostctl PRIVATE hydra_host_transport)
-if(MSVC)
-    target_compile_options(hydra_hostctl PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_hostctl PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_hostctl)
 
 # P7-SHELL-01 minimal per-Seat Windows launcher. It can issue only Seat-local
 # game lifecycle commands through hydra_seat_launcher and remains hidden until
@@ -1125,29 +1001,14 @@ target_link_libraries(hydra_seat_ui PRIVATE
 if(WIN32)
     target_link_libraries(hydra_seat_ui PRIVATE User32.lib Shell32.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_seat_ui PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_seat_ui PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
-
-if(Qt6_FOUND)
-    target_link_libraries(HydraSeat PRIVATE Qt6::Core Qt6::Widgets)
-    target_compile_definitions(HydraSeat PRIVATE HYDRA_HAS_QT=1)
-endif()
+hydra_enable_strict_warnings(hydra_seat_ui)
 
 # P8-RESET-01 independently launchable emergency reset tool. It depends only on
 # recovery/watchdog core libraries and never on Qt or the main control UI.
 add_executable(hydra_reset src/reset_main.cpp)
 target_link_libraries(hydra_reset PRIVATE
     hydra_reset_actions hydra_hidhide_session_recovery)
-if(MSVC)
-    target_compile_options(hydra_reset PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_reset PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_reset)
 if(WIN32)
     # No GUI/User32 dependency is required.
 endif()
@@ -1161,21 +1022,16 @@ target_link_libraries(hydra_detect PRIVATE hydra_hardware)
 if(WIN32)
     target_link_libraries(hydra_detect PRIVATE ${WIN32_LIBS})
 endif()
-if(MSVC)
-    target_compile_options(hydra_detect PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(hydra_detect)
 
 # Phase 3 capability planner diagnostics (analysis only; activates no backend).
 add_executable(hydra_plan
     src/isolation_plan_cli.cpp
     src/input_isolation.cpp
-    src/workspace_manager.cpp
     include/hydra/input_isolation.hpp
-    include/hydra/workspace_manager.hpp
 )
-if(MSVC)
-    target_compile_options(hydra_plan PRIVATE /W4 /permissive-)
-endif()
+target_link_libraries(hydra_plan PRIVATE hydra_workspace)
+hydra_enable_strict_warnings(hydra_plan)
 
 # P3-D-01 bounded read-only diagnostics CLI. It never requests elevation and
 # returns an observational report even when HidHide is absent or unverified.
@@ -1186,12 +1042,7 @@ set_target_properties(hydra_hidhide_probe_cli PROPERTIES
     OUTPUT_NAME hydra_hidhide_probe
 )
 target_link_libraries(hydra_hidhide_probe_cli PRIVATE hydra_hidhide_probe)
-if(MSVC)
-    target_compile_options(hydra_hidhide_probe_cli PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_hidhide_probe_cli PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_hidhide_probe_cli)
 
 # P3-D-02 guarded lab exposes only read-only status and synthetic self-test
 # while physical acceptance is deferred. No native cloak command is available.
@@ -1200,23 +1051,13 @@ add_executable(hydra_hidhide_session_lab
 )
 target_link_libraries(hydra_hidhide_session_lab PRIVATE
     hydra_hidhide_probe hydra_hidhide_session)
-if(MSVC)
-    target_compile_options(hydra_hidhide_session_lab PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_hidhide_session_lab PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_hidhide_session_lab)
 
 # P5-AUD-01 read-only endpoint diagnostic used for eventual physical evidence.
 # It cannot change default devices, volume, or per-process routing.
 add_executable(hydra_audio_diag src/audio_diag_main.cpp)
 target_link_libraries(hydra_audio_diag PRIVATE hydra_audio_routing)
-if(MSVC)
-    target_compile_options(hydra_audio_diag PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_audio_diag PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_audio_diag)
 
 # P8-WATCH-01 independent rollback-only watchdog executable. The host-side
 # launcher is intentionally deferred to the owning runtime/recovery packet.
@@ -1225,14 +1066,9 @@ add_executable(hydra_watchdog
 )
 target_link_libraries(hydra_watchdog PRIVATE
     hydra_watchdog_core hydra_hidhide_session_recovery)
-if(MSVC)
-    target_compile_options(hydra_watchdog PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_watchdog PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-    if(MINGW)
-        target_link_options(hydra_watchdog PRIVATE -municode)
-    endif()
+hydra_enable_strict_warnings(hydra_watchdog)
+if(MINGW)
+    target_link_options(hydra_watchdog PRIVATE -municode)
 endif()
 
 # P3-MET-01 report/self-test CLI. Live producers use hydra_input_metrics
@@ -1244,33 +1080,24 @@ set_target_properties(hydra_input_metrics_cli PROPERTIES
     OUTPUT_NAME hydra_input_metrics
 )
 target_link_libraries(hydra_input_metrics_cli PRIVATE hydra_input_metrics)
-if(MSVC)
-    target_compile_options(hydra_input_metrics_cli PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_input_metrics_cli PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_input_metrics_cli)
 
 # Phase 3 Gate A/B observation and explicit-routing harness.
 # The interactive windows are Windows-only, while --self-test is portable.
 add_executable(hydra_input_lab
     src/input_lab.cpp
-    src/input_router.cpp
     src/input_observation.cpp
     src/input_isolation.cpp
-    src/workspace_manager.cpp
     include/hydra/input_router.hpp
     include/hydra/input_observation.hpp
     include/hydra/input_isolation.hpp
-    include/hydra/workspace_manager.hpp
 )
-target_link_libraries(hydra_input_lab PRIVATE hydra_hardware)
+target_link_libraries(hydra_input_lab PRIVATE
+    hydra_hardware hydra_input_router hydra_workspace)
 if(WIN32)
     target_link_libraries(hydra_input_lab PRIVATE ${WIN32_LIBS})
 endif()
-if(MSVC)
-    target_compile_options(hydra_input_lab PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(hydra_input_lab)
 
 # Phase 3 Gate C controlled target process. This is HydraSeat-owned test code,
 # not a game injector or general-purpose hook runtime.
@@ -1282,9 +1109,7 @@ hydra_set_gate_c_output(hydra_gate_c_target)
 if(WIN32)
     target_link_libraries(hydra_gate_c_target PRIVATE User32.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_gate_c_target PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(hydra_gate_c_target)
 
 # Controlled Win32 API probe. Baseline mode is read-only; explicit polling,
 # cursor/focus, and Raw Input self-test modes startup-load the owned shim.
@@ -1311,15 +1136,8 @@ hydra_set_gate_c_output(hydra_gate_c_raw_input_probe)
 if(WIN32)
     target_link_libraries(hydra_gate_c_raw_input_probe PRIVATE User32.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_gate_c_raw_input_probe PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_gate_c_raw_input_probe PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
-if(MSVC)
-    target_compile_options(hydra_gate_c_api_probe PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(hydra_gate_c_raw_input_probe)
+hydra_enable_strict_warnings(hydra_gate_c_api_probe)
 
 # P3-CTRL-02 HydraSeat-owned DirectInput probe. Controlled fixture modes are
 # portable. Windows additionally performs read-only DirectInput 8 enumeration;
@@ -1332,40 +1150,27 @@ target_link_libraries(hydra_directinput_probe PRIVATE hydra_directinput_policy)
 if(WIN32)
     target_link_libraries(hydra_directinput_probe PRIVATE Dinput8.lib Dxguid.lib)
 endif()
-if(MSVC)
-    target_compile_options(hydra_directinput_probe PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_directinput_probe PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_directinput_probe)
 
 # P5-CTRL-01 read-only native controller inventory diagnostic. It never sends
 # vibration and explicitly labels XInput slots as runtime-only identities.
 add_executable(hydra_controller_diag src/controller_diag_main.cpp)
 target_link_libraries(hydra_controller_diag PRIVATE hydra_controller_runtime)
-if(MSVC)
-    target_compile_options(hydra_controller_diag PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_controller_diag PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_controller_diag)
 
 # Phase 3 Gate C host: launches only the controlled target executable and
 # routes Seat-owned Raw Input observations over the versioned named-pipe protocol.
 add_executable(hydra_gate_c_host
     src/gate_c_host.cpp
-    src/input_router.cpp
     src/input_observation.cpp
     src/input_isolation.cpp
-    src/workspace_manager.cpp
     include/hydra/input_router.hpp
     include/hydra/input_observation.hpp
     include/hydra/input_isolation.hpp
-    include/hydra/workspace_manager.hpp
 )
 target_link_libraries(hydra_gate_c_host PRIVATE
     hydra_gate_c_core hydra_gate_c_recovery hydra_reset_actions
-    hydra_hardware hydra_input_metrics)
+    hydra_hardware hydra_input_router hydra_workspace hydra_input_metrics)
 hydra_set_gate_c_output(hydra_gate_c_host)
 if(WIN32)
     target_link_libraries(hydra_gate_c_host PRIVATE ${WIN32_LIBS})
@@ -1376,9 +1181,7 @@ if(WIN32)
             $<TARGET_FILE_DIR:hydra_gate_c_host>/hydra_watchdog.exe
         VERBATIM)
 endif()
-if(MSVC)
-    target_compile_options(hydra_gate_c_host PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(hydra_gate_c_host)
 
 # Test Suite Executable Target
 enable_testing()
@@ -1388,14 +1191,11 @@ if(WIN32)
 endif()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(hydra_tests PRIVATE
-    hydra_hardware hydra_host_transport hydra_control_surface hydra_session_control
+    hydra_hardware hydra_input_router hydra_workspace hydra_host_transport hydra_control_surface hydra_session_control
     hydra_launcher_ui_model hydra_steam_provider hydra_custom_executable_provider
-    hydra_ui_localization)
+    hydra_ui_localization hydra_community_submission hydra_game_runtime_requirement_resolver)
 if(WIN32)
     target_link_libraries(hydra_tests PRIVATE ${WIN32_LIBS})
-endif()
-if(Qt6_FOUND)
-    target_link_libraries(hydra_tests PRIVATE Qt6::Core Qt6::Widgets)
 endif()
 add_test(NAME EngineUnitTests COMMAND hydra_tests)
 
@@ -1403,12 +1203,7 @@ add_test(NAME EngineUnitTests COMMAND hydra_tests)
 # headless process self-test. No hardware or persistent system state is touched.
 add_executable(runtime_host_tests tests/test_runtime_host.cpp)
 target_link_libraries(runtime_host_tests PRIVATE hydra_runtime Threads::Threads)
-if(MSVC)
-    target_compile_options(runtime_host_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(runtime_host_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(runtime_host_tests)
 add_test(NAME RuntimeHostTests COMMAND runtime_host_tests)
 
 # P4-SEAT-01 authoritative per-Seat game lifecycle model. These tests use
@@ -1416,24 +1211,14 @@ add_test(NAME RuntimeHostTests COMMAND runtime_host_tests)
 # failure isolation, duplicate/concurrent command rejection, and the v1 limit.
 add_executable(seat_game_lifecycle_tests tests/test_seat_game_lifecycle.cpp)
 target_link_libraries(seat_game_lifecycle_tests PRIVATE hydra_runtime Threads::Threads)
-if(MSVC)
-    target_compile_options(seat_game_lifecycle_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(seat_game_lifecycle_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(seat_game_lifecycle_tests)
 add_test(NAME SeatGameLifecycleTests COMMAND seat_game_lifecycle_tests)
 
 # P5-LAUNCH-01 immutable plan compiler, all-resource activation failure-index
 # rollback, natural-exit Seat-local cleanup, and RuntimeHost two-Seat isolation.
 add_executable(two_seat_launch_tests tests/test_two_seat_launch.cpp)
 target_link_libraries(two_seat_launch_tests PRIVATE hydra_two_seat_launch hydra_runtime)
-if(MSVC)
-    target_compile_options(two_seat_launch_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(two_seat_launch_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(two_seat_launch_tests)
 add_test(NAME TwoSeatLaunchTests COMMAND two_seat_launch_tests)
 set_tests_properties(TwoSeatLaunchTests PROPERTIES LABELS "P5-LAUNCH-01;P4-SEAT-01")
 
@@ -1441,103 +1226,58 @@ add_test(NAME RuntimeHostProcessSelfTest COMMAND hydra_host --self-test)
 
 add_executable(host_protocol_tests tests/test_host_protocol.cpp)
 target_link_libraries(host_protocol_tests PRIVATE hydra_host_protocol)
-if(MSVC)
-    target_compile_options(host_protocol_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(host_protocol_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(host_protocol_tests)
 add_test(NAME HostProtocolTests COMMAND host_protocol_tests)
 set_tests_properties(HostProtocolTests PROPERTIES LABELS "P4-IPC-01;P7-SHELL-01")
 
 add_executable(host_ipc_process_tests tests/test_host_process.cpp)
 target_link_libraries(host_ipc_process_tests PRIVATE hydra_host_transport)
 add_dependencies(host_ipc_process_tests hydra_host hydra_hostctl)
-if(MSVC)
-    target_compile_options(host_ipc_process_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(host_ipc_process_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(host_ipc_process_tests)
 add_test(NAME HostIpcProcessTests COMMAND host_ipc_process_tests)
 set_tests_properties(HostIpcProcessTests PROPERTIES
     LABELS "P4-IPC-01;P4-SEAT-01;P7-SHELL-01")
 
 add_executable(seat_launcher_model_tests tests/test_seat_launcher_model.cpp)
 target_link_libraries(seat_launcher_model_tests PRIVATE hydra_seat_launcher)
-if(MSVC)
-    target_compile_options(seat_launcher_model_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(seat_launcher_model_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(seat_launcher_model_tests)
 add_test(NAME SeatLauncherModelTests COMMAND seat_launcher_model_tests)
 set_tests_properties(SeatLauncherModelTests PROPERTIES LABELS "P7-SHELL-01")
 
 add_executable(seat_launch_flow_tests tests/test_seat_launch_flow.cpp)
 target_link_libraries(seat_launch_flow_tests PRIVATE hydra_seat_launcher)
-if(MSVC)
-    target_compile_options(seat_launch_flow_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(seat_launch_flow_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(seat_launch_flow_tests)
 add_test(NAME SeatLaunchFlowTests COMMAND seat_launch_flow_tests)
 set_tests_properties(SeatLaunchFlowTests PROPERTIES LABELS "P7-LAUNCH-01")
 
 add_executable(seat_notification_model_tests
     tests/test_seat_notification_model.cpp)
 target_link_libraries(seat_notification_model_tests PRIVATE hydra_seat_launcher)
-if(MSVC)
-    target_compile_options(seat_notification_model_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(seat_notification_model_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(seat_notification_model_tests)
 add_test(NAME SeatNotificationModelTests COMMAND seat_notification_model_tests)
 set_tests_properties(SeatNotificationModelTests PROPERTIES LABELS "P7-NOTIFY-01")
 
 add_executable(seat_hotkey_model_tests tests/test_seat_hotkey_model.cpp)
 target_link_libraries(seat_hotkey_model_tests PRIVATE hydra_seat_launcher)
-if(MSVC)
-    target_compile_options(seat_hotkey_model_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(seat_hotkey_model_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(seat_hotkey_model_tests)
 add_test(NAME SeatHotkeyModelTests COMMAND seat_hotkey_model_tests)
 set_tests_properties(SeatHotkeyModelTests PROPERTIES LABELS "P7-HOTKEY-01")
 
 add_executable(seat_navigation_model_tests tests/test_seat_navigation_model.cpp)
 target_link_libraries(seat_navigation_model_tests PRIVATE hydra_seat_launcher)
-if(MSVC)
-    target_compile_options(seat_navigation_model_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(seat_navigation_model_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(seat_navigation_model_tests)
 add_test(NAME SeatNavigationModelTests COMMAND seat_navigation_model_tests)
 set_tests_properties(SeatNavigationModelTests PROPERTIES LABELS "P7-CURSOR-01")
 
 add_executable(ui_localization_tests tests/test_ui_localization.cpp)
 target_link_libraries(ui_localization_tests PRIVATE hydra_ui_localization)
-if(MSVC)
-    target_compile_options(ui_localization_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(ui_localization_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(ui_localization_tests)
 add_test(NAME UiLocalizationTests COMMAND ui_localization_tests)
 set_tests_properties(UiLocalizationTests PROPERTIES LABELS "P7-I18N-01")
 
 add_executable(ui_accessibility_tests tests/test_ui_accessibility.cpp)
 target_link_libraries(ui_accessibility_tests PRIVATE hydra_ui_localization)
-if(MSVC)
-    target_compile_options(ui_accessibility_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(ui_accessibility_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(ui_accessibility_tests)
 add_test(NAME UiAccessibilityTests COMMAND ui_accessibility_tests)
 set_tests_properties(UiAccessibilityTests PROPERTIES LABELS "P7-A11Y-01")
 
@@ -1546,12 +1286,7 @@ if(WIN32)
         tests/test_seat_launch_flow_process.cpp)
     target_link_libraries(seat_launch_flow_process_tests PRIVATE
         hydra_seat_launcher hydra_process hydra_runtime)
-    if(MSVC)
-        target_compile_options(seat_launch_flow_process_tests PRIVATE /W4 /permissive-)
-    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(seat_launch_flow_process_tests PRIVATE
-            -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-    endif()
+    hydra_enable_strict_warnings(seat_launch_flow_process_tests)
     add_test(NAME SeatLaunchFlowProcessTests COMMAND seat_launch_flow_process_tests)
     set_tests_properties(SeatLaunchFlowProcessTests PROPERTIES
         LABELS "P7-LAUNCH-01")
@@ -1561,12 +1296,7 @@ if(WIN32)
     add_executable(seat_ui_process_tests tests/test_seat_ui_process.cpp)
     target_link_libraries(seat_ui_process_tests PRIVATE hydra_host_transport)
     add_dependencies(seat_ui_process_tests hydra_host hydra_seat_ui)
-    if(MSVC)
-        target_compile_options(seat_ui_process_tests PRIVATE /W4 /permissive-)
-    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(seat_ui_process_tests PRIVATE
-            -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-    endif()
+    hydra_enable_strict_warnings(seat_ui_process_tests)
     add_test(NAME SeatUiProcessTests COMMAND seat_ui_process_tests)
     set_tests_properties(SeatUiProcessTests PROPERTIES
         LABELS "P7-SHELL-01;P7-REC-01" RESOURCE_LOCK "HydraSeatHostPipe")
@@ -1578,12 +1308,7 @@ add_executable(hydra_process_tree_child tests/process_tree_child.cpp)
 if(TARGET seat_launch_flow_process_tests)
     add_dependencies(seat_launch_flow_process_tests hydra_process_tree_child)
 endif()
-if(MSVC)
-    target_compile_options(hydra_process_tree_child PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_process_tree_child PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_process_tree_child)
 
 if(WIN32)
     # P5-MVP-01 complete controlled two-Seat production-path harness. It uses
@@ -1594,12 +1319,7 @@ if(WIN32)
         hydra_two_seat_launch hydra_session_metrics hydra_runtime hydra_process
         Threads::Threads)
     add_dependencies(hydra_two_seat_mvp_lab hydra_process_tree_child)
-    if(MSVC)
-        target_compile_options(hydra_two_seat_mvp_lab PRIVATE /W4 /permissive-)
-    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(hydra_two_seat_mvp_lab PRIVATE
-            -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-    endif()
+    hydra_enable_strict_warnings(hydra_two_seat_mvp_lab)
     add_test(NAME TwoSeatMvpControlledSelfTest
              COMMAND hydra_two_seat_mvp_lab --self-test)
     set_tests_properties(TwoSeatMvpControlledSelfTest PROPERTIES
@@ -1612,12 +1332,7 @@ if(WIN32)
         hydra_runtime hydra_process hydra_host_protocol hydra_host_transport
         Threads::Threads)
     add_dependencies(seat_game_process_lifecycle_tests hydra_process_tree_child)
-    if(MSVC)
-        target_compile_options(seat_game_process_lifecycle_tests PRIVATE /W4 /permissive-)
-    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(seat_game_process_lifecycle_tests PRIVATE
-            -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-    endif()
+    hydra_enable_strict_warnings(seat_game_process_lifecycle_tests)
     add_test(NAME SeatGameProcessLifecycleTests
              COMMAND seat_game_process_lifecycle_tests)
     set_tests_properties(SeatGameProcessLifecycleTests PROPERTIES
@@ -1628,21 +1343,11 @@ endif()
 add_executable(process_group_tests tests/test_process_group.cpp)
 target_link_libraries(process_group_tests PRIVATE hydra_process)
 add_dependencies(process_group_tests hydra_process_tree_child)
-if(MSVC)
-    target_compile_options(process_group_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(process_group_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(process_group_tests)
 add_test(NAME ProcessGroupTests COMMAND process_group_tests)
 
 add_executable(hydra_window_test_app tests/window_test_app.cpp)
-if(MSVC)
-    target_compile_options(hydra_window_test_app PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_window_test_app PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_window_test_app)
 
 add_executable(window_tracker_tests tests/test_window_tracker.cpp)
 target_link_libraries(window_tracker_tests PRIVATE hydra_window_tracking)
@@ -1650,101 +1355,51 @@ add_dependencies(window_tracker_tests hydra_window_test_app)
 if(WIN32)
     target_link_libraries(window_tracker_tests PRIVATE User32.lib)
 endif()
-if(MSVC)
-    target_compile_options(window_tracker_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(window_tracker_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(window_tracker_tests)
 add_test(NAME WindowTrackerTests COMMAND window_tracker_tests)
 
 add_executable(hydra_display_diag src/display_diag_main.cpp)
 target_link_libraries(hydra_display_diag PRIVATE hydra_display_topology)
-if(MSVC)
-    target_compile_options(hydra_display_diag PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hydra_display_diag PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hydra_display_diag)
 
 add_executable(display_topology_tests tests/test_display_topology.cpp)
 target_link_libraries(display_topology_tests PRIVATE hydra_display_topology)
-if(MSVC)
-    target_compile_options(display_topology_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(display_topology_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(display_topology_tests)
 add_test(NAME DisplayTopologyTests COMMAND display_topology_tests)
 
 add_executable(seat_display_layout_tests tests/test_seat_display_layout.cpp)
 target_link_libraries(seat_display_layout_tests PRIVATE hydra_seat_display_layout)
-if(MSVC)
-    target_compile_options(seat_display_layout_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(seat_display_layout_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(seat_display_layout_tests)
 add_test(NAME SeatDisplayLayoutTests COMMAND seat_display_layout_tests)
 
 add_executable(window_policy_tests tests/test_window_policy.cpp)
 target_link_libraries(window_policy_tests PRIVATE hydra_window_placement)
-if(MSVC)
-    target_compile_options(window_policy_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(window_policy_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(window_policy_tests)
 add_test(NAME WindowPolicyTests COMMAND window_policy_tests)
 
 add_executable(seat_runtime_policy_tests tests/test_seat_runtime_policy.cpp)
 target_link_libraries(seat_runtime_policy_tests PRIVATE hydra_seat_runtime_policy)
-if(MSVC)
-    target_compile_options(seat_runtime_policy_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(seat_runtime_policy_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(seat_runtime_policy_tests)
 add_test(NAME SeatRuntimePolicyTests COMMAND seat_runtime_policy_tests)
 
 add_executable(display_recovery_tests tests/test_display_recovery.cpp)
 target_link_libraries(display_recovery_tests PRIVATE hydra_display_recovery)
-if(MSVC)
-    target_compile_options(display_recovery_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(display_recovery_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(display_recovery_tests)
 add_test(NAME DisplayRecoveryTests COMMAND display_recovery_tests)
 
 add_executable(management_seat_tests tests/test_management_seat.cpp)
 target_link_libraries(management_seat_tests PRIVATE hydra_management_seat)
-if(MSVC)
-    target_compile_options(management_seat_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(management_seat_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(management_seat_tests)
 add_test(NAME ManagementSeatTests COMMAND management_seat_tests)
 
 add_executable(session_control_transition_tests tests/test_session_control_transition.cpp)
 target_link_libraries(session_control_transition_tests PRIVATE hydra_session_control)
-if(MSVC)
-    target_compile_options(session_control_transition_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(session_control_transition_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(session_control_transition_tests)
 add_test(NAME SessionControlTransitionTests COMMAND session_control_transition_tests)
 
 add_executable(control_surface_model_tests tests/test_control_surface_model.cpp)
 target_link_libraries(control_surface_model_tests PRIVATE hydra_control_surface)
-if(MSVC)
-    target_compile_options(control_surface_model_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(control_surface_model_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(control_surface_model_tests)
 add_test(NAME ControlSurfaceModelTests COMMAND control_surface_model_tests)
 set_tests_properties(ControlSurfaceModelTests PROPERTIES
     LABELS "P4-CTRL-01;P4-REC-01;P4-SEAT-01")
@@ -1754,36 +1409,32 @@ add_executable(hardware_identity_tests
     tests/test_hardware_identity.cpp
     include/hydra/hardware_identity.hpp
 )
-if(MSVC)
-    target_compile_options(hardware_identity_tests PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(hardware_identity_tests)
 add_test(NAME HardwareIdentityTests COMMAND hardware_identity_tests)
 
 # Pure Phase 3 capability-planner tests. No process injection or driver access.
 add_executable(isolation_planner_tests
     tests/test_isolation_planner.cpp
     src/input_isolation.cpp
-    src/workspace_manager.cpp
     include/hydra/input_isolation.hpp
-    include/hydra/workspace_manager.hpp
 )
-if(MSVC)
-    target_compile_options(isolation_planner_tests PRIVATE /W4 /permissive-)
-endif()
+target_link_libraries(isolation_planner_tests PRIVATE hydra_workspace)
+hydra_enable_strict_warnings(isolation_planner_tests)
 add_test(NAME IsolationPlannerTests COMMAND isolation_planner_tests)
 add_test(NAME IsolationPlanObservation COMMAND hydra_plan observation-harness)
+
+add_executable(seat_assignment_projection_tests
+    tests/test_seat_assignment_projection.cpp)
+target_link_libraries(seat_assignment_projection_tests PRIVATE hydra_workspace)
+hydra_enable_strict_warnings(seat_assignment_projection_tests)
+add_test(NAME SeatAssignmentProjectionTests COMMAND seat_assignment_projection_tests)
 
 # P3-D-01 platform-independent policy/failure tests plus a bounded CLI test.
 add_executable(hidhide_probe_tests
     tests/test_hidhide_probe.cpp
 )
 target_link_libraries(hidhide_probe_tests PRIVATE hydra_hidhide_probe)
-if(MSVC)
-    target_compile_options(hidhide_probe_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hidhide_probe_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hidhide_probe_tests)
 add_test(NAME HidHideProbeTests COMMAND hidhide_probe_tests)
 add_test(NAME HidHideProbeCliSelfTest
          COMMAND hydra_hidhide_probe_cli --self-test)
@@ -1798,12 +1449,7 @@ add_executable(hidhide_session_backend_tests
     tests/test_hidhide_session_backend.cpp
 )
 target_link_libraries(hidhide_session_backend_tests PRIVATE hydra_hidhide_session)
-if(MSVC)
-    target_compile_options(hidhide_session_backend_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hidhide_session_backend_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hidhide_session_backend_tests)
 add_test(NAME HidHideSessionBackendTests COMMAND hidhide_session_backend_tests)
 set_tests_properties(HidHideSessionBackendTests PROPERTIES LABELS "P3-D-02")
 add_test(NAME HidHideSessionLabSelfTest COMMAND hydra_hidhide_session_lab --self-test)
@@ -1814,12 +1460,7 @@ add_executable(hidhide_session_recovery_tests
 )
 target_link_libraries(hidhide_session_recovery_tests PRIVATE
     hydra_hidhide_session_recovery)
-if(MSVC)
-    target_compile_options(hidhide_session_recovery_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(hidhide_session_recovery_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(hidhide_session_recovery_tests)
 add_test(NAME HidHideSessionRecoveryTests COMMAND hidhide_session_recovery_tests)
 set_tests_properties(HidHideSessionRecoveryTests PROPERTIES LABELS "P3-D-02;P8-WATCH-01")
 
@@ -1828,12 +1469,7 @@ add_executable(audio_endpoint_inventory_tests
     tests/test_audio_endpoint_inventory.cpp
 )
 target_link_libraries(audio_endpoint_inventory_tests PRIVATE hydra_audio_inventory)
-if(MSVC)
-    target_compile_options(audio_endpoint_inventory_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(audio_endpoint_inventory_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(audio_endpoint_inventory_tests)
 add_test(NAME AudioEndpointInventoryTests COMMAND audio_endpoint_inventory_tests)
 set_tests_properties(AudioEndpointInventoryTests PROPERTIES LABELS "P5-AUD-01")
 add_test(NAME AudioEndpointDiagHelp COMMAND hydra_audio_diag --help)
@@ -1843,12 +1479,7 @@ set_tests_properties(AudioEndpointDiagHelp PROPERTIES LABELS "P5-AUD-01")
 # mutable backend, apply verification, rollback, and unsupported production path.
 add_executable(audio_routing_tests tests/test_audio_routing.cpp)
 target_link_libraries(audio_routing_tests PRIVATE hydra_audio_routing)
-if(MSVC)
-    target_compile_options(audio_routing_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(audio_routing_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(audio_routing_tests)
 add_test(NAME AudioRoutingTests COMMAND audio_routing_tests)
 set_tests_properties(AudioRoutingTests PROPERTIES LABELS "P5-AUD-02")
 
@@ -1857,12 +1488,7 @@ add_executable(watchdog_protocol_tests
     tests/test_watchdog_protocol.cpp
 )
 target_link_libraries(watchdog_protocol_tests PRIVATE hydra_watchdog_core)
-if(MSVC)
-    target_compile_options(watchdog_protocol_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(watchdog_protocol_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(watchdog_protocol_tests)
 add_test(NAME WatchdogProtocolTests COMMAND watchdog_protocol_tests)
 if(WIN32)
     add_executable(watchdog_process_tests
@@ -1870,9 +1496,7 @@ if(WIN32)
     )
     target_link_libraries(watchdog_process_tests PRIVATE hydra_watchdog_core)
     add_dependencies(watchdog_process_tests hydra_watchdog)
-    if(MSVC)
-        target_compile_options(watchdog_process_tests PRIVATE /W4 /permissive-)
-    endif()
+    hydra_enable_strict_warnings(watchdog_process_tests)
     add_test(NAME WatchdogProcessFaultTests COMMAND watchdog_process_tests)
     set_tests_properties(WatchdogProcessFaultTests PROPERTIES
         TIMEOUT 60
@@ -1885,12 +1509,7 @@ add_executable(crash_journal_tests
     tests/test_crash_journal.cpp
 )
 target_link_libraries(crash_journal_tests PRIVATE hydra_crash_journal)
-if(MSVC)
-    target_compile_options(crash_journal_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(crash_journal_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(crash_journal_tests)
 add_test(NAME CrashJournalTests COMMAND crash_journal_tests)
 
 # P8-RESET-01 codec/state/rollback/idempotency tests. Windows process tests run
@@ -1899,20 +1518,13 @@ add_executable(reset_actions_tests
     tests/test_reset_actions.cpp
 )
 target_link_libraries(reset_actions_tests PRIVATE hydra_reset_actions)
-if(MSVC)
-    target_compile_options(reset_actions_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(reset_actions_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(reset_actions_tests)
 add_test(NAME ResetActionsTests COMMAND reset_actions_tests)
 if(WIN32)
     add_executable(reset_process_tests tests/test_reset_process.cpp)
     target_link_libraries(reset_process_tests PRIVATE hydra_reset_actions)
     add_dependencies(reset_process_tests hydra_reset)
-    if(MSVC)
-        target_compile_options(reset_process_tests PRIVATE /W4 /permissive-)
-    endif()
+    hydra_enable_strict_warnings(reset_process_tests)
     add_test(NAME ResetProcessTests COMMAND reset_process_tests)
     set_tests_properties(ResetProcessTests PROPERTIES TIMEOUT 90)
 endif()
@@ -1922,12 +1534,7 @@ add_executable(gate_c_recovery_tests
     tests/test_gate_c_recovery.cpp
 )
 target_link_libraries(gate_c_recovery_tests PRIVATE hydra_gate_c_recovery)
-if(MSVC)
-    target_compile_options(gate_c_recovery_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(gate_c_recovery_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(gate_c_recovery_tests)
 add_test(NAME GateCRecoveryCoreTests COMMAND gate_c_recovery_tests)
 if(WIN32)
     add_executable(gate_c_watchdog_recovery_tests
@@ -1945,10 +1552,7 @@ if(WIN32)
     add_dependencies(gate_c_watchdog_recovery_tests
         hydra_gate_c_host hydra_gate_c_target hydra_gate_c_api_probe
         hydra_gate_c_shim hydra_watchdog stage_gate_c_watchdog_reset)
-    if(MSVC)
-        target_compile_options(gate_c_watchdog_recovery_tests PRIVATE
-            /W4 /permissive-)
-    endif()
+    hydra_enable_strict_warnings(gate_c_watchdog_recovery_tests)
     add_test(NAME GateCWatchdogRecoveryTests
              COMMAND gate_c_watchdog_recovery_tests)
     set_tests_properties(GateCWatchdogRecoveryTests PROPERTIES TIMEOUT 180)
@@ -1959,15 +1563,12 @@ add_executable(input_observation_tests
     tests/test_input_observation.cpp
     src/input_observation.cpp
     src/input_isolation.cpp
-    src/workspace_manager.cpp
     include/hydra/input_observation.hpp
     include/hydra/input_isolation.hpp
     include/hydra/input_router.hpp
-    include/hydra/workspace_manager.hpp
 )
-if(MSVC)
-    target_compile_options(input_observation_tests PRIVATE /W4 /permissive-)
-endif()
+target_link_libraries(input_observation_tests PRIVATE hydra_workspace)
+hydra_enable_strict_warnings(input_observation_tests)
 add_test(NAME InputObservationTests COMMAND input_observation_tests)
 add_test(NAME InputLabSelfTest COMMAND hydra_input_lab --self-test)
 
@@ -1976,9 +1577,7 @@ add_executable(gate_c_protocol_tests
     tests/test_gate_c_protocol.cpp
 )
 target_link_libraries(gate_c_protocol_tests PRIVATE hydra_gate_c_core)
-if(MSVC)
-    target_compile_options(gate_c_protocol_tests PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(gate_c_protocol_tests)
 add_test(NAME GateCProtocolTests COMMAND gate_c_protocol_tests)
 
 # P3-ARCH-01 process-architecture detection, PE validation, and the bounded
@@ -1988,9 +1587,7 @@ add_executable(gate_c_architecture_tests
 )
 target_link_libraries(gate_c_architecture_tests PRIVATE hydra_gate_c_core)
 hydra_set_gate_c_output(gate_c_architecture_tests)
-if(MSVC)
-    target_compile_options(gate_c_architecture_tests PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(gate_c_architecture_tests)
 add_test(NAME GateCArchitectureTests COMMAND gate_c_architecture_tests)
 
 # P3-API-01 fixed-width, versioned OS/adapter comparison snapshot tests.
@@ -1998,9 +1595,7 @@ add_executable(gate_c_probe_snapshot_tests
     tests/test_gate_c_probe_snapshot.cpp
 )
 target_link_libraries(gate_c_probe_snapshot_tests PRIVATE hydra_gate_c_core)
-if(MSVC)
-    target_compile_options(gate_c_probe_snapshot_tests PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(gate_c_probe_snapshot_tests)
 add_test(NAME GateCProbeSnapshotTests COMMAND gate_c_probe_snapshot_tests)
 
 # P3-RAW-01 portable trace/fixture and malformed data/buffer contract tests.
@@ -2013,12 +1608,7 @@ target_link_libraries(raw_input_probe_trace_tests PRIVATE
 target_compile_definitions(raw_input_probe_trace_tests PRIVATE
     HYDRA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
-if(MSVC)
-    target_compile_options(raw_input_probe_trace_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(raw_input_probe_trace_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(raw_input_probe_trace_tests)
 add_test(NAME RawInputProbeTraceTests COMMAND raw_input_probe_trace_tests)
 add_test(NAME RawInputProbeSelfTest
          COMMAND hydra_gate_c_raw_input_probe --self-test)
@@ -2028,12 +1618,7 @@ add_executable(virtual_raw_input_tests
     tests/test_virtual_raw_input.cpp
 )
 target_link_libraries(virtual_raw_input_tests PRIVATE hydra_virtual_raw_input)
-if(MSVC)
-    target_compile_options(virtual_raw_input_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(virtual_raw_input_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(virtual_raw_input_tests)
 add_test(NAME VirtualRawInputTests COMMAND virtual_raw_input_tests)
 
 # P3-CTRL-01 normalized XInput logical-slot, generation, metadata, battery,
@@ -2042,12 +1627,7 @@ add_executable(virtual_xinput_state_tests
     tests/test_virtual_xinput_state.cpp
 )
 target_link_libraries(virtual_xinput_state_tests PRIVATE hydra_virtual_xinput)
-if(MSVC)
-    target_compile_options(virtual_xinput_state_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(virtual_xinput_state_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(virtual_xinput_state_tests)
 add_test(NAME VirtualXInputStateTests COMMAND virtual_xinput_state_tests)
 
 # P3-CTRL-02 stable instance-ID allowlist/order policy and controlled probe tests.
@@ -2055,12 +1635,7 @@ add_executable(directinput_policy_tests
     tests/test_directinput_policy.cpp
 )
 target_link_libraries(directinput_policy_tests PRIVATE hydra_directinput_policy)
-if(MSVC)
-    target_compile_options(directinput_policy_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(directinput_policy_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(directinput_policy_tests)
 add_test(NAME DirectInputPolicyTests COMMAND directinput_policy_tests)
 add_test(NAME DirectInputControlledSeatA
          COMMAND hydra_directinput_probe --controlled-self-test seat-a)
@@ -2075,12 +1650,7 @@ endif()
 # two-Seat mapping, reconnect generation, and exact vibration ownership tests.
 add_executable(controller_runtime_tests tests/test_controller_runtime.cpp)
 target_link_libraries(controller_runtime_tests PRIVATE hydra_controller_runtime)
-if(MSVC)
-    target_compile_options(controller_runtime_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(controller_runtime_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(controller_runtime_tests)
 add_test(NAME ControllerRuntimeTests COMMAND controller_runtime_tests)
 set_tests_properties(ControllerRuntimeTests PROPERTIES LABELS "P5-CTRL-01")
 add_test(NAME ControllerDiagHelp COMMAND hydra_controller_diag --help)
@@ -2091,12 +1661,7 @@ add_executable(input_metrics_tests
     tests/test_input_metrics.cpp
 )
 target_link_libraries(input_metrics_tests PRIVATE hydra_input_metrics)
-if(MSVC)
-    target_compile_options(input_metrics_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(input_metrics_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(input_metrics_tests)
 add_test(NAME InputMetricsTests COMMAND input_metrics_tests)
 add_test(NAME InputMetricsCliSelfTest
          COMMAND hydra_input_metrics_cli --self-test)
@@ -2106,37 +1671,26 @@ add_test(NAME InputMetricsFixtureReport
 # P5-MET-01 integrated evidence origin/verdict/privacy/zero-cross report tests.
 add_executable(session_metrics_tests tests/test_session_metrics.cpp)
 target_link_libraries(session_metrics_tests PRIVATE hydra_session_metrics)
-if(MSVC)
-    target_compile_options(session_metrics_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(session_metrics_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(session_metrics_tests)
 add_test(NAME SessionMetricsTests COMMAND session_metrics_tests)
 set_tests_properties(SessionMetricsTests PROPERTIES LABELS "P5-MET-01")
 
 # P6-SCHEMA-01 strict version/bounds/Unicode/cross-reference persistence tests.
 add_executable(profile_schema_tests tests/test_profile_schema.cpp)
 target_link_libraries(profile_schema_tests PRIVATE hydra_profile_schema)
-if(MSVC)
-    target_compile_options(profile_schema_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(profile_schema_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(profile_schema_tests)
 add_test(NAME ProfileSchemaTests COMMAND profile_schema_tests)
 set_tests_properties(ProfileSchemaTests PROPERTIES LABELS "P6-SCHEMA-01")
+
+add_executable(strict_json_tests tests/test_strict_json.cpp)
+hydra_enable_strict_warnings(strict_json_tests)
+add_test(NAME StrictJsonTests COMMAND strict_json_tests)
 
 # P6-MIG-01 deterministic conversion/report/backup plus injected write,
 # staged-validation, commit, and post-commit rollback tests.
 add_executable(profile_migration_tests tests/test_profile_migration.cpp)
 target_link_libraries(profile_migration_tests PRIVATE hydra_profile_migration)
-if(MSVC)
-    target_compile_options(profile_migration_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(profile_migration_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(profile_migration_tests)
 add_test(NAME ProfileMigrationTests COMMAND profile_migration_tests)
 set_tests_properties(ProfileMigrationTests PROPERTIES LABELS "P6-MIG-01")
 
@@ -2144,12 +1698,7 @@ set_tests_properties(ProfileMigrationTests PROPERTIES LABELS "P6-MIG-01")
 # duplicate reconciliation, missing artwork, staleness, and transaction tests.
 add_executable(game_catalog_tests tests/test_game_catalog.cpp)
 target_link_libraries(game_catalog_tests PRIVATE hydra_game_catalog)
-if(MSVC)
-    target_compile_options(game_catalog_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(game_catalog_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(game_catalog_tests)
 add_test(NAME GameCatalogTests COMMAND game_catalog_tests)
 set_tests_properties(GameCatalogTests PROPERTIES LABELS "P6-CATALOG-01")
 
@@ -2157,12 +1706,7 @@ set_tests_properties(GameCatalogTests PROPERTIES LABELS "P6-CATALOG-01")
 # transactional failure, typed-launch, and post-launch evidence tests.
 add_executable(provider_adapter_tests tests/test_provider_adapter.cpp)
 target_link_libraries(provider_adapter_tests PRIVATE hydra_provider_adapter)
-if(MSVC)
-    target_compile_options(provider_adapter_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(provider_adapter_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(provider_adapter_tests)
 add_test(NAME ProviderAdapterTests COMMAND provider_adapter_tests)
 set_tests_properties(ProviderAdapterTests PROPERTIES LABELS "P6-PROV-01")
 
@@ -2170,12 +1714,7 @@ set_tests_properties(ProviderAdapterTests PROPERTIES LABELS "P6-PROV-01")
 # installed-Steam smoke test. Neither test starts Steam or a game.
 add_executable(steam_provider_tests tests/test_steam_provider.cpp)
 target_link_libraries(steam_provider_tests PRIVATE hydra_steam_provider)
-if(MSVC)
-    target_compile_options(steam_provider_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(steam_provider_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(steam_provider_tests)
 add_test(NAME SteamProviderTests COMMAND steam_provider_tests)
 set_tests_properties(SteamProviderTests PROPERTIES LABELS "P6-PROV-02")
 if(WIN32)
@@ -2191,12 +1730,7 @@ add_executable(custom_executable_provider_tests
     tests/test_custom_executable_provider.cpp)
 target_link_libraries(custom_executable_provider_tests PRIVATE
     hydra_custom_executable_provider)
-if(MSVC)
-    target_compile_options(custom_executable_provider_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(custom_executable_provider_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(custom_executable_provider_tests)
 add_test(NAME CustomExecutableProviderTests COMMAND custom_executable_provider_tests)
 set_tests_properties(CustomExecutableProviderTests PROPERTIES LABELS "P6-PROV-03D")
 if(WIN32)
@@ -2210,37 +1744,124 @@ endif()
 # requirement/provider, account ambiguity, and exact hardware preflight tests.
 add_executable(provider_launch_plan_tests tests/test_provider_launch_plan.cpp)
 target_link_libraries(provider_launch_plan_tests PRIVATE hydra_provider_launch_plan)
-if(MSVC)
-    target_compile_options(provider_launch_plan_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(provider_launch_plan_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(provider_launch_plan_tests)
 add_test(NAME ProviderLaunchPlanTests COMMAND provider_launch_plan_tests)
 set_tests_properties(ProviderLaunchPlanTests PROPERTIES LABELS "P6-PLAN-01")
+
+# P6/P7 production requirement resolver: exact local evidence/provider/catalog
+# matching, transactional store behavior, freshness, protected approval, and
+# community-evidence rejection.
+add_executable(game_runtime_requirement_resolver_tests
+    tests/test_game_runtime_requirement_resolver.cpp)
+target_link_libraries(game_runtime_requirement_resolver_tests PRIVATE
+    hydra_game_runtime_requirement_resolver)
+hydra_enable_strict_warnings(game_runtime_requirement_resolver_tests)
+add_test(NAME GameRuntimeRequirementResolverTests
+         COMMAND game_runtime_requirement_resolver_tests)
+set_tests_properties(GameRuntimeRequirementResolverTests PROPERTIES
+    LABELS "P6-PLAN-01;P7-LAUNCH-01")
+
+# P5/P7 production launch boundary: immutable Host registry, exact
+# profile/session/Seat generation binding, resource rollback at every activation
+# index, real controlled Job Object ownership, and IPC installer permissions.
+add_executable(production_launch_runtime_tests
+    tests/test_production_launch_runtime.cpp)
+target_link_libraries(production_launch_runtime_tests PRIVATE
+    hydra_production_launch_installer
+    hydra_runtime
+)
+hydra_enable_strict_warnings(production_launch_runtime_tests)
+if(WIN32)
+    add_dependencies(production_launch_runtime_tests hydra_process_tree_child)
+    add_test(NAME ProductionLaunchRuntimeTests
+             COMMAND production_launch_runtime_tests
+                     $<TARGET_FILE:hydra_process_tree_child>)
+else()
+    add_test(NAME ProductionLaunchRuntimeTests
+             COMMAND production_launch_runtime_tests)
+endif()
+set_tests_properties(ProductionLaunchRuntimeTests PROPERTIES
+    LABELS "P5-LAUNCH-01;P7-LAUNCH-01")
+
+add_executable(production_compatibility_activation_tests
+    tests/test_production_compatibility_activation.cpp)
+target_link_libraries(production_compatibility_activation_tests PRIVATE
+    hydra_production_compatibility_activation)
+hydra_enable_strict_warnings(production_compatibility_activation_tests)
+add_test(NAME ProductionCompatibilityActivationTests
+         COMMAND production_compatibility_activation_tests)
+set_tests_properties(ProductionCompatibilityActivationTests PROPERTIES
+    LABELS "P5-LAUNCH-01;P7-LAUNCH-01")
+
+add_executable(production_activation_bridges_tests
+    tests/test_production_activation_bridges.cpp)
+target_link_libraries(production_activation_bridges_tests PRIVATE
+    hydra_production_activation_bridges)
+hydra_enable_strict_warnings(production_activation_bridges_tests)
+add_test(NAME ProductionActivationBridgesTests
+         COMMAND production_activation_bridges_tests)
+set_tests_properties(ProductionActivationBridgesTests PROPERTIES
+    LABELS "P3-REC-01;P5-LAUNCH-01;P7-LAUNCH-01")
+
+add_executable(production_host_protocol_tests
+    tests/test_production_host_protocol.cpp)
+target_link_libraries(production_host_protocol_tests PRIVATE
+    hydra_host_protocol
+    hydra_production_launch_runtime)
+hydra_enable_strict_warnings(production_host_protocol_tests)
+add_test(NAME ProductionHostProtocolTests
+         COMMAND production_host_protocol_tests)
+set_tests_properties(ProductionHostProtocolTests PROPERTIES
+    LABELS "P4-IPC-01;P7-LAUNCH-01")
+
+# P10-RC-01 acceptance infrastructure remains fail-closed even while the packet
+# itself is BLOCKED on upstream/manual gates. These tests prove exact RC/scenario
+# binding and that synthetic evidence cannot satisfy physical stages.
+add_executable(acceptance_campaign_tests
+    tests/test_acceptance_campaign.cpp)
+target_link_libraries(acceptance_campaign_tests PRIVATE
+    hydra_acceptance_campaign)
+hydra_enable_strict_warnings(acceptance_campaign_tests)
+add_test(NAME AcceptanceCampaignTests COMMAND acceptance_campaign_tests)
+set_tests_properties(AcceptanceCampaignTests PROPERTIES LABELS "P10-RC-01")
+
+add_executable(acceptance_probe_process_tests
+    tests/test_acceptance_probe_process.cpp)
+target_link_libraries(acceptance_probe_process_tests PRIVATE
+    hydra_acceptance_probe)
+hydra_enable_strict_warnings(acceptance_probe_process_tests)
+if(WIN32)
+    add_dependencies(acceptance_probe_process_tests hydra_process_tree_child)
+    add_test(NAME AcceptanceProbeProcessTests
+             COMMAND acceptance_probe_process_tests
+                     $<TARGET_FILE:hydra_process_tree_child>)
+else()
+    add_test(NAME AcceptanceProbeProcessTests
+             COMMAND acceptance_probe_process_tests)
+endif()
+set_tests_properties(AcceptanceProbeProcessTests PROPERTIES LABELS "P10-RC-01")
+
+if(Python3_Interpreter_FOUND)
+    add_test(NAME V1AcceptanceCampaignValidatorTests
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CMAKE_SOURCE_DIR}/tools/validate_v1_acceptance_campaign.py"
+                     --self-test)
+    set_tests_properties(V1AcceptanceCampaignValidatorTests PROPERTIES
+        LABELS "P10-RC-01")
+endif()
 
 # P6-PREFLIGHT-01 normal/expert messages, deterministic mutation ordering,
 # explicit approval gates, and typed no-secret mutation preview tests.
 add_executable(plan_preflight_tests tests/test_plan_preflight.cpp)
 target_link_libraries(plan_preflight_tests PRIVATE hydra_plan_preflight)
-if(MSVC)
-    target_compile_options(plan_preflight_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(plan_preflight_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(plan_preflight_tests)
 add_test(NAME PlanPreflightTests COMMAND plan_preflight_tests)
 set_tests_properties(PlanPreflightTests PROPERTIES LABELS "P6-PREFLIGHT-01")
 
 # P6-UI-01 full normal flow over fake providers and immutable local snapshots.
 add_executable(launcher_ui_model_tests tests/test_launcher_ui_model.cpp)
 target_link_libraries(launcher_ui_model_tests PRIVATE hydra_launcher_ui_model)
-if(MSVC)
-    target_compile_options(launcher_ui_model_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(launcher_ui_model_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(launcher_ui_model_tests)
 add_test(NAME LauncherUiModelTests COMMAND launcher_ui_model_tests)
 set_tests_properties(LauncherUiModelTests PROPERTIES LABELS "P6-UI-01")
 
@@ -2248,12 +1869,7 @@ set_tests_properties(LauncherUiModelTests PROPERTIES LABELS "P6-UI-01")
 # shared-data-root, and cross-document runtime-selection validation tests.
 add_executable(two_player_setup_editor_tests tests/test_two_player_setup_editor.cpp)
 target_link_libraries(two_player_setup_editor_tests PRIVATE hydra_two_player_setup_editor)
-if(MSVC)
-    target_compile_options(two_player_setup_editor_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(two_player_setup_editor_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(two_player_setup_editor_tests)
 add_test(NAME TwoPlayerSetupEditorTests COMMAND two_player_setup_editor_tests)
 set_tests_properties(TwoPlayerSetupEditorTests PROPERTIES LABELS "P6-PROFILE-01")
 
@@ -2261,12 +1877,7 @@ set_tests_properties(TwoPlayerSetupEditorTests PROPERTIES LABELS "P6-PROFILE-01"
 # envelope/version, and transactional failure tests.
 add_executable(setup_package_tests tests/test_setup_package.cpp)
 target_link_libraries(setup_package_tests PRIVATE hydra_setup_package)
-if(MSVC)
-    target_compile_options(setup_package_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(setup_package_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(setup_package_tests)
 add_test(NAME SetupPackageTests COMMAND setup_package_tests)
 set_tests_properties(SetupPackageTests PROPERTIES LABELS "P6-IMPORT-01")
 
@@ -2277,12 +1888,7 @@ add_executable(phase6_regression_tests tests/test_phase6_regression_fixtures.cpp
 target_link_libraries(phase6_regression_tests PRIVATE
     hydra_game_catalog hydra_provider_launch_plan hydra_plan_preflight
     hydra_two_player_setup_editor hydra_setup_package)
-if(MSVC)
-    target_compile_options(phase6_regression_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(phase6_regression_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(phase6_regression_tests)
 add_test(NAME Phase6RegressionTests COMMAND phase6_regression_tests)
 set_tests_properties(Phase6RegressionTests PROPERTIES LABELS "P6-REG-01")
 
@@ -2290,12 +1896,7 @@ set_tests_properties(Phase6RegressionTests PROPERTIES LABELS "P6-REG-01")
 # malformed-version rejection, and account-reference redaction tests.
 add_executable(profile_cli_tests tests/test_profile_cli.cpp)
 target_link_libraries(profile_cli_tests PRIVATE hydra_profile_cli)
-if(MSVC)
-    target_compile_options(profile_cli_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(profile_cli_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(profile_cli_tests)
 add_test(NAME ProfileCliTests COMMAND profile_cli_tests)
 set_tests_properties(ProfileCliTests PROPERTIES LABELS "P6-CLI-01")
 
@@ -2303,135 +1904,116 @@ set_tests_properties(ProfileCliTests PROPERTIES LABELS "P6-CLI-01")
 # malformed/future/bounds, and Phase 5 session-metrics adapter fixtures.
 add_executable(compatibility_result_tests tests/test_compatibility_result.cpp)
 target_link_libraries(compatibility_result_tests PRIVATE hydra_compatibility_result)
-if(MSVC)
-    target_compile_options(compatibility_result_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(compatibility_result_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(compatibility_result_tests)
 add_test(NAME CompatibilityResultTests COMMAND compatibility_result_tests)
 set_tests_properties(CompatibilityResultTests PROPERTIES LABELS "P9-SDK-01")
 
 add_executable(compatibility_aggregation_tests tests/test_compatibility_aggregation.cpp)
 target_link_libraries(compatibility_aggregation_tests PRIVATE hydra_compatibility_result)
-if(MSVC)
-    target_compile_options(compatibility_aggregation_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(compatibility_aggregation_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(compatibility_aggregation_tests)
 add_test(NAME CompatibilityAggregationTests COMMAND compatibility_aggregation_tests)
 set_tests_properties(CompatibilityAggregationTests PROPERTIES LABELS "P9-CAP-01")
 
 add_executable(artifact_trust_tests tests/test_artifact_trust.cpp)
 target_link_libraries(artifact_trust_tests PRIVATE hydra_artifact_trust)
-if(MSVC)
-    target_compile_options(artifact_trust_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(artifact_trust_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(artifact_trust_tests)
 add_test(NAME ArtifactTrustTests COMMAND artifact_trust_tests)
 set_tests_properties(ArtifactTrustTests PROPERTIES LABELS "P8-TRUST-01")
 
 add_executable(community_package_tests tests/test_community_package.cpp)
 target_link_libraries(community_package_tests PRIVATE hydra_community_package)
-if(MSVC)
-    target_compile_options(community_package_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(community_package_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(community_package_tests)
 add_test(NAME CommunityPackageTests COMMAND community_package_tests)
 set_tests_properties(CommunityPackageTests PROPERTIES LABELS "P9-PKG-01")
 
 add_executable(community_setup_tests tests/test_community_setup.cpp)
 target_link_libraries(community_setup_tests PRIVATE hydra_community_package)
-if(MSVC)
-    target_compile_options(community_setup_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(community_setup_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(community_setup_tests)
 add_test(NAME CommunitySetupTests COMMAND community_setup_tests)
 set_tests_properties(CommunitySetupTests PROPERTIES LABELS "P9-PROFILE-01")
 
 add_executable(compatibility_catalog_tests tests/test_compatibility_catalog.cpp)
 target_link_libraries(compatibility_catalog_tests PRIVATE hydra_community_package)
-if(MSVC)
-    target_compile_options(compatibility_catalog_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(compatibility_catalog_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(compatibility_catalog_tests)
 add_test(NAME CompatibilityCatalogTests COMMAND compatibility_catalog_tests)
 set_tests_properties(CompatibilityCatalogTests PROPERTIES LABELS "P9-REG-01")
 
 add_executable(catalog_cache_tests tests/test_catalog_cache.cpp)
 target_link_libraries(catalog_cache_tests PRIVATE hydra_catalog_cache)
-if(MSVC)
-    target_compile_options(catalog_cache_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(catalog_cache_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(catalog_cache_tests)
 add_test(NAME CatalogCacheTests COMMAND catalog_cache_tests)
 set_tests_properties(CatalogCacheTests PROPERTIES LABELS "P8-DATA-01")
 
 add_executable(support_bundle_tests tests/test_support_bundle.cpp)
 target_link_libraries(support_bundle_tests PRIVATE hydra_support_bundle)
-if(MSVC)
-    target_compile_options(support_bundle_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(support_bundle_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(support_bundle_tests)
 add_test(NAME SupportBundleTests COMMAND support_bundle_tests)
 set_tests_properties(SupportBundleTests PROPERTIES LABELS "P8-DIAG-01")
 
 add_executable(privilege_broker_tests tests/test_privilege_broker.cpp)
 target_link_libraries(privilege_broker_tests PRIVATE hydra_privilege_broker)
-if(MSVC)
-    target_compile_options(privilege_broker_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(privilege_broker_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(privilege_broker_tests)
 add_test(NAME PrivilegeBrokerTests COMMAND privilege_broker_tests)
 set_tests_properties(PrivilegeBrokerTests PROPERTIES LABELS "P8-PRIV-01")
 
 add_executable(startup_policy_tests tests/test_startup_policy.cpp)
 target_link_libraries(startup_policy_tests PRIVATE hydra_startup_policy)
-if(MSVC)
-    target_compile_options(startup_policy_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(startup_policy_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(startup_policy_tests)
 add_test(NAME StartupPolicyTests COMMAND startup_policy_tests)
 set_tests_properties(StartupPolicyTests PROPERTIES LABELS "P8-BOOT-01")
 
+add_executable(installer_transaction_tests tests/test_installer_transaction.cpp)
+target_link_libraries(installer_transaction_tests PRIVATE hydra_installer_transaction)
+hydra_enable_strict_warnings(installer_transaction_tests)
+add_test(NAME InstallerTransactionTests COMMAND installer_transaction_tests)
+set_tests_properties(InstallerTransactionTests PROPERTIES LABELS "P8-INST-01")
+
+add_executable(update_transaction_tests tests/test_update_transaction.cpp)
+target_link_libraries(update_transaction_tests PRIVATE hydra_update_transaction)
+hydra_enable_strict_warnings(update_transaction_tests)
+add_test(NAME UpdateTransactionTests COMMAND update_transaction_tests)
+set_tests_properties(UpdateTransactionTests PROPERTIES LABELS "P8-UPD-01")
+
+if(Python3_Interpreter_FOUND)
+    add_test(NAME ReleaseSigningManifestTests
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_release_signing_manifest.py"
+                     --self-test)
+    set_tests_properties(ReleaseSigningManifestTests PROPERTIES LABELS "P8-SIGN-01")
+    add_test(NAME ReleaseInstallerContractTests
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_release_installer_contract.py"
+                     --self-test)
+    set_tests_properties(ReleaseInstallerContractTests PROPERTIES
+        LABELS "P8-SIGN-01;P8-INST-01")
+endif()
+if(WIN32 AND HYDRA_POWERSHELL_EXECUTABLE)
+    add_test(NAME ReleasePowerShellSyntaxTests
+             COMMAND "${HYDRA_POWERSHELL_EXECUTABLE}"
+                     -NoProfile -ExecutionPolicy Bypass
+                     -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_release_powershell_syntax.ps1"
+                     -RepositoryRoot "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(ReleasePowerShellSyntaxTests PROPERTIES
+        LABELS "P8-SIGN-01;P8-INST-01")
+endif()
+
 add_executable(community_submission_tests tests/test_community_submission.cpp)
 target_link_libraries(community_submission_tests PRIVATE hydra_community_submission)
-if(MSVC)
-    target_compile_options(community_submission_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(community_submission_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(community_submission_tests)
 add_test(NAME CommunitySubmissionTests COMMAND community_submission_tests)
 set_tests_properties(CommunitySubmissionTests PROPERTIES LABELS "P9-RPC-01")
 
 add_executable(compatibility_share_model_tests tests/test_compatibility_share_model.cpp)
 target_link_libraries(compatibility_share_model_tests PRIVATE hydra_community_submission)
-if(MSVC)
-    target_compile_options(compatibility_share_model_tests PRIVATE /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(compatibility_share_model_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(compatibility_share_model_tests)
 add_test(NAME CompatibilityShareModelTests COMMAND compatibility_share_model_tests)
 set_tests_properties(CompatibilityShareModelTests PROPERTIES LABELS "P9-DIAG-01")
+
+add_executable(compatibility_local_store_tests tests/test_compatibility_local_store.cpp)
+target_link_libraries(compatibility_local_store_tests PRIVATE hydra_community_submission)
+hydra_enable_strict_warnings(compatibility_local_store_tests)
+add_test(NAME CompatibilityLocalStoreTests COMMAND compatibility_local_store_tests)
+set_tests_properties(CompatibilityLocalStoreTests PROPERTIES LABELS "P10-PRIV-01")
 
 # P3-HW-01 acceptance tooling is CI-tested without claiming physical acceptance.
 # Python parses bounded synthetic evidence; Windows additionally checks that the
@@ -2441,6 +2023,8 @@ if(Python3_Interpreter_FOUND)
              COMMAND "${Python3_EXECUTABLE}"
                      "${CMAKE_CURRENT_SOURCE_DIR}/tools/summarize_phase3_trace.py"
                      --self-test)
+    set_tests_properties(Phase3HardwareAcceptanceParserTests PROPERTIES
+        LABELS "P3-HW-01")
 endif()
 if(WIN32 AND HYDRA_POWERSHELL_EXECUTABLE)
     add_test(NAME Phase3HardwareAcceptanceRunnerSelfTest
@@ -2448,6 +2032,8 @@ if(WIN32 AND HYDRA_POWERSHELL_EXECUTABLE)
                      -NoProfile -ExecutionPolicy Bypass
                      -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/run_phase3_hardware_acceptance.ps1"
                      -SelfTest)
+    set_tests_properties(Phase3HardwareAcceptanceRunnerSelfTest PROPERTIES
+        LABELS "P3-HW-01")
 endif()
 
 # C ABI adapter tests exercise independent process-local contexts and
@@ -2457,9 +2043,7 @@ add_executable(gate_c_adapter_tests
 )
 target_link_libraries(gate_c_adapter_tests PRIVATE hydra_gate_c_adapter)
 hydra_set_gate_c_output(gate_c_adapter_tests)
-if(MSVC)
-    target_compile_options(gate_c_adapter_tests PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(gate_c_adapter_tests)
 add_test(NAME GateCAdapterTests COMMAND gate_c_adapter_tests)
 
 add_executable(gate_c_xinput_adapter_tests
@@ -2468,13 +2052,7 @@ add_executable(gate_c_xinput_adapter_tests
 target_link_libraries(gate_c_xinput_adapter_tests PRIVATE
     hydra_gate_c_adapter)
 hydra_set_gate_c_output(gate_c_xinput_adapter_tests)
-if(MSVC)
-    target_compile_options(gate_c_xinput_adapter_tests PRIVATE
-        /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(gate_c_xinput_adapter_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(gate_c_xinput_adapter_tests)
 add_test(NAME GateCXInputAdapterTests COMMAND gate_c_xinput_adapter_tests)
 
 add_executable(gate_c_adapter_c_smoke
@@ -2498,9 +2076,7 @@ hydra_set_gate_c_output(gate_c_polling_shim_tests)
 if(WIN32)
     target_link_libraries(gate_c_polling_shim_tests PRIVATE User32.lib)
 endif()
-if(MSVC)
-    target_compile_options(gate_c_polling_shim_tests PRIVATE /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(gate_c_polling_shim_tests)
 add_test(NAME GateCPollingShimTests COMMAND gate_c_polling_shim_tests)
 
 add_executable(gate_c_cursor_focus_shim_tests
@@ -2510,10 +2086,7 @@ target_link_libraries(gate_c_cursor_focus_shim_tests PRIVATE
     hydra_gate_c_shim_support
 )
 hydra_set_gate_c_output(gate_c_cursor_focus_shim_tests)
-if(MSVC)
-    target_compile_options(gate_c_cursor_focus_shim_tests PRIVATE
-        /W4 /permissive-)
-endif()
+hydra_enable_strict_warnings(gate_c_cursor_focus_shim_tests)
 add_test(NAME GateCCursorFocusShimTests
          COMMAND gate_c_cursor_focus_shim_tests)
 
@@ -2524,13 +2097,7 @@ target_link_libraries(gate_c_raw_input_shim_tests PRIVATE
     hydra_gate_c_shim_support
 )
 hydra_set_gate_c_output(gate_c_raw_input_shim_tests)
-if(MSVC)
-    target_compile_options(gate_c_raw_input_shim_tests PRIVATE
-        /W4 /permissive-)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(gate_c_raw_input_shim_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-endif()
+hydra_enable_strict_warnings(gate_c_raw_input_shim_tests)
 add_test(NAME GateCRawInputShimTests
          COMMAND gate_c_raw_input_shim_tests)
 
@@ -2612,19 +2179,22 @@ if(WIN32)
         NAME GateCProcessSelfTest
         COMMAND hydra_gate_c_host --self-test --target $<TARGET_FILE:hydra_gate_c_target>
     )
-    set_tests_properties(GateCProcessSelfTest PROPERTIES TIMEOUT 45)
+    set_tests_properties(GateCProcessSelfTest PROPERTIES
+        TIMEOUT 45 LABELS "P3-PROC-01")
 
     add_test(
         NAME GateCProtocolErrorSelfTest
         COMMAND hydra_gate_c_host --protocol-error-self-test --target $<TARGET_FILE:hydra_gate_c_target>
     )
-    set_tests_properties(GateCProtocolErrorSelfTest PROPERTIES TIMEOUT 30)
+    set_tests_properties(GateCProtocolErrorSelfTest PROPERTIES
+        TIMEOUT 30 LABELS "P3-IPC-01")
 
     add_test(
         NAME GateCApiProbeProcessSelfTest
         COMMAND hydra_gate_c_host --baseline-self-test --target $<TARGET_FILE:hydra_gate_c_api_probe>
     )
-    set_tests_properties(GateCApiProbeProcessSelfTest PROPERTIES TIMEOUT 60)
+    set_tests_properties(GateCApiProbeProcessSelfTest PROPERTIES
+        TIMEOUT 60 LABELS "P3-API-01")
 
     add_test(
         NAME GateCPollingShimProcessSelfTest
@@ -2632,7 +2202,8 @@ if(WIN32)
                 --target $<TARGET_FILE:hydra_gate_c_api_probe>
                 --shim $<TARGET_FILE:hydra_gate_c_shim>
     )
-    set_tests_properties(GateCPollingShimProcessSelfTest PROPERTIES TIMEOUT 75)
+    set_tests_properties(GateCPollingShimProcessSelfTest PROPERTIES
+        TIMEOUT 75 LABELS "P3-API-02")
 
     add_test(
         NAME GateCCursorFocusShimProcessSelfTest
@@ -2640,7 +2211,8 @@ if(WIN32)
                 --target $<TARGET_FILE:hydra_gate_c_api_probe>
                 --shim $<TARGET_FILE:hydra_gate_c_shim>
     )
-    set_tests_properties(GateCCursorFocusShimProcessSelfTest PROPERTIES TIMEOUT 75)
+    set_tests_properties(GateCCursorFocusShimProcessSelfTest PROPERTIES
+        TIMEOUT 75 LABELS "P3-API-03")
 
     add_test(
         NAME GateCRawInputShimProcessSelfTest
@@ -2648,14 +2220,17 @@ if(WIN32)
                 --target $<TARGET_FILE:hydra_gate_c_api_probe>
                 --shim $<TARGET_FILE:hydra_gate_c_shim>
     )
-    set_tests_properties(GateCRawInputShimProcessSelfTest PROPERTIES TIMEOUT 75)
+    set_tests_properties(GateCRawInputShimProcessSelfTest PROPERTIES
+        TIMEOUT 75 LABELS "P3-RAW-02")
 
     add_test(
         NAME GateCXInputProcessSelfTest
         COMMAND hydra_gate_c_host --xinput-self-test
                 --target $<TARGET_FILE:hydra_gate_c_api_probe>
     )
-    set_tests_properties(GateCXInputProcessSelfTest PROPERTIES TIMEOUT 75)
+    set_tests_properties(GateCXInputProcessSelfTest PROPERTIES
+        TIMEOUT 75 LABELS "P3-CTRL-01")
 else()
     add_test(NAME GateCHostPortableSelfTest COMMAND hydra_gate_c_host --self-test)
+    set_tests_properties(GateCHostPortableSelfTest PROPERTIES LABELS "P3-PROC-01")
 endif()

@@ -1,7 +1,9 @@
 #include "hydra/gui_win32.hpp"
+#include "hydra/game_runtime_requirement_resolver.hpp"
 #include "hydra/hid_usage.hpp"
 #include "hydra/launcher_win32.hpp"
 #include "hydra/raw_input_utils.hpp"
+#include "hydra/seat_assignment_projection.hpp"
 
 #ifdef _WIN32
 #include <algorithm>
@@ -16,12 +18,29 @@ namespace hydra {
 
 // Diagnostic log file for debugging handle mapping
 static std::wofstream g_diagLog;
+constexpr std::streamoff kMaximumDiagnosticLogBytes = 1024 * 1024;
+
+static bool diagnosticLoggingRequested() {
+    wchar_t value[8]{};
+    const DWORD length = GetEnvironmentVariableW(
+        L"HYDRASEAT_DIAGNOSTICS", value, static_cast<DWORD>(std::size(value)));
+    return length == 1u && value[0] == L'1';
+}
+
+static bool diagnosticBudgetAvailable() {
+    if (!g_diagLog.is_open()) return false;
+    const auto position = g_diagLog.tellp();
+    if (position >= 0 && position < kMaximumDiagnosticLogBytes) return true;
+    g_diagLog << L"[TRUNCATED] Diagnostic retention limit reached.\n";
+    g_diagLog.close();
+    return false;
+}
 
 static void openDiagLog() {
     if (!g_diagLog.is_open()) {
         g_diagLog.open("hydraseat_debug.log", std::ios::out | std::ios::trunc);
         if (g_diagLog.is_open()) {
-            g_diagLog << L"=== HydraSeat Diagnostic Log ===" << std::endl;
+            g_diagLog << L"=== HydraSeat explicit redacted diagnostic log ===" << std::endl;
         }
     }
 }
@@ -47,6 +66,21 @@ static std::string utf8FromWide(std::wstring_view value) {
                             value.data(), static_cast<int>(value.size()),
                             result.data(), required, nullptr, nullptr) != required) {
         return {};
+    }
+    return result;
+}
+
+static std::wstring wideFromUtf8(std::string_view value) {
+    if (value.empty()) return {};
+    const int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                              value.data(), static_cast<int>(value.size()),
+                                              nullptr, 0);
+    if (required <= 0) return L"Runtime operation failed.";
+    std::wstring result(static_cast<std::size_t>(required), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                            value.data(), static_cast<int>(value.size()),
+                            result.data(), required) != required) {
+        return L"Runtime operation failed.";
     }
     return result;
 }
@@ -94,7 +128,6 @@ static Win32App* g_appInstance = nullptr;
 #define ID_BTN_LOAD_PROF  1006
 #define ID_BTN_ISOLATION  1007
 #define ID_BTN_GATE_C     1008
-#define ID_BTN_START_SESSION 1009
 #define ID_BTN_STOP_SESSION 1010
 #define ID_BTN_RECONFIGURE 1011
 #define ID_BTN_GAME_LIBRARY 1012
@@ -163,12 +196,21 @@ LRESULT CALLBACK Win32App::DeviceTileProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
     if (uMsg == WM_RBUTTONUP) {
         if (tile && g_appInstance && tile->type == DeviceCategory::Display &&
             tile->owner != PartitionOwner::Pool) {
+            if (!g_appInstance->configurationEditingAllowed()) {
+                MessageBeep(MB_ICONWARNING);
+                return 0;
+            }
+            const bool changed = !tile->isPrimaryDisplay;
             for (auto& candidate : g_appInstance->m_deviceTiles) {
                 if (candidate && candidate->type == DeviceCategory::Display &&
                     candidate->owner == tile->owner) {
                     candidate->isPrimaryDisplay = (candidate.get() == tile);
                     InvalidateRect(candidate->hwndControl, nullptr, FALSE);
                 }
+            }
+            if (changed) {
+                g_appInstance->m_profileOutOfSync = true;
+                g_appInstance->updateControlSurfaceUi();
             }
         }
         return 0;
@@ -358,6 +400,10 @@ void Win32App::dropTileAtScreenPos(VisualDeviceTile* tile, POINT screenPt) {
     }
 
     layoutDeviceTiles();
+    if (oldOwner != tile->owner) {
+        m_profileOutOfSync = true;
+        updateControlSurfaceUi();
+    }
 }
 
 bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
@@ -401,7 +447,7 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
 
     m_hwnd = CreateWindowExW(
         0, L"HydraSeatMainWindowClass",
-        L"HydraSeat - Seat Composition Control Center",
+        L"HydraSeat - Setup & Diagnostics",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 980, 750,
         NULL, NULL, hInstance, NULL
@@ -418,12 +464,13 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
     if (!m_inputRouter.initialize(reinterpret_cast<uint64_t>(m_hwnd))) {
         return false;
     }
+    if (diagnosticLoggingRequested()) openDiagLog();
     m_inputRouter.setDeviceChangeCallback([this](const RawInputDeviceChange& change) {
-        if (g_diagLog.is_open()) {
+        if (diagnosticBudgetAvailable()) {
             g_diagLog << L"[DEVICE-CHANGE] "
                       << (change.kind == RawInputDeviceChangeKind::Arrival ? L"arrival" : L"removal")
-                      << L" id=" << change.device.deviceId
-                      << L" path=" << change.device.devicePath << std::endl;
+                      << L" raw-type=" << change.device.rawDevType
+                      << std::endl;
         }
         refreshHardware();
     });
@@ -434,8 +481,10 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
     SetTimer(m_hwnd, TIMER_FLASH_RESET, 50, NULL);
     SetTimer(m_hwnd, TIMER_HOST_REFRESH, 1000, NULL);
 
-    ShowWindow(m_hwnd, nCmdShow);
-    UpdateWindow(m_hwnd);
+    (void)nCmdShow;
+    // The legacy device-composition console is an explicit Setup/Diagnostics
+    // surface. HydraSeat.exe opens the game-first launcher from run().
+    ShowWindow(m_hwnd, SW_HIDE);
     return true;
 }
 
@@ -443,14 +492,13 @@ void Win32App::triggerDeviceFlash(uintptr_t handle, const std::wstring& devPath,
     uint64_t now = GetTickCount64();
 
     // Log every raw input event for debugging
-    if (g_diagLog.is_open()) {
+    if (diagnosticBudgetAvailable()) {
         static uint64_t lastLogTime = 0;
         if (now - lastLogTime > 100) { // Throttle logging to max 10/sec
             const wchar_t* typeStr = (rawDevType == RIM_TYPEKEYBOARD) ? L"KBD" :
                                      (rawDevType == RIM_TYPEMOUSE) ? L"MOUSE" :
                                      (rawDevType == RIM_TYPEHID) ? L"HID" : L"UNK";
-            g_diagLog << L"[INPUT] handle=0x" << std::hex << handle << std::dec
-                      << L" type=" << typeStr
+            g_diagLog << L"[INPUT] type=" << typeStr
                       << L" isTouchpad=" << isTouchpad
                       << L" mapped=" << (m_handleToTileIndex.count(handle) > 0 ? L"YES" : L"NO");
             if (m_handleToTileIndex.count(handle) > 0) {
@@ -492,8 +540,8 @@ void Win32App::triggerDeviceFlash(uintptr_t handle, const std::wstring& devPath,
                 if (handle != 0) {
                     m_handleToTileIndex[handle] = tIdx;
                     if (g_diagLog.is_open()) {
-                        g_diagLog << L"[CACHE] handle=0x" << std::hex << handle << std::dec
-                                  << L" -> tile[" << tIdx << L"] " << tilePtr->displayLabel << std::endl;
+                        g_diagLog << L"[CACHE] mapped -> tile[" << tIdx << L"] "
+                                  << tilePtr->displayLabel << std::endl;
                     }
                 }
                 return;
@@ -507,14 +555,15 @@ void Win32App::triggerDeviceFlash(uintptr_t handle, const std::wstring& devPath,
         const wchar_t* typeStr = (rawDevType == RIM_TYPEKEYBOARD) ? L"KBD" :
                                  (rawDevType == RIM_TYPEMOUSE) ? L"MOUSE" :
                                  (rawDevType == RIM_TYPEHID) ? L"HID" : L"UNK";
-        g_diagLog << L"[FALLBACK] handle=0x" << std::hex << handle << std::dec
-                  << L" type=" << typeStr << L" isTouchpad=" << isTouchpad << std::endl;
+        g_diagLog << L"[FALLBACK] type=" << typeStr
+                  << L" isTouchpad=" << isTouchpad << std::endl;
     }
 }
 
 void Win32App::setupUI() {
-    // Header Label
-    HWND header = CreateWindowExW(0, L"STATIC", L"HydraSeat Multiseat Control Center",
+    // Secondary hardware/recovery surface. Normal users should return to Games
+    // instead of treating this window as the product's primary launcher.
+    HWND header = CreateWindowExW(0, L"STATIC", L"Setup & Diagnostics",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         20, 15, 420, 30, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
@@ -523,13 +572,13 @@ void Win32App::setupUI() {
         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     SendMessageW(header, WM_SETFONT, (WPARAM)hFontHeader, TRUE);
 
-    // Save Profile Button
-    m_saveProfileBtn = CreateWindowExW(0, L"BUTTON", L"Save Profile",
+    // Persist and apply the current Seat hardware assignment.
+    m_saveProfileBtn = CreateWindowExW(0, L"BUTTON", L"Apply Setup",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         450, 15, 110, 32, m_hwnd, (HMENU)ID_BTN_SAVE_PROF, GetModuleHandle(NULL), NULL);
 
-    // Load Profile Button
-    m_loadProfileBtn = CreateWindowExW(0, L"BUTTON", L"Load Profile",
+    // Reload the last committed hardware assignment.
+    m_loadProfileBtn = CreateWindowExW(0, L"BUTTON", L"Reload Setup",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         570, 15, 110, 32, m_hwnd, (HMENU)ID_BTN_LOAD_PROF, GetModuleHandle(NULL), NULL);
 
@@ -538,7 +587,7 @@ void Win32App::setupUI() {
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         690, 15, 90, 32, m_hwnd, (HMENU)ID_BTN_REFRESH, GetModuleHandle(NULL), NULL);
 
-    m_gameLibraryBtn = CreateWindowExW(0, L"BUTTON", L"Games",
+    m_gameLibraryBtn = CreateWindowExW(0, L"BUTTON", L"Back to Games",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         790, 15, 140, 32, m_hwnd, (HMENU)ID_BTN_GAME_LIBRARY,
         GetModuleHandle(NULL), NULL);
@@ -561,20 +610,18 @@ void Win32App::setupUI() {
         0, L"STATIC", L"Runtime: host state unknown",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         20, 52, 410, 24, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-    m_startSessionBtn = CreateWindowExW(
-        0, L"BUTTON", L"Start",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        450, 50, 100, 28, m_hwnd, (HMENU)ID_BTN_START_SESSION, GetModuleHandle(NULL), NULL);
+    // Starting a split session belongs to the validated Games -> Play path.
+    // This secondary surface retains only recovery/reconfiguration controls so
+    // it cannot bypass provider plan/preflight.
     m_stopSessionBtn = CreateWindowExW(
         0, L"BUTTON", L"Stop / Return to Windows",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        560, 50, 190, 28, m_hwnd, (HMENU)ID_BTN_STOP_SESSION, GetModuleHandle(NULL), NULL);
+        450, 50, 210, 28, m_hwnd, (HMENU)ID_BTN_STOP_SESSION, GetModuleHandle(NULL), NULL);
     m_reconfigureBtn = CreateWindowExW(
         0, L"BUTTON", L"Reconfigure",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        760, 50, 120, 28, m_hwnd, (HMENU)ID_BTN_RECONFIGURE, GetModuleHandle(NULL), NULL);
+        670, 50, 120, 28, m_hwnd, (HMENU)ID_BTN_RECONFIGURE, GetModuleHandle(NULL), NULL);
     SendMessageW(m_runtimeStatusLabel, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_startSessionBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
     SendMessageW(m_stopSessionBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
     SendMessageW(m_reconfigureBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
 
@@ -583,11 +630,11 @@ void Win32App::setupUI() {
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
         20, 110, 290, 510, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
-    m_p1Group = CreateWindowExW(0, L"BUTTON", L"Player 1 Seat",
+    m_p1Group = CreateWindowExW(0, L"BUTTON", L"Seat 1 Hardware",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
         330, 110, 290, 510, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
-    m_p2Group = CreateWindowExW(0, L"BUTTON", L"Player 2 Seat",
+    m_p2Group = CreateWindowExW(0, L"BUTTON", L"Seat 2 Hardware",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
         640, 110, 290, 510, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
@@ -598,17 +645,17 @@ void Win32App::setupUI() {
     SendMessageW(m_p1Group, WM_SETFONT, (WPARAM)hFontBold, TRUE);
     SendMessageW(m_p2Group, WM_SETFONT, (WPARAM)hFontBold, TRUE);
 
-    // Isolation Toggle Button
+    // Phase 3 labs are developer diagnostics, not ordinary Seat setup. Keep the
+    // controls present for explicit diagnostics sessions but hide them otherwise.
+    const DWORD diagnosticVisibility = diagnosticLoggingRequested() ? WS_VISIBLE : 0u;
     m_isolationBtn = CreateWindowExW(0, L"BUTTON", L"Diagnostic Intent: OFF",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        WS_CHILD | diagnosticVisibility | BS_PUSHBUTTON,
         20, 642, 285, 42, m_hwnd, (HMENU)ID_BTN_ISOLATION, GetModuleHandle(NULL), NULL);
-
-    // Phase 3 development harnesses.
     m_launchBtn = CreateWindowExW(0, L"BUTTON", L"Gate A/B Input Lab",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        WS_CHILD | diagnosticVisibility | BS_PUSHBUTTON,
         322, 642, 285, 42, m_hwnd, (HMENU)ID_BTN_LAUNCH, GetModuleHandle(NULL), NULL);
     m_gateCBtn = CreateWindowExW(0, L"BUTTON", L"Gate C Process Lab",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        WS_CHILD | diagnosticVisibility | BS_PUSHBUTTON,
         624, 642, 306, 42, m_hwnd, (HMENU)ID_BTN_GATE_C, GetModuleHandle(NULL), NULL);
 
     HFONT hFontBtn = CreateFontW(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
@@ -663,6 +710,10 @@ void Win32App::layoutDeviceTiles() {
 }
 
 void Win32App::refreshHardware() {
+    WorkspaceManager pendingProfile;
+    const bool restorePendingProfile = m_profileOutOfSync && !m_deviceTiles.empty() &&
+                                       captureWorkspaceFromTiles(pendingProfile);
+
     m_displays = m_hardwareDetector.detectDisplays();
     m_keyboards = m_hardwareDetector.detectKeyboards();
     m_mice = m_hardwareDetector.detectMice();
@@ -779,7 +830,6 @@ void Win32App::refreshHardware() {
     // Map every Raw Input handle to the matching physical input tile. Composite
     // collection paths are correlated through SetupAPI/ConfigMgr identities.
     // ================================================================
-    openDiagLog();
     if (g_diagLog.is_open()) {
         g_diagLog << L"\n=== TILE REGISTRY ===" << std::endl;
         for (size_t i = 0; i < m_deviceTiles.size(); i++) {
@@ -788,13 +838,8 @@ void Win32App::refreshHardware() {
                                     (m_deviceTiles[i]->type == DeviceCategory::Keyboard) ? L"KEYBOARD" :
                                     (m_deviceTiles[i]->type == DeviceCategory::Mouse) ? L"MOUSE" :
                                     (m_deviceTiles[i]->type == DeviceCategory::Touchpad) ? L"TOUCHPAD" : L"OTHER";
-            std::wstring cleanPath = m_deviceTiles[i]->devicePath;
-            cleanPath.erase(std::remove(cleanPath.begin(), cleanPath.end(), L'\0'), cleanPath.end());
             g_diagLog << L"  tile[" << i << L"] " << m_deviceTiles[i]->displayLabel
-                      << L" cat=" << catStr
-                      << L" handle=0x" << std::hex << m_deviceTiles[i]->nativeHandle << std::dec
-                      << L" id=" << m_deviceTiles[i]->deviceId
-                      << L" path=" << cleanPath << std::endl;
+                      << L" cat=" << catStr << std::endl;
         }
     }
 
@@ -828,8 +873,7 @@ void Win32App::refreshHardware() {
             if (m_handleToTileIndex.count(rawHandle) > 0) {
                 if (g_diagLog.is_open()) {
                     size_t tIdx = m_handleToTileIndex[rawHandle];
-                    g_diagLog << L"  handle=0x" << std::hex << rawHandle << std::dec
-                              << L" type=" << typeStr
+                    g_diagLog << L"  type=" << typeStr
                               << L" ALREADY -> tile[" << tIdx << L"]";
                     if (tIdx < m_deviceTiles.size() && m_deviceTiles[tIdx]) {
                         g_diagLog << L" " << m_deviceTiles[tIdx]->displayLabel;
@@ -858,23 +902,15 @@ void Win32App::refreshHardware() {
                     m_handleToTileIndex[rawHandle] = tIdx;
                     mapped = true;
                     if (g_diagLog.is_open()) {
-                        std::wstring cleanRawPath = *rawPath;
-                        cleanRawPath.erase(std::remove(cleanRawPath.begin(), cleanRawPath.end(), L'\0'), cleanRawPath.end());
-                        g_diagLog << L"  handle=0x" << std::hex << rawHandle << std::dec
-                                  << L" type=" << typeStr
-                                  << L" MAPPED -> tile[" << tIdx << L"] " << tile->displayLabel
-                                  << L" path=" << cleanRawPath << std::endl;
+                        g_diagLog << L"  type=" << typeStr
+                                  << L" MAPPED -> tile[" << tIdx << L"] "
+                                  << tile->displayLabel << std::endl;
                     }
                     break;
                 }
             }
             if (!mapped && g_diagLog.is_open()) {
-                std::wstring cleanRawPath = *rawPath;
-                cleanRawPath.erase(std::remove(cleanRawPath.begin(), cleanRawPath.end(), L'\0'), cleanRawPath.end());
-                g_diagLog << L"  handle=0x" << std::hex << rawHandle << std::dec
-                          << L" type=" << typeStr
-                          << L" UNMAPPED id=" << rawStableId
-                          << L" path=" << cleanRawPath << std::endl;
+                g_diagLog << L"  type=" << typeStr << L" UNMAPPED" << std::endl;
             }
         }
     } else if (g_diagLog.is_open()) {
@@ -886,15 +922,49 @@ void Win32App::refreshHardware() {
         g_diagLog << L"\n=== FINAL HANDLE MAP (" << m_handleToTileIndex.size() << L" entries) ===" << std::endl;
         for (auto& [h, idx] : m_handleToTileIndex) {
             if (idx < m_deviceTiles.size() && m_deviceTiles[idx]) {
-                g_diagLog << L"  0x" << std::hex << h << std::dec
-                          << L" -> tile[" << idx << L"] " << m_deviceTiles[idx]->displayLabel << std::endl;
+                (void)h;
+                g_diagLog << L"  mapped -> tile[" << idx << L"] "
+                          << m_deviceTiles[idx]->displayLabel << std::endl;
             }
         }
         g_diagLog << L"\n=== READY FOR INPUT ===" << std::endl;
         g_diagLog.flush();
     }
 
-    layoutDeviceTiles();
+    if (restorePendingProfile) {
+        // Preserve unsaved local edits across Refresh/hot-plug without claiming
+        // that those edits have already been committed to the host or disk.
+        applyWorkspaceProfileToTiles(&pendingProfile);
+    } else if (m_workspaceManager.getAllSeats().empty()) {
+        layoutDeviceTiles();
+    } else {
+        // Rebuilds caused by Refresh or hot-plug must not erase the persisted
+        // Seat presentation. Newly discovered devices remain in the Pool.
+        applyWorkspaceProfileToTiles();
+    }
+}
+
+bool Win32App::captureWorkspaceFromTiles(WorkspaceManager& candidate) const {
+    std::vector<VisibleSeatDeviceAssignment> visible;
+    visible.reserve(m_deviceTiles.size());
+    for (const auto& tile : m_deviceTiles) {
+        if (!tile) continue;
+        VisibleSeatDeviceAssignment assignment;
+        switch (tile->type) {
+        case DeviceCategory::Display: assignment.type = SeatDeviceType::Display; break;
+        case DeviceCategory::Keyboard: assignment.type = SeatDeviceType::Keyboard; break;
+        case DeviceCategory::Mouse:
+        case DeviceCategory::Touchpad: assignment.type = SeatDeviceType::Mouse; break;
+        case DeviceCategory::Gamepad: assignment.type = SeatDeviceType::Controller; break;
+        }
+        assignment.stableId = tile->deviceId.empty() ? tile->devicePath : tile->deviceId;
+        assignment.seatId = tile->owner == PartitionOwner::Player1 ? 1u
+                          : tile->owner == PartitionOwner::Player2 ? 2u : 0u;
+        assignment.primaryDisplay = tile->type == DeviceCategory::Display &&
+                                    tile->isPrimaryDisplay;
+        visible.push_back(std::move(assignment));
+    }
+    return projectVisibleSeatAssignments(m_workspaceManager, visible, candidate);
 }
 
 void Win32App::saveWorkspaceProfile() {
@@ -904,74 +974,63 @@ void Win32App::saveWorkspaceProfile() {
             L"HydraSeat Runtime", MB_OK | MB_ICONWARNING);
         return;
     }
-    const SeatId previousManagementSeat = m_workspaceManager.managementSeatId();
-    m_workspaceManager = WorkspaceManager{};
-    const SeatId seat1 = m_workspaceManager.createSeat(L"Player 1");
-    const SeatId seat2 = m_workspaceManager.createSeat(L"Player 2");
-    if (previousManagementSeat == seat2) {
-        (void)m_workspaceManager.setManagementSeatId(seat2);
-    }
-
-    const auto assignTile = [this](SeatId seatId, const VisualDeviceTile& tile) {
-        const std::wstring& stableId = tile.deviceId.empty() ? tile.devicePath : tile.deviceId;
-        if (stableId.empty()) return false;
-        switch (tile.type) {
-        case DeviceCategory::Display:
-            return m_workspaceManager.assignDisplay(seatId, stableId, tile.isPrimaryDisplay);
-        case DeviceCategory::Keyboard:
-            return m_workspaceManager.assignKeyboard(seatId, stableId);
-        case DeviceCategory::Mouse:
-        case DeviceCategory::Touchpad:
-            return m_workspaceManager.assignMouse(seatId, stableId);
-        case DeviceCategory::Gamepad:
-            return m_workspaceManager.assignController(seatId, stableId);
-        }
-        return false;
-    };
-
-    bool valid = true;
-    for (const auto& tilePtr : m_deviceTiles) {
-        if (!tilePtr || tilePtr->owner == PartitionOwner::Pool) continue;
-        const SeatId seatId = tilePtr->owner == PartitionOwner::Player1 ? seat1 : seat2;
-        valid = assignTile(seatId, *tilePtr) && valid;
-    }
-
-    for (const SeatId seatId : {seat1, seat2}) {
-        const auto* seat = m_workspaceManager.getSeat(seatId);
-        if (seat && !seat->displayIds.empty() && !seat->primaryDisplayId) {
-            valid = m_workspaceManager.setPrimaryDisplay(seatId, seat->displayIds.front()) && valid;
-        }
-    }
-
-    if (!valid) {
+    WorkspaceManager candidate;
+    if (!captureWorkspaceFromTiles(candidate)) {
         MessageBoxW(m_hwnd,
             L"One or more devices could not be assigned. A physical device may only belong to one Seat unless explicitly shareable.",
             L"HydraSeat Seat Manager", MB_OK | MB_ICONERROR);
         return;
     }
 
-    if (m_workspaceManager.saveToFile("workspace_config.json")) {
-        MessageBoxW(m_hwnd,
-            L"Seat assignments saved to workspace_config.json.\n\nTip: right-click a display tile inside a Seat to mark it PRIMARY.",
-            L"HydraSeat Seat Manager", MB_OK | MB_ICONINFORMATION);
-    } else {
-        MessageBoxW(m_hwnd, L"Could not save workspace_config.json.",
+    if (!candidate.saveToFile("workspace_config.json")) {
+        MessageBoxW(m_hwnd, L"Could not save workspace_config.json. The previously loaded Seat model was left unchanged.",
                     L"HydraSeat Seat Manager", MB_OK | MB_ICONERROR);
+        return;
     }
+
+    m_workspaceManager = std::move(candidate);
+    applyWorkspaceProfileToTiles();
+    const bool hostCanAcceptProfile = m_hostClient.connected() &&
+                                      m_hostClient.role() == hostipc::ClientRole::Control;
+    if (hostCanAcceptProfile && !applyCurrentProfileToHost(false)) {
+        MessageBoxW(m_hwnd,
+            L"Seat assignments were saved locally, but the background host did not accept the new profile. The currently running host configuration was left unchanged.",
+            L"HydraSeat Seat Manager", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (!hostCanAcceptProfile) {
+        m_profileOutOfSync = true;
+        updateControlSurfaceUi();
+    }
+
+    const wchar_t* message = hostCanAcceptProfile
+        ? L"Seat assignments saved and applied to the background host.\n\nTip: right-click a display tile inside a Seat to mark it PRIMARY."
+        : L"Seat assignments saved locally. The current connection is read-only, so the background host was not reconfigured.\n\nTip: right-click a display tile inside a Seat to mark it PRIMARY.";
+    MessageBoxW(m_hwnd, message,
+        L"HydraSeat Seat Manager", MB_OK | MB_ICONINFORMATION);
 }
 
-void Win32App::applyWorkspaceProfileToTiles() {
+void Win32App::applyWorkspaceProfileToTiles(const WorkspaceManager* source) {
+    const WorkspaceManager& profile = source == nullptr ? m_workspaceManager : *source;
     for (auto& tile : m_deviceTiles) {
         if (!tile) continue;
         tile->owner = PartitionOwner::Pool;
         tile->isPrimaryDisplay = false;
     }
 
-    const auto containsId = [](const std::vector<std::wstring>& ids, const std::wstring& id) {
-        return std::find(ids.begin(), ids.end(), id) != ids.end();
+    const auto equalStableId = [](std::wstring_view left, std::wstring_view right) {
+        return left.size() == right.size() &&
+               std::equal(left.begin(), left.end(), right.begin(),
+                   [](wchar_t a, wchar_t b) {
+                       return std::towlower(a) == std::towlower(b);
+                   });
+    };
+    const auto containsId = [&](const std::vector<std::wstring>& ids, std::wstring_view id) {
+        return std::any_of(ids.begin(), ids.end(),
+            [&](const std::wstring& candidate) { return equalStableId(candidate, id); });
     };
 
-    for (const auto& seat : m_workspaceManager.getAllSeats()) {
+    for (const auto& seat : profile.getAllSeats()) {
         const PartitionOwner owner = seat.seatId == 1 ? PartitionOwner::Player1
                                       : seat.seatId == 2 ? PartitionOwner::Player2
                                                          : PartitionOwner::Pool;
@@ -990,7 +1049,7 @@ void Win32App::applyWorkspaceProfileToTiles() {
             if (assigned) {
                 tile->owner = owner;
                 tile->isPrimaryDisplay = tile->type == DeviceCategory::Display &&
-                    seat.primaryDisplayId && *seat.primaryDisplayId == stableId;
+                    seat.primaryDisplayId && equalStableId(*seat.primaryDisplayId, stableId);
             }
         }
     }
@@ -1010,43 +1069,25 @@ void Win32App::loadWorkspaceProfile() {
         return;
     }
 
-    for (auto& tile : m_deviceTiles) {
-        if (!tile) continue;
-        tile->owner = PartitionOwner::Pool;
-        tile->isPrimaryDisplay = false;
+    applyWorkspaceProfileToTiles();
+
+    const bool hostCanAcceptProfile = m_hostClient.connected() &&
+                                      m_hostClient.role() == hostipc::ClientRole::Control;
+    if (hostCanAcceptProfile && !applyCurrentProfileToHost(false)) {
+        MessageBoxW(m_hwnd,
+            L"Seat profile loaded locally, but the background host did not accept it. The currently running host configuration was left unchanged.",
+            L"HydraSeat Seat Manager", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (!hostCanAcceptProfile) {
+        m_profileOutOfSync = true;
+        updateControlSurfaceUi();
     }
 
-    const auto containsId = [](const std::vector<std::wstring>& ids, const std::wstring& id) {
-        return std::find(ids.begin(), ids.end(), id) != ids.end();
-    };
-
-    for (const auto& seat : m_workspaceManager.getAllSeats()) {
-        const PartitionOwner owner = seat.seatId == 1 ? PartitionOwner::Player1
-                                      : seat.seatId == 2 ? PartitionOwner::Player2
-                                                         : PartitionOwner::Pool;
-        if (owner == PartitionOwner::Pool) continue;
-        for (auto& tile : m_deviceTiles) {
-            if (!tile) continue;
-            const std::wstring& stableId = tile->deviceId.empty() ? tile->devicePath : tile->deviceId;
-            bool assigned = false;
-            switch (tile->type) {
-            case DeviceCategory::Display: assigned = containsId(seat.displayIds, stableId); break;
-            case DeviceCategory::Keyboard: assigned = containsId(seat.keyboardIds, stableId); break;
-            case DeviceCategory::Mouse:
-            case DeviceCategory::Touchpad: assigned = containsId(seat.mouseIds, stableId); break;
-            case DeviceCategory::Gamepad: assigned = containsId(seat.controllerIds, stableId); break;
-            }
-            if (assigned) {
-                tile->owner = owner;
-                tile->isPrimaryDisplay = tile->type == DeviceCategory::Display &&
-                    seat.primaryDisplayId && *seat.primaryDisplayId == stableId;
-            }
-        }
-    }
-
-    layoutDeviceTiles();
-    MessageBoxW(m_hwnd,
-        L"Seat profile loaded successfully. Multiple displays per Seat and primary-display selection were restored.",
+    const wchar_t* message = hostCanAcceptProfile
+        ? L"Seat profile loaded and applied to the background host."
+        : L"Seat profile loaded locally. The current connection is read-only, so the background host was not reconfigured.";
+    MessageBoxW(m_hwnd, message,
         L"HydraSeat Seat Manager", MB_OK | MB_ICONINFORMATION);
 }
 
@@ -1054,6 +1095,89 @@ bool Win32App::configurationEditingAllowed() const noexcept {
     const auto& state = m_controlSurfaceModel.state();
     return state.hostConnected && state.runtimeStateKnown && state.sessionPhase &&
            *state.sessionPhase == runtime::SeatSessionPhase::Idle;
+}
+
+bool Win32App::bootstrapBackgroundHost(std::string& error) const {
+    wchar_t modulePath[32768]{};
+    const DWORD moduleLength = GetModuleFileNameW(
+        nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
+    if (moduleLength == 0u || moduleLength >= std::size(modulePath)) {
+        error = "unable to resolve HydraSeat executable directory";
+        return false;
+    }
+
+    std::wstring directory(modulePath, moduleLength);
+    const auto separator = directory.find_last_of(L"\\/");
+    if (separator == std::wstring::npos) {
+        error = "HydraSeat executable directory has no parent separator";
+        return false;
+    }
+    directory.resize(separator + 1u);
+    const std::wstring hostPath = directory + L"hydra_host.exe";
+    const DWORD attributes = GetFileAttributesW(hostPath.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0u) {
+        error = "hydra_host.exe is not installed next to HydraSeat.exe";
+        return false;
+    }
+
+    // Start an empty authority and apply the validated local profile over IPC.
+    // Feeding the profile path to the child here would make one malformed/stale
+    // file prevent first-run recovery and configuration entirely.
+    std::wstring commandLine = L"\"" + hostPath + L"\" --serve";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (CreateProcessW(hostPath.c_str(), commandLine.data(), nullptr, nullptr, FALSE,
+                       CREATE_NO_WINDOW, nullptr, directory.c_str(), &startup, &process) == FALSE) {
+        error = "unable to start hydra_host.exe (Win32 error " +
+                std::to_string(GetLastError()) + ")";
+        return false;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+}
+
+bool Win32App::connectBackgroundHost(SeatId requestedSeat, bool allowBootstrap,
+                                     std::string& error) {
+    const auto tryControl = [&](SeatId seatId, std::uint32_t timeoutMs) {
+        m_hostClient.close();
+        return m_hostClient.connectForSeat(
+            hostipc::ClientRole::Control, seatId, timeoutMs, &error);
+    };
+
+    if (tryControl(requestedSeat, 300u)) return true;
+
+    // If a host exists but the local Management Seat hint is stale, discover the
+    // authoritative seat read-only and retry Control instead of spawning another host.
+    m_hostClient.close();
+    if (m_hostClient.connect(hostipc::ClientRole::ReadOnly, 300u, &error)) {
+        const auto snapshot = m_hostClient.getSnapshot(300u, &error);
+        if (snapshot) {
+            const SeatId authoritySeat = snapshot->managementSeatId;
+            if (tryControl(authoritySeat, 300u)) return true;
+            m_hostClient.close();
+            if (m_hostClient.connect(hostipc::ClientRole::ReadOnly, 300u, &error)) return true;
+        } else {
+            m_hostClient.close();
+        }
+        return false;
+    }
+
+    if (!allowBootstrap || !bootstrapBackgroundHost(error)) return false;
+
+    // A newly bootstrapped empty host starts with Management Seat 1. Try the
+    // persisted hint first, then Seat 1 so a saved Management Seat 2 profile can
+    // still be applied transactionally after connection.
+    constexpr unsigned kAttempts = 20u;
+    for (unsigned attempt = 0u; attempt < kAttempts; ++attempt) {
+        Sleep(100u);
+        if (tryControl(requestedSeat, 150u)) return true;
+        if (requestedSeat != 1u && tryControl(1u, 150u)) return true;
+    }
+    error = "background host was started but did not accept a control connection";
+    m_hostClient.close();
+    return false;
 }
 
 bool Win32App::initializeControlSurface() {
@@ -1070,17 +1194,12 @@ bool Win32App::initializeControlSurface() {
     m_controlSurfaceModel.setControlContext(requestedSeat, true, false);
 
     std::string error;
-    if (m_hostClient.connectForSeat(hostipc::ClientRole::Control, requestedSeat, 750u, &error)) {
-        m_controlSurfaceModel.setControlContext(requestedSeat, true, true);
-    } else {
-        m_hostClient.close();
-        if (!m_hostClient.connect(hostipc::ClientRole::ReadOnly, 750u, &error)) {
-            m_controlSurfaceModel.markHostDisconnected(error);
-            m_sessionControlTransition.markHostDisconnected(error);
-            updateControlSurfaceUi();
-            applyManagementSeatPlacement();
-            return true;
-        }
+    if (!connectBackgroundHost(requestedSeat, true, error)) {
+        m_controlSurfaceModel.markHostDisconnected(error);
+        m_sessionControlTransition.markHostDisconnected(error);
+        updateControlSurfaceUi();
+        applyManagementSeatPlacement();
+        return true;
     }
 
     const auto snapshot = m_hostClient.getSnapshot(1000u, &error);
@@ -1089,8 +1208,16 @@ bool Win32App::initializeControlSurface() {
         m_controlSurfaceModel.markHostDisconnected(error);
         m_sessionControlTransition.markHostDisconnected(error);
     } else {
+        m_controlSurfaceModel.setControlContext(
+            snapshot->managementSeatId, true,
+            m_hostClient.role() == hostipc::ClientRole::Control);
         m_controlSurfaceModel.observeHostSnapshot(*snapshot);
         m_sessionControlTransition.observeSnapshot(*snapshot);
+
+        if (m_hostClient.role() == hostipc::ClientRole::Control &&
+            !snapshot->profileLoaded && !m_workspaceManager.getAllSeats().empty()) {
+            (void)applyCurrentProfileToHost(false);
+        }
     }
     updateControlSurfaceUi();
     applyManagementSeatPlacement();
@@ -1102,11 +1229,7 @@ void Win32App::refreshControlSurface() {
         const SeatId requestedSeat = m_workspaceManager.getAllSeats().empty()
             ? 1u : m_workspaceManager.managementSeatId();
         std::string connectError;
-        if (m_hostClient.connectForSeat(
-                hostipc::ClientRole::Control, requestedSeat, 250u, &connectError)) {
-            m_controlSurfaceModel.setControlContext(requestedSeat, true, true);
-        } else {
-            m_hostClient.close();
+        if (!connectBackgroundHost(requestedSeat, false, connectError)) {
             m_controlSurfaceModel.setControlContext(requestedSeat, true, false);
             m_controlSurfaceModel.markHostDisconnected(connectError);
             m_sessionControlTransition.markHostDisconnected(connectError);
@@ -1122,6 +1245,9 @@ void Win32App::refreshControlSurface() {
         m_controlSurfaceModel.markHostDisconnected(error);
         m_sessionControlTransition.markHostDisconnected(error);
     } else {
+        m_controlSurfaceModel.setControlContext(
+            snapshot->managementSeatId, true,
+            m_hostClient.role() == hostipc::ClientRole::Control);
         m_controlSurfaceModel.observeHostSnapshot(*snapshot);
         m_sessionControlTransition.observeSnapshot(*snapshot);
     }
@@ -1145,11 +1271,9 @@ void Win32App::updateControlSurfaceUi() {
         if (state.wholeMachineReturnRequested) {
             label += L" | both Seat games ended";
         }
+        if (m_profileOutOfSync) label += L" | local profile pending host apply";
         if (!state.hostConnected) label += L" | disconnected";
         SetWindowTextW(m_runtimeStatusLabel, label.c_str());
-    }
-    if (m_startSessionBtn != nullptr) {
-        EnableWindow(m_startSessionBtn, state.actions.start ? TRUE : FALSE);
     }
     if (m_stopSessionBtn != nullptr) {
         EnableWindow(m_stopSessionBtn,
@@ -1206,6 +1330,8 @@ void Win32App::applyManagementSeatPlacement() {
 
 bool Win32App::applyCurrentProfileToHost(bool showErrors) {
     if (!m_hostClient.connected() || m_hostClient.role() != hostipc::ClientRole::Control) {
+        m_profileOutOfSync = true;
+        updateControlSurfaceUi();
         if (showErrors) {
             MessageBoxW(m_hwnd, L"The background host control channel is not available.",
                         L"HydraSeat Runtime", MB_OK | MB_ICONWARNING);
@@ -1218,6 +1344,7 @@ bool Win32App::applyCurrentProfileToHost(bool showErrors) {
     std::string error;
     const auto applied = m_hostClient.applyProfile(payload, 2000u, &error);
     if (!applied || !applied->succeeded()) {
+        m_profileOutOfSync = true;
         if (showErrors) {
             const std::wstring message = L"The edited profile was not accepted by the background host. The active runtime was not changed.";
             MessageBoxW(m_hwnd, message.c_str(), L"HydraSeat Reconfigure",
@@ -1226,6 +1353,7 @@ bool Win32App::applyCurrentProfileToHost(bool showErrors) {
         refreshControlSurface();
         return false;
     }
+    m_profileOutOfSync = false;
     std::string modelError;
     (void)m_controlSurfaceModel.setValidatedConfiguration(
         payload.managementSeatId, payload.seats, control::StartupMode::Manual, &modelError);
@@ -1235,34 +1363,6 @@ bool Win32App::applyCurrentProfileToHost(bool showErrors) {
     updateControlSurfaceUi();
     applyManagementSeatPlacement();
     return true;
-}
-
-void Win32App::startSession() {
-    const auto& state = m_controlSurfaceModel.state();
-    if (!state.actions.start || !m_hostClient.connected()) return;
-    std::string error;
-    std::optional<runtime::RuntimeCommandResult> current;
-    if (state.sessionPhase && *state.sessionPhase == runtime::SeatSessionPhase::Idle) {
-        current = m_hostClient.command(hostipc::MessageType::PlanSession, 2000u, &error);
-        if (!current || !current->succeeded()) {
-            MessageBoxW(m_hwnd, L"Session planning/preflight failed. No split session was started.",
-                        L"HydraSeat Start", MB_OK | MB_ICONERROR);
-            refreshControlSurface();
-            return;
-        }
-        m_controlSurfaceModel.observeHostSnapshot(current->snapshot);
-        m_sessionControlTransition.observeSnapshot(current->snapshot);
-    }
-    current = m_hostClient.command(hostipc::MessageType::StartSession, 3000u, &error);
-    if (!current || !current->succeeded()) {
-        MessageBoxW(m_hwnd, L"Session start failed or required recovery. Check runtime diagnostics.",
-                    L"HydraSeat Start", MB_OK | MB_ICONERROR);
-        refreshControlSurface();
-        return;
-    }
-    m_controlSurfaceModel.observeHostSnapshot(current->snapshot);
-    m_sessionControlTransition.observeSnapshot(current->snapshot);
-    updateControlSurfaceUi();
 }
 
 void Win32App::stopSessionAndReturnToWindows() {
@@ -1298,46 +1398,207 @@ void Win32App::beginReconfigure() {
     applyManagementSeatPlacement();
 }
 
-void Win32App::openGameLibrary() {
-    profile::SeatConfigDocument document;
-    document.managementSeatId = 1u;
-    profile::PersistedSeatConfig first;
-    first.seatId = 1u;
-    first.name = L"Seat 1";
-    profile::PersistedSeatConfig second;
-    second.seatId = 2u;
-    second.name = L"Seat 2";
+launcher_ui::LauncherActivationResult Win32App::activateLauncherPlan(
+    const plan::ProviderAwareLaunchPlan& plan,
+    const hostipc::ProfilePayload& profile) {
+    using Status = launcher_ui::LauncherActivationStatus;
+    const auto failure = [](Status status, std::wstring message) {
+        return launcher_ui::LauncherActivationResult{status, std::move(message)};
+    };
+    const auto runtimeStatus = [](runtime::RuntimeResultCode code) {
+        return (code == runtime::RuntimeResultCode::RecoveryRequired ||
+                code == runtime::RuntimeResultCode::RollbackFailure)
+            ? Status::RecoveryRequired : Status::Failed;
+    };
+    const auto seatStatus = [](runtime::SeatGameResultCode code) {
+        return code == runtime::SeatGameResultCode::RecoveryRequired
+            ? Status::RecoveryRequired : Status::Failed;
+    };
 
-    for (const auto& tile : m_deviceTiles) {
-        if (!tile || tile->owner == PartitionOwner::Pool || tile->deviceId.empty()) continue;
-        auto& seat = tile->owner == PartitionOwner::Player1 ? first : second;
-        switch (tile->type) {
-        case DeviceCategory::Display:
-            seat.displayIds.push_back(tile->deviceId);
-            if (tile->isPrimaryDisplay) seat.primaryDisplayId = tile->deviceId;
-            break;
-        case DeviceCategory::Keyboard:
-            seat.keyboardIds.push_back(tile->deviceId);
-            break;
-        case DeviceCategory::Mouse:
-        case DeviceCategory::Touchpad:
-            seat.mouseIds.push_back(tile->deviceId);
-            break;
-        case DeviceCategory::Gamepad:
-            seat.controllerIds.push_back(tile->deviceId);
-            break;
+    if (plan.seats.empty() || plan.seats.size() > runtime::kV1MaximumActiveSeats ||
+        profile.seats.empty() || profile.seats.size() > runtime::kV1MaximumActiveSeats) {
+        return failure(Status::InvalidData, L"The launch plan or Seat profile is outside the v1 two-Seat contract.");
+    }
+    std::vector<SeatId> planSeats;
+    planSeats.reserve(plan.seats.size());
+    for (const auto& seatPlan : plan.seats) {
+        if (seatPlan.seatId == 0u ||
+            std::find(planSeats.begin(), planSeats.end(), seatPlan.seatId) != planSeats.end() ||
+            std::none_of(profile.seats.begin(), profile.seats.end(),
+                         [&](const auto& seat) { return seat.seatId == seatPlan.seatId; })) {
+            return failure(Status::InvalidData, L"The immutable launch plan does not match the current Seat profile.");
+        }
+        planSeats.push_back(seatPlan.seatId);
+    }
+
+    std::string error;
+    if (!connectBackgroundHost(profile.managementSeatId, true, error) ||
+        m_hostClient.role() != hostipc::ClientRole::Control) {
+        return failure(Status::Unavailable,
+                       error.empty() ? L"The background runtime control channel is unavailable."
+                                     : wideFromUtf8(error));
+    }
+
+    const auto before = m_hostClient.getSnapshot(1000u, &error);
+    if (!before) {
+        return failure(Status::TimedOut,
+                       error.empty() ? L"The background runtime did not return a fresh snapshot."
+                                     : wideFromUtf8(error));
+    }
+    if (before->sessionPhase == runtime::SeatSessionPhase::RecoveryRequired) {
+        return failure(Status::RecoveryRequired,
+                       L"Runtime recovery is required before another game can start.");
+    }
+    if (before->sessionPhase != runtime::SeatSessionPhase::Idle) {
+        return failure(Status::PreflightFailed,
+                       L"Return the current split session to Windows before starting this plan.");
+    }
+
+    const auto applied = m_hostClient.applyProfile(profile, 2500u, &error);
+    if (!applied || !applied->succeeded()) {
+        const Status status = applied ? runtimeStatus(applied->code) : Status::TimedOut;
+        const std::string detail = applied && !applied->diagnostic.empty()
+            ? applied->diagnostic : error;
+        return failure(status, detail.empty()
+            ? L"The background runtime rejected the current Seat profile."
+            : wideFromUtf8(detail));
+    }
+
+    const auto planned = m_hostClient.command(hostipc::MessageType::PlanSession, 2500u, &error);
+    if (!planned || !planned->succeeded()) {
+        const Status status = planned ? runtimeStatus(planned->code) : Status::TimedOut;
+        const std::string detail = planned && !planned->diagnostic.empty()
+            ? planned->diagnostic : error;
+        return failure(status, detail.empty()
+            ? L"Whole-machine runtime preflight rejected the launch."
+            : wideFromUtf8(detail));
+    }
+
+    const auto started = m_hostClient.command(hostipc::MessageType::StartSession, 5000u, &error);
+    if (!started || !started->succeeded()) {
+        const Status status = started ? runtimeStatus(started->code) : Status::TimedOut;
+        const std::string detail = started && !started->diagnostic.empty()
+            ? started->diagnostic : error;
+        (void)m_hostClient.command(hostipc::MessageType::StopAndReturnToWindows, 5000u, nullptr);
+        refreshControlSurface();
+        return failure(status, detail.empty()
+            ? L"The split runtime could not enter Active state."
+            : wideFromUtf8(detail));
+    }
+
+    std::vector<SeatId> assignedSeats;
+    bool rollbackVerified = true;
+    const auto rollback = [&]() {
+        for (auto it = assignedSeats.rbegin(); it != assignedSeats.rend(); ++it) {
+            hostipc::SeatGameCommandPayload payload;
+            payload.seatId = *it;
+            const auto stopped = m_hostClient.seatGameCommand(
+                hostipc::MessageType::StopSeatGame, payload, 5000u, nullptr);
+            rollbackVerified = rollbackVerified && stopped && stopped->succeeded();
+        }
+        const auto returned = m_hostClient.command(
+            hostipc::MessageType::StopAndReturnToWindows, 5000u, nullptr);
+        rollbackVerified = rollbackVerified && returned && returned->succeeded();
+        refreshControlSurface();
+    };
+
+    for (const auto& seatPlan : plan.seats) {
+        hostipc::SeatGameCommandPayload payload;
+        payload.seatId = seatPlan.seatId;
+        payload.binding = runtime::SeatGameBinding{seatPlan.playerId, seatPlan.gameId};
+        const auto assigned = m_hostClient.seatGameCommand(
+            hostipc::MessageType::AssignSeatGame, payload, 2500u, &error);
+        if (!assigned || !assigned->succeeded()) {
+            const Status status = assigned ? seatStatus(assigned->code) : Status::TimedOut;
+            const std::string detail = assigned && !assigned->diagnostic.empty()
+                ? assigned->diagnostic : error;
+            rollback();
+            return failure(rollbackVerified ? status : Status::RecoveryRequired,
+                           !rollbackVerified
+                               ? L"Seat assignment failed and rollback could not be fully verified."
+                               : (detail.empty() ? L"The runtime rejected a Seat game assignment."
+                                                 : wideFromUtf8(detail)));
+        }
+        assignedSeats.push_back(seatPlan.seatId);
+    }
+
+    // The UI never launches provider targets itself. StartSeatGame succeeds only
+    // when the runtime owns a previously installed typed provider plan for that
+    // exact Seat. Until Agent 3 supplies that production installer/protocol, this
+    // call fails closed and the rollback below returns the machine to Windows.
+    for (const auto& seatPlan : plan.seats) {
+        hostipc::SeatGameCommandPayload payload;
+        payload.seatId = seatPlan.seatId;
+        const auto seatStarted = m_hostClient.seatGameCommand(
+            hostipc::MessageType::StartSeatGame, payload, 10000u, &error);
+        if (!seatStarted || !seatStarted->succeeded()) {
+            const Status status = seatStarted ? seatStatus(seatStarted->code) : Status::TimedOut;
+            const std::string detail = seatStarted && !seatStarted->diagnostic.empty()
+                ? seatStarted->diagnostic : error;
+            rollback();
+            return failure(rollbackVerified ? status : Status::RecoveryRequired,
+                           !rollbackVerified
+                               ? L"Game start failed and rollback could not be fully verified."
+                               : (detail.empty() ? L"The runtime could not start the validated Seat game plan."
+                                                 : wideFromUtf8(detail)));
         }
     }
-    if (!first.displayIds.empty() && !first.primaryDisplayId) {
-        first.primaryDisplayId = first.displayIds.front();
+
+    refreshControlSurface();
+    return failure(Status::Success, L"Starting the selected game on the assigned Seat(s)...");
+}
+
+launcher_ui::LauncherExitAction Win32App::openGameLibrary() {
+    WorkspaceManager candidate;
+    if (!captureWorkspaceFromTiles(candidate)) {
+        // Do not silently fall back to a stale persisted assignment after an
+        // invalid edit. Present two empty Seats so launcher preflight fails
+        // closed and the user can return to Setup / Diagnostics to repair it.
+        candidate = WorkspaceManager{};
+        (void)candidate.createSeat(L"Seat 1");
+        (void)candidate.createSeat(L"Seat 2");
     }
-    if (!second.displayIds.empty() && !second.primaryDisplayId) {
-        second.primaryDisplayId = second.displayIds.front();
+
+    hostipc::ProfilePayload hostProfile;
+    hostProfile.managementSeatId = candidate.managementSeatId();
+    hostProfile.seats = candidate.getAllSeats();
+
+    profile::SeatConfigDocument document;
+    document.managementSeatId = hostProfile.managementSeatId;
+    for (const auto& source : hostProfile.seats) {
+        if (source.seatId != 1u && source.seatId != 2u) continue;
+        profile::PersistedSeatConfig seat;
+        seat.seatId = source.seatId;
+        seat.name = source.name;
+        seat.displayIds = source.displayIds;
+        seat.primaryDisplayId = source.primaryDisplayId;
+        seat.keyboardIds = source.keyboardIds;
+        seat.mouseIds = source.mouseIds;
+        seat.controllerIds = source.controllerIds;
+        seat.audioOutputEndpointId = source.audioOutputEndpointId;
+        seat.audioInputEndpointId = source.audioInputEndpointId;
+        seat.active = source.active;
+        document.seats.push_back(std::move(seat));
     }
-    document.seats = {std::move(first), std::move(second)};
-    // The compatibility evidence store is not yet populated on this runtime
-    // path. Passing an empty snapshot keeps Play visibly fail-closed.
-    launcher_ui::showLauncherWindow(m_hwnd, std::move(document), {});
+
+    // The launcher receives only the bounded requirement projection. It never
+    // receives trusted provider/evidence provenance and it never manufactures a
+    // requirement when the fixed local authority is missing, corrupt, or stale.
+    std::vector<plan::GameRuntimeRequirement> requirementProjection;
+    const auto trustedRequirements =
+        requirement::makeDefaultProductionTrustedRequirementSource();
+    if (trustedRequirements) {
+        (void)requirement::resolveCurrentRequirementProjection(
+            *trustedRequirements, requirementProjection);
+    }
+
+    auto activate = [this, hostProfile = std::move(hostProfile)](
+                        const plan::ProviderAwareLaunchPlan& launchPlan) {
+        return activateLauncherPlan(launchPlan, hostProfile);
+    };
+    return launcher_ui::showLauncherWindow(
+        m_hwnd, std::move(document), std::move(requirementProjection),
+        std::move(activate));
 }
 
 void Win32App::toggleIsolationMode() {
@@ -1491,9 +1752,14 @@ void Win32App::launchGateCControlledLab() {
 
 LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (uMsg == WM_HYDRA_ACTIVATE_CONTROL && g_appInstance) {
+        if (HWND launcher = FindWindowW(L"HydraSeatGameLibraryWindow", nullptr);
+            launcher != nullptr) {
+            ShowWindow(launcher, SW_RESTORE);
+            SetForegroundWindow(launcher);
+            return 0;
+        }
         g_appInstance->applyManagementSeatPlacement();
-        ShowWindow(hwnd, SW_RESTORE);
-        SetForegroundWindow(hwnd);
+        (void)g_appInstance->openGameLibrary();
         return 0;
     }
     if (uMsg == WM_INPUT && g_appInstance) {
@@ -1540,8 +1806,6 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
             g_appInstance->launchMultiseat();
         } else if (wmId == ID_BTN_GATE_C && g_appInstance) {
             g_appInstance->launchGateCControlledLab();
-        } else if (wmId == ID_BTN_START_SESSION && g_appInstance) {
-            g_appInstance->startSession();
         } else if (wmId == ID_BTN_STOP_SESSION && g_appInstance) {
             g_appInstance->stopSessionAndReturnToWindows();
         } else if (wmId == ID_BTN_RECONFIGURE && g_appInstance) {
@@ -1561,8 +1825,16 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
 
 int Win32App::run() {
     if (m_duplicateLaunch) return 0;
+    const auto launcherAction = openGameLibrary();
+    if (launcherAction == launcher_ui::LauncherExitAction::OpenSetupAndDiagnostics) {
+        ShowWindow(m_hwnd, SW_SHOW);
+        UpdateWindow(m_hwnd);
+        SetForegroundWindow(m_hwnd);
+    } else {
+        DestroyWindow(m_hwnd);
+    }
     MSG msg;
-    while (GetMessageW(&msg, NULL, 0, 0)) {
+    while (GetMessageW(&msg, NULL, 0, 0) > 0) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }

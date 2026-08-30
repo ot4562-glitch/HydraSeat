@@ -56,7 +56,10 @@ StartupDecision evaluateStartup(const StartupConfig& config,
     if (config.mode == StartupMode::Manual) {
         return {StartupAction::DoNotStart, StartupReason::ManualMode, {}};
     }
-    if (environment.existingHostProcesses > 0u) {
+    if (environment.existingHostProcesses > 1u) {
+        return {StartupAction::DoNotStart, StartupReason::DuplicateHost, {}};
+    }
+    if (environment.existingHostProcesses == 1u) {
         return {StartupAction::ReuseExistingHost, StartupReason::DuplicateHost, {}};
     }
     if (config.mode == StartupMode::BackgroundIdle) {

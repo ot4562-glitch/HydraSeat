@@ -75,7 +75,14 @@ void testDebounceBurst() {
     check(!debounce.accept(1400, accepted), "rapid topology burst waits for quiet period");
     check(debounce.accept(1450, accepted) && accepted == 4u,
           "debouncer accepts only final generation after quiet period");
-    check(!debounce.accept(2000, accepted), "accepted generation is idempotent");
+    debounce.observe(3, 1500);
+    check(!debounce.accept(2000, accepted) && accepted == 4u,
+          "delayed older topology generation cannot replace the accepted hot-plug state");
+    debounce.observe(5, 2100);
+    debounce.observe(4, 2200);
+    check(debounce.accept(2350, accepted) && accepted == 5u,
+          "older callback cannot move a newer pending topology generation backwards");
+    check(!debounce.accept(2600, accepted), "accepted generation is idempotent");
 }
 }
 

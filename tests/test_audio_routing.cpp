@@ -41,17 +41,38 @@ EndpointSnapshot endpoints() {
 process::ProcessIdentity identity(std::uint32_t pid,
                                   std::uint64_t creation,
                                   std::wstring path = L"C:\\Games\\game.exe") {
-    return {pid, creation, std::move(path)};
+    process::ProcessIdentity result;
+    result.processId = pid;
+    result.creationTime100ns = creation;
+    result.executablePath = std::move(path);
+    return result;
+}
+
+process::ProcessRecord runningRecord(
+    process::ProcessIdentity processIdentity,
+    bool root,
+    const process::ProcessIdentity* parent = nullptr) {
+    process::ProcessRecord result;
+    result.identity = std::move(processIdentity);
+    result.root = root;
+    result.exited = false;
+    result.exitCode = 0;
+    result.exitTime100ns = 0;
+    if (parent != nullptr) {
+        result.parentProcessId = parent->processId;
+        result.parentIdentity = *parent;
+        result.parentIdentityVerified = true;
+    }
+    return result;
 }
 
 process::ProcessTreeSnapshot tree() {
     process::ProcessTreeSnapshot result;
     result.seatId = 1;
     result.root = identity(100, 1000);
-    result.processes = {
-        {result.root, 0, true, false, 0},
-        {identity(101, 1001, L"C:\\Games\\helper.exe"), 100, false, false, 0},
-    };
+    result.processes.push_back(runningRecord(result.root, true));
+    result.processes.push_back(runningRecord(
+        identity(101, 1001, L"C:\\Games\\helper.exe"), false, &result.root));
     result.sequence = 7;
     return result;
 }
@@ -352,6 +373,63 @@ void testRollbackFailureRequiresRecovery() {
           "unverified rollback remains RecoveryRequired and retains mutation ownership");
 }
 
+void testRollbackRejectsLateOwnedSessionWithoutCapturedEndpoint() {
+    auto source = std::make_shared<FakeSessionSource>();
+    source->records = {session(L"OUT-A", L"owned", 100, 1000)};
+    auto inventory = std::make_shared<SessionInventory>(source);
+    auto backend = std::make_shared<FakeMutableBackend>(source);
+    RouteTransaction transaction(request(), inventory, backend);
+
+    std::string error;
+    auto status = transaction.attempt(endpoints(), &error);
+    check(status.phase == RoutePhase::Applied && status.mutated,
+          "late-session rollback fixture first reaches an applied route");
+
+    source->records.push_back(session(L"OUT-B", L"late-owned", 101, 1001));
+    status = transaction.rollback(endpoints(), &error);
+    check(status.phase == RoutePhase::RecoveryRequired &&
+              status.error == RouteError::RollbackFailed && status.mutated &&
+              !status.rollbackVerified && !error.empty(),
+          "rollback cannot claim safety for an exact owned session that appeared after state capture");
+    check(source->records[0].endpointId == L"OUT-A" &&
+              source->records[1].endpointId == L"OUT-B",
+          "failed verification preserves recovery ownership when the late session has no captured endpoint");
+}
+
+void testAppliedRouteHotPlugAndSessionLossRequireRecovery() {
+    auto source = std::make_shared<FakeSessionSource>();
+    source->records = {session(L"OUT-A", L"owned", 100, 1000)};
+    auto inventory = std::make_shared<SessionInventory>(source);
+    auto backend = std::make_shared<FakeMutableBackend>(source);
+    RouteTransaction transaction(request(), inventory, backend);
+
+    std::string error;
+    auto status = transaction.attempt(endpoints(), &error);
+    check(status.phase == RoutePhase::Applied && status.mutated,
+          "hot-plug fixture first reaches an applied mutable route");
+
+    auto unplugged = endpoints();
+    for (auto& endpoint : unplugged.endpoints) {
+        if (endpoint.endpointId == L"OUT-B") {
+            endpoint.stateMask = kEndpointStateUnplugged;
+        }
+    }
+    status = transaction.attempt(unplugged, &error);
+    check(status.phase == RoutePhase::RecoveryRequired && status.mutated &&
+              status.error == RouteError::TargetEndpointUnavailable,
+          "target endpoint loss after mutation retains recovery ownership instead of reporting ordinary failure");
+
+    status = transaction.attempt(endpoints(), &error);
+    check(status.phase == RoutePhase::Applied,
+          "route can be reverified when the same stable endpoint identity returns");
+
+    source->records.clear();
+    status = transaction.attempt(endpoints(), &error);
+    check(status.phase == RoutePhase::RecoveryRequired && status.mutated &&
+              status.error == RouteError::VerificationFailed,
+          "owned session disappearance after mutation cannot be misreported as an applied route");
+}
+
 void testRequestAndTargetValidation() {
     auto source = std::make_shared<FakeSessionSource>();
     source->records = {session(L"OUT-A", L"owned", 100, 1000)};
@@ -423,6 +501,8 @@ int main() {
     testMutableApplyVerifyRollbackTouchesOnlyOwnedSessions();
     testApplyFailureRollsBackAndVerificationFailureIsContained();
     testRollbackFailureRequiresRecovery();
+    testRollbackRejectsLateOwnedSessionWithoutCapturedEndpoint();
+    testAppliedRouteHotPlugAndSessionLossRequireRecovery();
     testRequestAndTargetValidation();
     testSessionInventoryBoundsAndDeterminism();
 

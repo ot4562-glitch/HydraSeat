@@ -70,6 +70,20 @@ RollbackPlanManifest samplePlan(std::uint8_t seed = 0x10) {
     return manifest;
 }
 
+RecoveryProcessAttachmentIdentity attachmentIdentity() {
+    RecoveryProcessAttachmentIdentity identity;
+    identity.seatId = 1u;
+    for (std::size_t index = 0; index < identity.hostSessionId.bytes.size(); ++index) {
+        identity.hostSessionId.bytes[index] =
+            static_cast<std::uint8_t>(0x80u + index + 1u);
+    }
+    identity.sessionGeneration = 7u;
+    identity.seatGameGeneration = 11u;
+    identity.process = samplePlan().actions.front().process;
+    identity.recoveryEpoch = samplePlan().lease.generation;
+    return identity;
+}
+
 std::vector<SnapshotReference> snapshots() {
     return {
         {1001, hash(0x40), 4},
@@ -276,6 +290,73 @@ void testCanonicalPlanHashBinding() {
     std::string error;
     check(!validateCrashJournalAgainstPlan(state, changedManifest, &error),
           "journal cannot be rebound to a different valid rollback plan");
+}
+
+void testRecoveryProcessAttachmentJournalBinding() {
+    const auto manifest = samplePlan();
+    const auto identity = attachmentIdentity();
+    std::string error;
+    const auto attachmentSnapshot =
+        makeRecoveryProcessAttachmentSnapshot(identity, &error);
+    check(attachmentSnapshot.has_value() &&
+              attachmentSnapshot->snapshotId ==
+                  kRecoveryProcessAttachmentSnapshotId &&
+              attachmentSnapshot->generation == identity.recoveryEpoch,
+          "exact recovery attachment produces a reserved bounded journal snapshot");
+    const std::array boundSnapshots{*attachmentSnapshot};
+    const auto state = makeInitialCrashJournal(
+        manifest, 7u, boundSnapshots, &error);
+    check(state.has_value() &&
+              validateRecoveryProcessAttachmentJournalBinding(
+                  *state, identity, &error),
+          "journal binds the exact Seat/session/process recovery epoch");
+
+    const auto encoded = encodeCrashJournal(*state);
+    const auto decoded = decodeCrashJournal(encoded, &error);
+    check(decoded &&
+              validateRecoveryProcessAttachmentJournalBinding(
+                  *decoded, identity, &error),
+          "restart replay preserves the exact recovery attachment binding");
+
+    auto wrongSeat = identity;
+    wrongSeat.seatId = 2u;
+    check(!validateRecoveryProcessAttachmentJournalBinding(
+              *decoded, wrongSeat, &error),
+          "journal binding rejects another Seat");
+    auto wrongSession = identity;
+    ++wrongSession.hostSessionId.bytes[0];
+    check(!validateRecoveryProcessAttachmentJournalBinding(
+              *decoded, wrongSession, &error),
+          "journal binding rejects another host session");
+    auto staleSessionGeneration = identity;
+    --staleSessionGeneration.sessionGeneration;
+    check(!validateRecoveryProcessAttachmentJournalBinding(
+              *decoded, staleSessionGeneration, &error),
+          "journal binding rejects a stale session generation");
+    auto staleSeatGameGeneration = identity;
+    --staleSeatGameGeneration.seatGameGeneration;
+    check(!validateRecoveryProcessAttachmentJournalBinding(
+              *decoded, staleSeatGameGeneration, &error),
+          "journal binding rejects a stale Seat-game generation");
+    auto reusedPid = identity;
+    ++reusedPid.process.creationTime100ns;
+    check(!validateRecoveryProcessAttachmentJournalBinding(
+              *decoded, reusedPid, &error),
+          "journal binding rejects PID reuse with another creation time");
+    auto wrongEpoch = identity;
+    ++wrongEpoch.recoveryEpoch;
+    check(!validateRecoveryProcessAttachmentJournalBinding(
+              *decoded, wrongEpoch, &error),
+          "journal binding rejects another recovery epoch");
+
+    const auto legacyState = initialState(manifest);
+    const auto legacyBytes = encodeCrashJournal(legacyState);
+    const auto legacyDecoded = decodeCrashJournal(legacyBytes, &error);
+    check(legacyDecoded.has_value(),
+          "existing schema-v1 journal without attachment metadata remains readable");
+    check(!validateRecoveryProcessAttachmentJournalBinding(
+              *legacyDecoded, identity, &error),
+          "legacy journal without exact attachment binding cannot authorize production attachment recovery");
 }
 
 void testStateMachineAndPlanBinding() {
@@ -716,6 +797,7 @@ int main() {
     testCodecRoundTripAndCorruption();
     testSafeModeCodec();
     testCanonicalPlanHashBinding();
+    testRecoveryProcessAttachmentJournalBinding();
     testStateMachineAndPlanBinding();
     testMaximumPlanFitsBoundedJournal();
     testStartupAssessmentAtTransitionBoundaries();

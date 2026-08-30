@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <iomanip>
 #include <set>
 #include <sstream>
 #include <string>
@@ -26,6 +27,39 @@ bool validId(std::string_view value, std::size_t maximum = 128u) noexcept {
         }
     }
     return true;
+}
+
+bool validWindowsBuildClass(std::string_view value) noexcept {
+    if (!validId(value, 64u)) return false;
+    return value.starts_with("win10-") || value.starts_with("win11-");
+}
+
+bool validArchitecture(std::string_view value) noexcept {
+    return value == "x64" || value == "x86" || value == "arm64";
+}
+
+constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
+constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+
+std::uint64_t fnv1a(std::string_view value, std::uint64_t seed) noexcept {
+    std::uint64_t hash = seed;
+    for (const char raw : value) {
+        hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(raw));
+        hash *= kFnvPrime;
+    }
+    return hash;
+}
+
+std::string hex64(std::uint64_t value) {
+    std::ostringstream output;
+    output << std::hex << std::setfill('0') << std::setw(16) << value;
+    return output.str();
+}
+
+std::string payloadIdentity(std::string_view exactJson) {
+    const auto first = fnv1a(exactJson, kFnvOffset);
+    const auto second = fnv1a(exactJson, kFnvOffset ^ 0x9e3779b97f4a7c15ull);
+    return "support-v1-" + hex64(first) + hex64(second);
 }
 
 bool validJournalPhase(recovery::CrashJournalPhase value) noexcept {
@@ -109,9 +143,10 @@ std::string_view finalName(recovery::CrashJournalFinalResult value) noexcept {
 SupportDiagnostic validateBundle(const SupportBundle& bundle) {
     if (bundle.schemaVersion != kSupportBundleSchemaVersion ||
         !validId(bundle.hydraSeatVersion) || !validId(bundle.hydraSeatBuild) ||
-        !validId(bundle.windowsBuildClass) || !validId(bundle.architecture)) {
+        !validWindowsBuildClass(bundle.windowsBuildClass) ||
+        !validArchitecture(bundle.architecture)) {
         return fail(SupportCode::InvalidEnvironment,
-                    "support bundle environment fields are invalid bounded public tokens");
+                    "support bundle environment must use bounded public release/build classes");
     }
     if (!bundle.credentialsExcluded || !bundle.playerNamesExcluded ||
         !bundle.personalPathsExcluded || !bundle.rawTypedTextExcluded ||
@@ -287,6 +322,16 @@ std::string buildSupportBundlePreview(const SupportBundle& bundle) {
 
 SupportDiagnostic SupportExportSession::prepare(const SupportBundle& bundle,
                                                 SupportExportPreview& preview) {
+    prepared_ = false;
+    approved_ = false;
+    exactJson_.clear();
+    payloadIdentity_.clear();
+    preparedGeneration_ = 0u;
+    if (nextGeneration_ == 0u) {
+        return fail(SupportCode::StaleApproval,
+                    "support preview generation is exhausted; restart the export flow");
+    }
+
     std::string exactJson;
     const auto encoded = encodeSupportBundleJson(bundle, exactJson);
     if (!encoded.succeeded()) return encoded;
@@ -294,22 +339,33 @@ SupportDiagnostic SupportExportSession::prepare(const SupportBundle& bundle,
     SupportExportPreview candidate;
     candidate.humanSummary = buildSupportBundlePreview(bundle);
     candidate.exactJson = exactJson;
+    candidate.payloadIdentity = payloadIdentity(exactJson);
+    candidate.generation = nextGeneration_++;
     exactJson_ = std::move(exactJson);
+    payloadIdentity_ = candidate.payloadIdentity;
+    preparedGeneration_ = candidate.generation;
     prepared_ = true;
-    approved_ = false;
     preview = std::move(candidate);
     return {};
 }
 
-SupportDiagnostic SupportExportSession::approve(std::string_view exactPreviewJson) {
+SupportDiagnostic SupportExportSession::approve(const SupportExportPreview& approvedPreview) {
     if (!prepared_) {
         return fail(SupportCode::PreviewRequired,
                     "support bundle must be previewed before export approval");
     }
-    if (exactPreviewJson != exactJson_) {
+    if (approvedPreview.generation == 0u ||
+        approvedPreview.generation != preparedGeneration_) {
         approved_ = false;
-        return fail(SupportCode::PreviewMismatch,
-                    "approved support preview does not match the exact export payload");
+        return fail(SupportCode::StaleApproval,
+                    "support approval refers to a stale preview generation");
+    }
+    if (approvedPreview.canonicalizationVersion != kSupportBundleCanonicalizationVersion ||
+        approvedPreview.payloadIdentity != payloadIdentity_ ||
+        approvedPreview.exactJson != exactJson_) {
+        approved_ = false;
+        return fail(SupportCode::PayloadIdentityMismatch,
+                    "approved support preview identity or bytes do not match the export payload");
     }
     approved_ = true;
     return {};
@@ -337,6 +393,8 @@ std::string_view supportCodeName(SupportCode code) noexcept {
         case SupportCode::TooLarge: return "TooLarge";
         case SupportCode::PreviewRequired: return "PreviewRequired";
         case SupportCode::PreviewMismatch: return "PreviewMismatch";
+        case SupportCode::StaleApproval: return "StaleApproval";
+        case SupportCode::PayloadIdentityMismatch: return "PayloadIdentityMismatch";
     }
     return "Unknown";
 }

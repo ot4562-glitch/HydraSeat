@@ -3,6 +3,7 @@
 #include "hydra/process_group.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -15,7 +16,20 @@ enum class WindowRole : std::uint8_t {
     Dialog = 2,
     Overlay = 3,
     ChildOwnedPopup = 4,
-    Ignored = 5,
+    InputTarget = 5,
+    Ignored = 6,
+};
+
+enum class WindowTargetKind : std::uint8_t {
+    Visual = 0,
+    Input = 1,
+};
+
+enum class WindowTargetStatus : std::uint8_t {
+    Unresolved = 0,
+    Bound = 1,
+    Reacquiring = 2,
+    FailedClosed = 3,
 };
 
 struct WindowIdentity {
@@ -50,6 +64,17 @@ struct WindowRule {
 struct WindowProfileRules {
     WindowRole defaultRole{WindowRole::PrimaryGame};
     std::vector<WindowRule> overrides;
+    // Classification may use profile title/class/path selectors only after exact
+    // process-tree ownership is proven. These role preferences rank already-owned
+    // candidates; they are never ownership authority.
+    WindowRole visualTargetRole{WindowRole::PrimaryGame};
+    // When absent, the input target mirrors the validated visual target exactly.
+    // Profiles with a distinct owned input sink can opt into another explicit role
+    // without making title/class text an ownership credential. A distinct input role
+    // must resolve to one exact Seat-owned HWND; multiple matching owned candidates
+    // are ambiguous and fail closed rather than being chosen by geometry, focus,
+    // enumeration order, or the numeric HWND value.
+    std::optional<WindowRole> inputTargetRole;
 };
 
 std::string_view windowRoleName(WindowRole role) noexcept;

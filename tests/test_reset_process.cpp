@@ -5,6 +5,7 @@
 #endif
 #include <windows.h>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -191,9 +192,21 @@ void seedActiveRecovery(const std::filesystem::path& root,
     recovery::CrashJournalStore journalStore(storage);
     reset::RuntimeResetRegistrationStore registrationStore(root);
     const auto manifest = manifestFor(sessionId, target);
+    recovery::RecoveryProcessAttachmentIdentity attachment;
+    attachment.seatId = 1u;
+    attachment.hostSessionId.bytes = sessionId;
+    attachment.sessionGeneration = manifest.lease.generation;
+    attachment.seatGameGeneration = 1u;
+    attachment.process = target;
+    attachment.recoveryEpoch = manifest.lease.generation;
     std::string error;
+    const auto attachmentSnapshot =
+        recovery::makeRecoveryProcessAttachmentSnapshot(attachment, &error);
+    require(attachmentSnapshot.has_value(),
+            "process-test exact recovery attachment snapshot must be valid");
+    const std::array snapshots{*attachmentSnapshot};
     auto state = recovery::makeInitialCrashJournal(
-        manifest, manifest.lease.generation, {}, &error);
+        manifest, manifest.lease.generation, snapshots, &error);
     require(state.has_value(), "process-test initial journal must be valid");
     require(journalStore.beginActivation(*state, &error),
             "process-test journal activation must begin");
@@ -213,6 +226,7 @@ void seedActiveRecovery(const std::filesystem::path& root,
     reset::RuntimeResetRegistration registration;
     registration.ownerProcess = owner;
     registration.manifest = manifest;
+    registration.attachment = attachment;
     require(registrationStore.write(registration, &error),
             "process-test runtime registration must write");
 
@@ -330,6 +344,50 @@ void testIdentityMismatchFailsClosed(const std::filesystem::path& self,
             "identity mismatch must leave durable RecoveryRequired evidence");
 }
 
+void testAttachmentSessionMismatchFailsClosed(
+    const std::filesystem::path& self,
+    const std::filesystem::path& resetExecutable) {
+    TempDirectory temp("attachment-session-mismatch");
+    OwnedProcess owner;
+    OwnedProcess target;
+    OwnedProcess sentinel;
+    require(owner.launch(self, L"--child") &&
+                target.launch(self, L"--child") &&
+                sentinel.launch(self, L"--child"),
+            "attachment-session mismatch process fixtures must launch");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const auto ownerIdentity = owner.identity();
+    const auto targetIdentity = target.identity();
+    const auto sentinelIdentity = sentinel.identity();
+    seedActiveRecovery(temp.path(), ownerIdentity, targetIdentity, session(40), false);
+
+    reset::RuntimeResetRegistrationStore registrationStore(temp.path());
+    auto loaded = registrationStore.load();
+    require(loaded.status == reset::RuntimeRegistrationReadStatus::Success &&
+                loaded.registration && loaded.registration->attachment,
+            "exact attachment reset registration must load before mismatch injection");
+    auto mismatched = *loaded.registration;
+    mismatched.attachment->hostSessionId.bytes[0] ^= 1u;
+    std::string error;
+    require(registrationStore.write(mismatched, &error),
+            "individually valid wrong-host-session attachment persists for adversarial reset test");
+
+    require(runReset(resetExecutable, temp.path(), L"all --confirm") == 2,
+            "hydra_reset must fail closed on crash-journal/attachment Host-session mismatch");
+    require(owner.running() && owner.identity() == ownerIdentity,
+            "Host-session mismatch must not terminate exact runtime owner");
+    require(target.running() && target.identity() == targetIdentity,
+            "Host-session mismatch must stop before exact target rollback mutation");
+    require(sentinel.running() && sentinel.identity() == sentinelIdentity,
+            "Host-session mismatch must preserve unrelated same-name sentinel");
+
+    recovery::NativeCrashJournalStorage storage(temp.path());
+    recovery::CrashJournalStore journalStore(storage);
+    const auto marker = journalStore.loadSafeMode(&error);
+    require(marker && marker->reason == recovery::SafeModeReason::RecoveryRequired,
+            "Host-session mismatch must leave durable RecoveryRequired evidence");
+}
+
 void testDeadOwnerAndStaleJournal(const std::filesystem::path& self,
                                   const std::filesystem::path& resetExecutable) {
     TempDirectory temp("dead-owner");
@@ -384,6 +442,7 @@ int main(int argc, char** argv) {
                 "hydra_reset.exe must be staged beside reset_process_tests.exe");
         testLiveOwnerAndSameNameSentinel(self, resetExecutable);
         testIdentityMismatchFailsClosed(self, resetExecutable);
+        testAttachmentSessionMismatchFailsClosed(self, resetExecutable);
         testDeadOwnerAndStaleJournal(self, resetExecutable);
         std::cout << "Reset process tests passed.\n";
         return EXIT_SUCCESS;

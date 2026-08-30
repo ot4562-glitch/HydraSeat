@@ -119,7 +119,12 @@ DisplayTopologyDebouncer::DisplayTopologyDebouncer(std::uint32_t quietPeriodMs)
 
 void DisplayTopologyDebouncer::observe(std::uint64_t generation,
                                        std::uint64_t tickMs) noexcept {
-    if (generation == 0 || generation == state_.lastObservedGeneration) return;
+    // Display topology generations are monotonic. A delayed callback for an
+    // older topology must never replace a newer pending or accepted snapshot.
+    if (generation == 0 || generation <= state_.lastObservedGeneration ||
+        generation <= state_.lastAcceptedGeneration) {
+        return;
+    }
     state_.lastObservedGeneration = generation;
     state_.lastChangeTickMs = tickMs;
 }

@@ -1,4 +1,5 @@
 #include "hydra/profile_schema.hpp"
+#include "hydra/internal/strict_json.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -32,224 +33,16 @@ SchemaDiagnostic diagnostic(SchemaResult result, std::string message) {
     return {result, std::move(message)};
 }
 
-struct JsonNumber { std::string text; };
-struct JsonValue {
-    using Array = std::vector<JsonValue>;
-    using Object = std::map<std::string, JsonValue>;
-    std::variant<std::nullptr_t, bool, JsonNumber, std::string, Array, Object> value;
-};
+using JsonNumber = internal::json::Number;
+using JsonValue = internal::json::Value;
 
-class JsonParser {
-public:
-    explicit JsonParser(std::string_view text) : text_(text) {}
-
-    JsonValue parse() {
-        skip();
-        auto result = parseValue(0u);
-        skip();
-        if (position_ != text_.size()) syntax("trailing content");
-        return result;
+JsonValue parseJson(std::string_view text) {
+    try {
+        return internal::json::parse(text, internal::json::ParseOptions{48u, 32768u});
+    } catch (const internal::json::ParseError& error) {
+        fail(SchemaResult::ParseError, error.what());
     }
-
-private:
-    [[noreturn]] void syntax(std::string message) const {
-        fail(SchemaResult::ParseError,
-             std::move(message) + " at byte " + std::to_string(position_));
-    }
-
-    void skip() {
-        while (position_ < text_.size() &&
-               std::isspace(static_cast<unsigned char>(text_[position_])) != 0) {
-            ++position_;
-        }
-    }
-
-    bool consume(char expected) {
-        if (position_ < text_.size() && text_[position_] == expected) {
-            ++position_;
-            return true;
-        }
-        return false;
-    }
-
-    void expect(char expected) {
-        if (!consume(expected)) syntax("unexpected character");
-    }
-
-    void literal(std::string_view expected) {
-        if (text_.substr(position_, expected.size()) != expected) {
-            syntax("invalid literal");
-        }
-        position_ += expected.size();
-    }
-
-    std::uint32_t hex4() {
-        std::uint32_t value = 0u;
-        for (unsigned index = 0; index < 4u; ++index) {
-            if (position_ >= text_.size()) syntax("truncated unicode escape");
-            const char ch = text_[position_++];
-            value <<= 4u;
-            if (ch >= '0' && ch <= '9') value += static_cast<unsigned>(ch - '0');
-            else if (ch >= 'a' && ch <= 'f') value += static_cast<unsigned>(ch - 'a' + 10);
-            else if (ch >= 'A' && ch <= 'F') value += static_cast<unsigned>(ch - 'A' + 10);
-            else syntax("invalid unicode escape");
-        }
-        return value;
-    }
-
-    static void appendUtf8(std::string& output, std::uint32_t codePoint) {
-        if (codePoint <= 0x7fu) {
-            output.push_back(static_cast<char>(codePoint));
-        } else if (codePoint <= 0x7ffu) {
-            output.push_back(static_cast<char>(0xc0u | (codePoint >> 6u)));
-            output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-        } else if (codePoint <= 0xffffu) {
-            output.push_back(static_cast<char>(0xe0u | (codePoint >> 12u)));
-            output.push_back(static_cast<char>(0x80u | ((codePoint >> 6u) & 0x3fu)));
-            output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-        } else {
-            output.push_back(static_cast<char>(0xf0u | (codePoint >> 18u)));
-            output.push_back(static_cast<char>(0x80u | ((codePoint >> 12u) & 0x3fu)));
-            output.push_back(static_cast<char>(0x80u | ((codePoint >> 6u) & 0x3fu)));
-            output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-        }
-    }
-
-    std::string parseString() {
-        expect('"');
-        std::string output;
-        while (position_ < text_.size()) {
-            const unsigned char raw = static_cast<unsigned char>(text_[position_++]);
-            if (raw == static_cast<unsigned char>('"')) return output;
-            if (raw < 0x20u) syntax("control character in string");
-            if (raw != static_cast<unsigned char>('\\')) {
-                output.push_back(static_cast<char>(raw));
-                continue;
-            }
-            if (position_ >= text_.size()) syntax("truncated escape");
-            const char escape = text_[position_++];
-            switch (escape) {
-            case '"': output.push_back('"'); break;
-            case '\\': output.push_back('\\'); break;
-            case '/': output.push_back('/'); break;
-            case 'b': output.push_back('\b'); break;
-            case 'f': output.push_back('\f'); break;
-            case 'n': output.push_back('\n'); break;
-            case 'r': output.push_back('\r'); break;
-            case 't': output.push_back('\t'); break;
-            case 'u': {
-                std::uint32_t codePoint = hex4();
-                if (codePoint >= 0xd800u && codePoint <= 0xdbffu) {
-                    if (position_ + 2u > text_.size() || text_[position_] != '\\' ||
-                        text_[position_ + 1u] != 'u') {
-                        syntax("missing low surrogate");
-                    }
-                    position_ += 2u;
-                    const std::uint32_t low = hex4();
-                    if (low < 0xdc00u || low > 0xdfffu) syntax("invalid low surrogate");
-                    codePoint = 0x10000u + ((codePoint - 0xd800u) << 10u) +
-                                (low - 0xdc00u);
-                } else if (codePoint >= 0xdc00u && codePoint <= 0xdfffu) {
-                    syntax("unexpected low surrogate");
-                }
-                appendUtf8(output, codePoint);
-                break;
-            }
-            default: syntax("invalid escape");
-            }
-        }
-        syntax("unterminated string");
-    }
-
-    JsonNumber parseNumber() {
-        const std::size_t start = position_;
-        (void)consume('-');
-        if (consume('0')) {
-            if (position_ < text_.size() &&
-                std::isdigit(static_cast<unsigned char>(text_[position_])) != 0) {
-                syntax("leading zero");
-            }
-        } else {
-            if (position_ >= text_.size() || text_[position_] < '1' ||
-                text_[position_] > '9') {
-                syntax("invalid number");
-            }
-            while (position_ < text_.size() &&
-                   std::isdigit(static_cast<unsigned char>(text_[position_])) != 0) {
-                ++position_;
-            }
-        }
-        if (position_ < text_.size() &&
-            (text_[position_] == '.' || text_[position_] == 'e' ||
-             text_[position_] == 'E')) {
-            syntax("integer expected");
-        }
-        return {std::string(text_.substr(start, position_ - start))};
-    }
-
-    JsonValue parseValue(unsigned depth) {
-        if (depth > 48u) syntax("nesting too deep");
-        skip();
-        if (position_ >= text_.size()) syntax("value expected");
-        const char current = text_[position_];
-        if (current == '"') return JsonValue{parseString()};
-        if (current == '{') {
-            ++position_;
-            JsonValue::Object object;
-            skip();
-            if (consume('}')) return JsonValue{std::move(object)};
-            for (;;) {
-                skip();
-                if (position_ >= text_.size() || text_[position_] != '"') {
-                    syntax("object key expected");
-                }
-                auto key = parseString();
-                skip();
-                expect(':');
-                auto value = parseValue(depth + 1u);
-                if (!object.emplace(std::move(key), std::move(value)).second) {
-                    syntax("duplicate object key");
-                }
-                skip();
-                if (consume('}')) break;
-                expect(',');
-            }
-            return JsonValue{std::move(object)};
-        }
-        if (current == '[') {
-            ++position_;
-            JsonValue::Array array;
-            skip();
-            if (consume(']')) return JsonValue{std::move(array)};
-            for (;;) {
-                array.push_back(parseValue(depth + 1u));
-                skip();
-                if (consume(']')) break;
-                expect(',');
-            }
-            return JsonValue{std::move(array)};
-        }
-        if (text_.compare(position_, 4u, "true") == 0) {
-            literal("true");
-            return JsonValue{true};
-        }
-        if (text_.compare(position_, 5u, "false") == 0) {
-            literal("false");
-            return JsonValue{false};
-        }
-        if (text_.compare(position_, 4u, "null") == 0) {
-            literal("null");
-            return JsonValue{nullptr};
-        }
-        if (current == '-' || std::isdigit(static_cast<unsigned char>(current)) != 0) {
-            return JsonValue{parseNumber()};
-        }
-        syntax("invalid value");
-    }
-
-    std::string_view text_;
-    std::size_t position_{0};
-};
+}
 
 const JsonValue::Object& asObject(const JsonValue& value, std::string_view field) {
     const auto* object = std::get_if<JsonValue::Object>(&value.value);
@@ -641,7 +434,7 @@ SchemaDiagnostic decodeValidated(std::string_view json,
                           "schema document exceeds maximum size");
     }
     try {
-        auto root = JsonParser(json).parse();
+        auto root = parseJson(json);
         Document candidate = decode(root);
         const auto checked = validate(candidate);
         if (!checked.succeeded()) return checked;

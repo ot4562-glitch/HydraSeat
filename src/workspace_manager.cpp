@@ -1,9 +1,11 @@
 #include "hydra/workspace_manager.hpp"
+#include "hydra/internal/strict_json.hpp"
 
 #include <algorithm>
 #include <charconv>
 #include <cctype>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <map>
@@ -13,183 +15,114 @@
 #include <utility>
 #include <variant>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 namespace hydra {
 namespace {
 
-struct JsonNumber { std::string text; };
-struct JsonValue {
-    using Array = std::vector<JsonValue>;
-    using Object = std::map<std::string, JsonValue>;
-    std::variant<std::nullptr_t, bool, JsonNumber, std::string, Array, Object> value;
-};
+constexpr std::uintmax_t kMaximumWorkspaceProfileBytes = 1024u * 1024u;
 
-class JsonParser {
-public:
-    explicit JsonParser(std::string text) : text_(std::move(text)) {}
-
-    JsonValue parse() {
-        skip();
-        JsonValue value = parseValue(0);
-        skip();
-        if (pos_ != text_.size()) fail("trailing content");
-        return value;
+bool readBoundedFile(const std::filesystem::path& path,
+                     std::string& bytes,
+                     std::string& error) {
+    bytes.clear();
+    std::error_code sizeError;
+    const auto size = std::filesystem::file_size(path, sizeError);
+    if (sizeError) {
+        error = "could not inspect profile size: " + sizeError.message();
+        return false;
     }
-
-private:
-    [[noreturn]] void fail(const char* message) const {
-        throw std::runtime_error(std::string(message) + " at byte " + std::to_string(pos_));
-    }
-
-    void skip() {
-        while (pos_ < text_.size() && std::isspace(static_cast<unsigned char>(text_[pos_]))) ++pos_;
-    }
-
-    bool consume(char c) {
-        if (pos_ < text_.size() && text_[pos_] == c) { ++pos_; return true; }
+    if (size > kMaximumWorkspaceProfileBytes) {
+        error = "profile exceeds bounded size";
         return false;
     }
 
-    void expect(char c) {
-        if (!consume(c)) fail("unexpected character");
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        error = "could not open profile";
+        return false;
+    }
+    bytes.assign(static_cast<std::size_t>(size), '\0');
+    if (!bytes.empty()) {
+        input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (input.gcount() != static_cast<std::streamsize>(bytes.size())) {
+            error = "profile changed or ended during bounded read";
+            return false;
+        }
+    }
+    if (input.peek() != std::char_traits<char>::eof()) {
+        error = "profile changed during bounded read";
+        return false;
+    }
+    return true;
+}
+
+bool writeFileAtomically(const std::filesystem::path& target,
+                         std::string_view bytes,
+                         std::string& error) {
+    if (bytes.size() > kMaximumWorkspaceProfileBytes) {
+        error = "encoded profile exceeds bounded size";
+        return false;
     }
 
-    void literal(std::string_view value) {
-        if (text_.substr(pos_, value.size()) != value) fail("invalid literal");
-        pos_ += value.size();
+    auto staging = target;
+    staging += L".tmp";
+    std::error_code cleanupError;
+    (void)std::filesystem::remove(staging, cleanupError);
+    if (cleanupError) {
+        error = "could not remove stale staged profile: " + cleanupError.message();
+        return false;
     }
 
-    static void appendCodePoint(std::string& out, std::uint32_t cp) {
-        if (cp <= 0x7f) out.push_back(static_cast<char>(cp));
-        else if (cp <= 0x7ff) {
-            out.push_back(static_cast<char>(0xc0 | (cp >> 6)));
-            out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
-        } else if (cp <= 0xffff) {
-            out.push_back(static_cast<char>(0xe0 | (cp >> 12)));
-            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
-            out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
-        } else {
-            out.push_back(static_cast<char>(0xf0 | (cp >> 18)));
-            out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3f)));
-            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
-            out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+    {
+        std::ofstream output(staging, std::ios::binary | std::ios::trunc);
+        if (!output) {
+            error = "could not open staged profile for writing";
+            return false;
+        }
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        output.flush();
+        if (!output) {
+            error = "failed while writing staged profile";
+            return false;
+        }
+        output.close();
+        if (!output) {
+            error = "failed while closing staged profile";
+            return false;
         }
     }
 
-    std::uint32_t hex4() {
-        std::uint32_t cp = 0;
-        for (int i = 0; i < 4; ++i) {
-            if (pos_ >= text_.size()) fail("truncated unicode escape");
-            const char c = text_[pos_++];
-            cp <<= 4;
-            if (c >= '0' && c <= '9') cp += static_cast<unsigned>(c - '0');
-            else if (c >= 'a' && c <= 'f') cp += static_cast<unsigned>(c - 'a' + 10);
-            else if (c >= 'A' && c <= 'F') cp += static_cast<unsigned>(c - 'A' + 10);
-            else fail("invalid unicode escape");
-        }
-        return cp;
+#if defined(_WIN32)
+    if (MoveFileExW(staging.c_str(), target.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE) {
+        error = "could not commit staged profile: Win32 error " +
+                std::to_string(GetLastError());
+        std::error_code ignored;
+        (void)std::filesystem::remove(staging, ignored);
+        return false;
     }
-
-    std::string parseString() {
-        expect('"');
-        std::string out;
-        while (pos_ < text_.size()) {
-            unsigned char c = static_cast<unsigned char>(text_[pos_++]);
-            if (c == '"') return out;
-            if (c < 0x20) fail("control character in string");
-            if (c != '\\') { out.push_back(static_cast<char>(c)); continue; }
-            if (pos_ >= text_.size()) fail("truncated escape");
-            const char e = text_[pos_++];
-            switch (e) {
-            case '"': out.push_back('"'); break;
-            case '\\': out.push_back('\\'); break;
-            case '/': out.push_back('/'); break;
-            case 'b': out.push_back('\b'); break;
-            case 'f': out.push_back('\f'); break;
-            case 'n': out.push_back('\n'); break;
-            case 'r': out.push_back('\r'); break;
-            case 't': out.push_back('\t'); break;
-            case 'u': {
-                std::uint32_t cp = hex4();
-                if (cp >= 0xd800 && cp <= 0xdbff) {
-                    if (pos_ + 2 > text_.size() || text_[pos_] != '\\' || text_[pos_ + 1] != 'u')
-                        fail("missing low surrogate");
-                    pos_ += 2;
-                    const std::uint32_t low = hex4();
-                    if (low < 0xdc00 || low > 0xdfff) fail("invalid low surrogate");
-                    cp = 0x10000 + ((cp - 0xd800) << 10) + (low - 0xdc00);
-                } else if (cp >= 0xdc00 && cp <= 0xdfff) {
-                    fail("unexpected low surrogate");
-                }
-                appendCodePoint(out, cp);
-                break;
-            }
-            default: fail("invalid escape");
-            }
-        }
-        fail("unterminated string");
+#else
+    std::error_code renameError;
+    std::filesystem::rename(staging, target, renameError);
+    if (renameError) {
+        error = "could not commit staged profile: " + renameError.message();
+        std::error_code ignored;
+        (void)std::filesystem::remove(staging, ignored);
+        return false;
     }
+#endif
+    return true;
+}
 
-    JsonNumber parseNumber() {
-        const std::size_t start = pos_;
-        consume('-');
-        if (consume('0')) {
-            if (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_])))
-                fail("leading zero");
-        } else {
-            if (pos_ >= text_.size() || text_[pos_] < '1' || text_[pos_] > '9') fail("invalid number");
-            while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) ++pos_;
-        }
-        if (pos_ < text_.size() && (text_[pos_] == '.' || text_[pos_] == 'e' || text_[pos_] == 'E'))
-            fail("integer expected");
-        return JsonNumber{text_.substr(start, pos_ - start)};
-    }
+using JsonNumber = internal::json::Number;
+using JsonValue = internal::json::Value;
 
-    JsonValue parseValue(unsigned depth) {
-        if (depth > 64) fail("nesting too deep");
-        skip();
-        if (pos_ >= text_.size()) fail("value expected");
-        if (text_[pos_] == '"') return JsonValue{parseString()};
-        if (text_[pos_] == '{') {
-            ++pos_;
-            JsonValue::Object object;
-            skip();
-            if (consume('}')) return JsonValue{std::move(object)};
-            while (true) {
-                skip();
-                if (pos_ >= text_.size() || text_[pos_] != '"') fail("object key expected");
-                std::string key = parseString();
-                skip(); expect(':');
-                if (!object.emplace(std::move(key), parseValue(depth + 1)).second) fail("duplicate object key");
-                skip();
-                if (consume('}')) break;
-                expect(',');
-            }
-            return JsonValue{std::move(object)};
-        }
-        if (text_[pos_] == '[') {
-            ++pos_;
-            JsonValue::Array array;
-            skip();
-            if (consume(']')) return JsonValue{std::move(array)};
-            while (true) {
-                array.push_back(parseValue(depth + 1));
-                skip();
-                if (consume(']')) break;
-                expect(',');
-            }
-            return JsonValue{std::move(array)};
-        }
-        if (text_.compare(pos_, 4, "true") == 0) { literal("true"); return JsonValue{true}; }
-        if (text_.compare(pos_, 5, "false") == 0) { literal("false"); return JsonValue{false}; }
-        if (text_.compare(pos_, 4, "null") == 0) { literal("null"); return JsonValue{nullptr}; }
-        if (text_[pos_] == '-' || std::isdigit(static_cast<unsigned char>(text_[pos_])))
-            return JsonValue{parseNumber()};
-        fail("invalid value");
-    }
-
-    std::string text_;
-    std::size_t pos_{0};
-};
+JsonValue parseJson(std::string_view text) {
+    return internal::json::parse(text, internal::json::ParseOptions{64u, 4096u});
+}
 
 const JsonValue::Object& objectOf(const JsonValue& v) {
     const auto* p = std::get_if<JsonValue::Object>(&v.value);
@@ -371,10 +304,15 @@ std::wstring WorkspaceManager::resourceKey(SeatDeviceType type, const std::wstri
 }
 
 SeatId WorkspaceManager::createSeat(const std::wstring& name) {
+    m_lastError.clear();
+    if (m_nextId == 0u || m_nextId == std::numeric_limits<SeatId>::max()) {
+        m_lastError = "seat id space exhausted";
+        return 0u;
+    }
     const SeatId id = m_nextId++;
     SeatConfig seat;
     seat.seatId = id;
-    seat.name = name.empty() ? (L"Player " + std::to_wstring(id)) : name;
+    seat.name = name.empty() ? (L"Seat " + std::to_wstring(id)) : name;
     m_seats.emplace(id, std::move(seat));
     return id;
 }
@@ -625,12 +563,14 @@ void WorkspaceManager::removeUnusedShareableResources() {
 bool WorkspaceManager::saveToFile(const std::string& filePath) const {
     m_lastError.clear();
     try {
-        std::ofstream out(filePath, std::ios::binary | std::ios::trunc);
-        if (!out) { m_lastError = "could not open profile for writing"; return false; }
+        std::ostringstream out;
         out << "{\n  \"schema_version\": 2,\n  \"management_seat_id\": " << m_managementSeatId
             << ",\n  \"shareable_resources\": [";
         bool first = true;
-        for (const auto& key : m_shareableResources) {
+        std::vector<std::wstring> shareableResources(
+            m_shareableResources.begin(), m_shareableResources.end());
+        std::sort(shareableResources.begin(), shareableResources.end());
+        for (const auto& key : shareableResources) {
             const auto split = key.find(L':');
             if (split == std::wstring::npos) continue;
             const unsigned typeValue = static_cast<unsigned>(std::stoul(key.substr(0, split)));
@@ -648,7 +588,9 @@ bool WorkspaceManager::saveToFile(const std::string& filePath) const {
                 << "      \"id\": " << s.seatId << ",\n"
                 << "      \"name\": " << quote(s.name) << ",\n"
                 << "      \"active\": " << (s.active ? "true" : "false") << ",\n"
-                << "      \"target_hwnd\": " << s.targetHwnd << ",\n"
+                // Legacy schema v2 retains this field for compatibility only.
+                // Live HWND identity is never stable profile state.
+                << "      \"target_hwnd\": 0,\n"
                 << "      \"displays\": "; writeStringArray(out, s.displayIds); out << ",\n"
                 << "      \"primary_display\": ";
             if (s.primaryDisplayId) out << quote(*s.primaryDisplayId); else out << "null";
@@ -663,8 +605,13 @@ bool WorkspaceManager::saveToFile(const std::string& filePath) const {
         }
         if (!seats.empty()) out << '\n';
         out << "  ]\n}\n";
-        if (!out) { m_lastError = "failed while writing profile"; return false; }
-        return true;
+        if (!out) {
+            m_lastError = "failed while encoding profile";
+            return false;
+        }
+
+        const auto bytes = out.str();
+        return writeFileAtomically(std::filesystem::path(filePath), bytes, m_lastError);
     } catch (const std::exception& e) {
         m_lastError = e.what();
         return false;
@@ -674,11 +621,11 @@ bool WorkspaceManager::saveToFile(const std::string& filePath) const {
 bool WorkspaceManager::loadFromFile(const std::string& filePath) {
     m_lastError.clear();
     try {
-        std::ifstream in(filePath, std::ios::binary);
-        if (!in) { m_lastError = "could not open profile"; return false; }
-        std::ostringstream buffer;
-        buffer << in.rdbuf();
-        const auto root = objectOf(JsonParser(buffer.str()).parse());
+        std::string profileBytes;
+        if (!readBoundedFile(std::filesystem::path(filePath), profileBytes, m_lastError)) {
+            return false;
+        }
+        const auto root = objectOf(parseJson(profileBytes));
         if (uintOf(required(root, "schema_version")) != 2) throw std::runtime_error("unsupported schema_version");
         SeatId requestedManagementSeatId = 1;
         bool managementSeatExplicit = false;
@@ -705,7 +652,9 @@ bool WorkspaceManager::loadFromFile(const std::string& filePath) {
         for (const auto& entry : arrayOf(required(root, "seats"))) {
             const auto& o = objectOf(entry);
             const auto rawId = uintOf(required(o, "id"));
-            if (rawId == 0 || rawId > std::numeric_limits<SeatId>::max()) throw std::runtime_error("seat id out of range");
+            if (rawId == 0 || rawId >= std::numeric_limits<SeatId>::max()) {
+                throw std::runtime_error("seat id out of range or exhausts id space");
+            }
             const SeatId id = static_cast<SeatId>(rawId);
             if (!seenIds.insert(id).second) throw std::runtime_error("duplicate seat id");
             maxId = std::max(maxId, id);
@@ -715,7 +664,10 @@ bool WorkspaceManager::loadFromFile(const std::string& filePath) {
             seat.name = fromUtf8(stringOf(required(o, "name")));
             if (seat.name.empty()) throw std::runtime_error("seat name must not be empty");
             seat.active = boolOf(required(o, "active"));
-            seat.targetHwnd = uintOf(required(o, "target_hwnd"));
+            // Parse the legacy field to keep schema-v2 compatibility, but never
+            // restore a persisted HWND into live runtime ownership state.
+            (void)uintOf(required(o, "target_hwnd"));
+            seat.targetHwnd = 0u;
             seat.displayIds = readStringArray(required(o, "displays"));
             if (const auto& p = required(o, "primary_display"); !std::holds_alternative<std::nullptr_t>(p.value))
                 seat.primaryDisplayId = fromUtf8(stringOf(p));

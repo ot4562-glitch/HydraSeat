@@ -162,9 +162,22 @@ void testManifestHasNoExecutablePrivilegeAndRejectsBadSelectors() {
           "duplicate package entry identity is rejected deterministically");
 
     value = manifest();
+    check(value.entries[1].contentSchemaVersion == portable::kSetupPackageVersion &&
+              validateCommunityPackageManifest(value).succeeded(),
+          "current setup-package v2 content schema is accepted explicitly");
+
+    value.entries[1].contentSchemaVersion = portable::kLegacySetupPackageVersion;
+    check(validateCommunityPackageManifest(value).succeeded(),
+          "legacy setup-package v1 content schema remains explicitly supported");
+
+    value.entries[1].contentSchemaVersion = portable::kSetupPackageVersion + 1u;
+    check(validateCommunityPackageManifest(value).code == PackageCode::InvalidEntry,
+          "unknown future setup-package schema cannot inherit community-package trust silently");
+
+    value = manifest();
     value.entries[0].contentSchemaVersion = 999u;
     check(validateCommunityPackageManifest(value).code == PackageCode::InvalidEntry,
-          "unknown future entry schema cannot inherit trust silently");
+          "unknown future result entry schema cannot inherit trust silently");
 
     value = manifest();
     value.minimumProfileSchema = profile::kProfileSchemaVersion + 1u;

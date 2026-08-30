@@ -58,9 +58,10 @@ HydraGateCAdapterInputEventV1 toAdapterEvent(
     const InputEventMessage& message) noexcept {
     HydraGateCAdapterInputEventV1 result{};
     result.struct_size = sizeof(result);
-    result.kind = message.kind == hydra::gatec::InputKind::Keyboard
-                      ? HYDRA_GATE_C_ADAPTER_INPUT_KEYBOARD
-                      : HYDRA_GATE_C_ADAPTER_INPUT_MOUSE;
+    const auto adapterKind = message.kind == hydra::gatec::InputKind::Keyboard
+                                 ? HYDRA_GATE_C_ADAPTER_INPUT_KEYBOARD
+                                 : HYDRA_GATE_C_ADAPTER_INPUT_MOUSE;
+    result.kind = static_cast<std::uint8_t>(adapterKind);
     result.key_transition = static_cast<std::uint8_t>(message.keyTransition);
     result.is_touchpad = message.isTouchpad ? 1u : 0u;
     result.timestamp_micros = message.timestampMicros;
@@ -509,6 +510,36 @@ private:
                 return sendError(frame.sequence,
                                  1100u + static_cast<std::uint32_t>(result),
                                  adapterResultMessage(result));
+            }
+
+            // Do not acknowledge host routing intent merely because apply_input
+            // returned success. Read the adapter state back in the receiving
+            // process and return the existing StateSnapshot contract as the
+            // exact-sequence receipt. The authenticated channel is already bound
+            // to this target's validated Seat/PID by Hello.
+            HydraGateCAdapterSnapshotV1 adapterSnapshot{};
+            adapterSnapshot.struct_size = sizeof(adapterSnapshot);
+            const auto snapshotResult = hydra_gate_c_adapter_get_snapshot(
+                m_adapter.get(), HYDRA_GATE_C_ADAPTER_NO_PROBE_KEY,
+                &adapterSnapshot);
+            if (snapshotResult != HYDRA_GATE_C_ADAPTER_OK) {
+                return sendError(frame.sequence,
+                                 1150u + static_cast<std::uint32_t>(snapshotResult),
+                                 adapterResultMessage(snapshotResult));
+            }
+            if (adapterSnapshot.last_applied_sequence != frame.sequence) {
+                return sendError(frame.sequence, 1199u,
+                                 "target adapter snapshot did not observe the exact applied input sequence");
+            }
+
+            const auto snapshot = fromAdapterSnapshot(adapterSnapshot);
+            std::uint32_t systemError = 0;
+            if (!m_channel.writeFrame(
+                    hydra::gatec::encodeStateSnapshot(frame.sequence, snapshot),
+                    kIoTimeoutMs, &error, &systemError)) {
+                setProtocolError("input verification snapshot write failed: " + error,
+                                 systemError);
+                return false;
             }
             notifyStateChanged();
             return true;

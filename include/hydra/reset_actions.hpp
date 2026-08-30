@@ -15,22 +15,28 @@
 namespace hydra::reset {
 
 inline constexpr std::uint32_t kRuntimeResetRegistrationMagic = 0x31525248u; // "HRR1".
-inline constexpr std::uint16_t kRuntimeResetRegistrationVersion = 1;
-inline constexpr std::size_t kRuntimeResetRegistrationHeaderBytes = 64;
+inline constexpr std::uint16_t kRuntimeResetRegistrationLegacyVersion = 1;
+inline constexpr std::uint16_t kRuntimeResetRegistrationVersion = 2;
+inline constexpr std::size_t kRuntimeResetRegistrationLegacyHeaderBytes = 64;
+inline constexpr std::size_t kRuntimeResetRegistrationHeaderBytes = 68;
 inline constexpr std::size_t kRuntimeResetRegistrationMaxBytes =
-    kRuntimeResetRegistrationHeaderBytes + watchdog::kWatchdogMaxFrameBytes;
+    kRuntimeResetRegistrationHeaderBytes +
+    recovery::kRecoveryProcessAttachmentIdentityBytes +
+    watchdog::kWatchdogMaxFrameBytes;
 inline constexpr std::uint32_t kResetOwnerActionId = 0xfffffff0u;
 inline constexpr std::uint32_t kResetOwnerTimeoutMs = 2'000u;
 
-// The registration is recovery authority written by the runtime before risky
-// activation. It contains only the exact owner process identity and the same
-// bounded rollback manifest already armed in the watchdog. Its persisted digest
-// covers both the owner identity and canonical manifest bytes. The crash journal
-// remains evidence-only; reset execution requires the registration to correlate
-// to the journal's session, generation, and deterministic plan hash.
+// Version 2 registration is recovery authority written before risky activation.
+// It contains the exact owner process identity, the same bounded rollback manifest
+// armed in the watchdog, and the full RecoveryProcessAttachmentIdentity. Its
+// persisted digest covers all three. Legacy version 1 remains decode-only evidence:
+// it may be inspected for diagnosis/clean-metadata cleanup but cannot authorize
+// process mutation. The crash journal remains evidence-only; mutating reset requires
+// an exact attachment-bound registration correlated to the journal.
 struct RuntimeResetRegistration {
     watchdog::ProcessIdentity ownerProcess{};
     watchdog::RollbackPlanManifest manifest;
+    std::optional<recovery::RecoveryProcessAttachmentIdentity> attachment;
 
     bool operator==(const RuntimeResetRegistration&) const = default;
 };

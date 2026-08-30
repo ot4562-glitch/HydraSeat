@@ -511,6 +511,87 @@ void testExplicitRemapGenerationInvariants() {
           "different-source remap advances mapping generation and clears old state");
 }
 
+void testAtomicSeatSnapshotConsistency() {
+    VirtualXInputContext context;
+    const auto original = source(8080u, 0u);
+    const auto rebound = source(8080u, 1u);
+    auto caps = capabilitiesA();
+    auto battery = batteryA();
+    check(context.mapLogicalSlot(1u, 0u, original, 1u) ==
+              VirtualXInputResult::Success &&
+              context.applySourceSnapshot(
+                  2u, original, 1u, stateA(), &caps, &battery) ==
+                  VirtualXInputResult::Success,
+          "one atomic Seat snapshot publishes state, capabilities, and battery");
+
+    VirtualXInputState state;
+    VirtualXInputCapabilities queriedCaps;
+    VirtualXInputBattery queriedBattery;
+    VirtualXInputMapping firstMapping;
+    check(context.getState(0u, state) == VirtualXInputResult::Success &&
+              context.getCapabilities(0u, queriedCaps) ==
+                  VirtualXInputResult::Success &&
+              context.getBattery(0u, queriedBattery) ==
+                  VirtualXInputResult::Success &&
+              context.getMapping(0u, firstMapping) ==
+                  VirtualXInputResult::Success &&
+              state.mapping == firstMapping && queriedCaps.mapping == firstMapping &&
+              queriedBattery.mapping == firstMapping,
+          "all supported metadata observes exactly the state mapping generation");
+
+    const NormalizedXInputGamepad neutral{};
+    check(context.applySourceSnapshot(
+              3u, original, 1u, neutral, nullptr, nullptr) ==
+              VirtualXInputResult::Success &&
+              context.getState(0u, state) == VirtualXInputResult::Success &&
+              state.connected && state.gamepad == neutral &&
+              context.getCapabilities(0u, queriedCaps) ==
+                  VirtualXInputResult::Disconnected &&
+              context.getBattery(0u, queriedBattery) ==
+                  VirtualXInputResult::Disconnected,
+          "connected neutral state remains success while unavailable metadata fails explicitly");
+
+    auto reboundCaps = capabilitiesA();
+    reboundCaps.subtype = 2u;
+    NormalizedXInputBattery reboundBattery{
+        true, XInputBatteryDeviceType::Gamepad,
+        XInputBatteryType::Wired, XInputBatteryLevel::Medium};
+    check(context.applySourceSnapshot(
+              4u, rebound, 2u, stateB(), &reboundCaps, &reboundBattery) ==
+              VirtualXInputResult::Success,
+          "same stable source can atomically rebind runtime slot with a new generation");
+    VirtualXInputMapping reboundMapping;
+    check(context.getMapping(0u, reboundMapping) == VirtualXInputResult::Success &&
+              context.getState(0u, state) == VirtualXInputResult::Success &&
+              context.getCapabilities(0u, queriedCaps) ==
+                  VirtualXInputResult::Success &&
+              context.getBattery(0u, queriedBattery) ==
+                  VirtualXInputResult::Success &&
+              reboundMapping.source == rebound &&
+              reboundMapping.sourceGeneration == 2u &&
+              reboundMapping.mappingGeneration == firstMapping.mappingGeneration + 1u &&
+              state.mapping == reboundMapping && queriedCaps.mapping == reboundMapping &&
+              queriedBattery.mapping == reboundMapping && state.gamepad == stateB() &&
+              queriedCaps.capabilities == reboundCaps &&
+              queriedBattery.battery == reboundBattery,
+          "rebind changes mapping/state/metadata together without a mixed-generation window");
+    check(context.applySourceSnapshot(
+              5u, original, 1u, stateA(), &caps, &battery) ==
+              VirtualXInputResult::StaleGeneration &&
+              context.lastAppliedSequence() == 4u,
+          "pre-rebind source generation cannot resurrect after the atomic rebind");
+
+    auto invalidCaps = reboundCaps;
+    invalidCaps.type = static_cast<XInputCapabilityType>(9u);
+    check(context.applySourceSnapshot(
+              5u, rebound, 2u, stateA(), &invalidCaps, &reboundBattery) ==
+              VirtualXInputResult::InvalidState &&
+              context.lastAppliedSequence() == 4u &&
+              context.getState(0u, state) == VirtualXInputResult::Success &&
+              state.gamepad == stateB(),
+          "malformed snapshot metadata fails closed without partially committing state");
+}
+
 void testValidationBoundaries() {
     ControllerSourceIdentity invalidSource{};
     invalidSource.sourceKey = 0u;
@@ -542,6 +623,7 @@ int main() {
     testCapabilitiesBatteryAndVibration();
     testDisconnectReconnectAndReset();
     testExplicitRemapGenerationInvariants();
+    testAtomicSeatSnapshotConsistency();
     testValidationBoundaries();
     std::cout << "Virtual XInput state tests passed.\n";
     return EXIT_SUCCESS;

@@ -148,6 +148,12 @@ void testSensitiveOrMalformedFieldsFailTransactionally() {
           "personal absolute path cannot enter public support environment fields");
 
     invalid = input();
+    invalid.windowsBuildClass = "DESKTOP-ALICE";
+    check(buildSupportBundle(invalid, output).code == SupportCode::InvalidEnvironment &&
+              output == sentinel,
+          "machine names cannot masquerade as a public Windows build class");
+
+    invalid = input();
     invalid.events.push_back({"bad event with spaces", 1u, 5u});
     check(buildSupportBundle(invalid, output).code == SupportCode::InvalidEvent &&
               output == sentinel,
@@ -177,18 +183,50 @@ void testExactPreviewMustBeApprovedBeforeExport() {
     SupportExportPreview preview;
     check(session.prepare(bundle, preview).succeeded() && session.hasPreview() &&
               !session.approved() && !preview.exactJson.empty() &&
+              !preview.payloadIdentity.empty() && preview.generation != 0u &&
               preview.humanSummary.find("Redaction:") != std::string::npos,
-          "support bundle produces human and exact JSON previews together");
+          "support bundle produces human, exact JSON, and exact payload identity together");
 
-    auto changedPreview = preview.exactJson;
-    changedPreview.push_back(' ');
-    check(session.approve(changedPreview).code == SupportCode::PreviewMismatch &&
+    auto changedPreview = preview;
+    changedPreview.exactJson.push_back(' ');
+    check(session.approve(changedPreview).code == SupportCode::PayloadIdentityMismatch &&
               !session.approved(),
-          "approval is bound to the exact preview bytes rather than bundle identity alone");
-    check(session.approve(preview.exactJson).succeeded() && session.approved(),
-          "exact preview bytes can be explicitly approved");
-    check(session.exportApproved(exported).succeeded() && exported == preview.exactJson,
-          "approved export is byte-identical to the exact JSON preview");
+          "approval is bound to the exact preview bytes rather than a recomputed bundle");
+    changedPreview = preview;
+    changedPreview.payloadIdentity.push_back('x');
+    check(session.approve(changedPreview).code == SupportCode::PayloadIdentityMismatch &&
+              !session.approved(),
+          "approval rejects a mismatched deterministic payload identity");
+    changedPreview = preview;
+    ++changedPreview.canonicalizationVersion;
+    check(session.approve(changedPreview).code == SupportCode::PayloadIdentityMismatch &&
+              !session.approved(),
+          "approval rejects a changed support canonicalization version");
+    check(session.approve(preview).succeeded() && session.approved(),
+          "exact preview identity can be explicitly approved");
+    bundle.events.push_back({"runtime.after-approval", 1u, 6u});
+    check(session.exportApproved(exported).succeeded() && exported == preview.exactJson &&
+              exported.find("runtime.after-approval") == std::string::npos,
+          "approved export returns frozen preview bytes even if source bundle changes afterward");
+    bundle.events.pop_back();
+
+    check(session.prepare(bundle, changedPreview).succeeded() &&
+              changedPreview.exactJson == preview.exactJson &&
+              changedPreview.payloadIdentity == preview.payloadIdentity &&
+              changedPreview.generation != preview.generation,
+          "canonical support payload is deterministic while consent generation changes");
+    check(session.approve(preview).code == SupportCode::StaleApproval && !session.approved(),
+          "old approval cannot be replayed after a byte-identical re-preview");
+
+    auto invalidBundle = bundle;
+    invalidBundle.playerNamesExcluded = false;
+    check(session.prepare(invalidBundle, changedPreview).code == SupportCode::RedactionRequired &&
+              !session.hasPreview() && !session.approved(),
+          "failed preparation of a new bundle revokes any previous export approval");
+    exported = "sentinel";
+    check(session.exportApproved(exported).code == SupportCode::PreviewRequired &&
+              exported == "sentinel",
+          "stale previously-approved support payload cannot export after a failed re-prepare");
 }
 
 } // namespace

@@ -1,5 +1,7 @@
 #include "hydra/hidhide_session_recovery.hpp"
 
+#include "phase3_hardware_evidence_fixture.hpp"
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -100,15 +102,17 @@ HidHideSessionRecoveryRecord record(std::uint64_t resourceId = 0x42,
     return {resourceId, generation, beforeState(), appliedState()};
 }
 
-HidHideSessionRequest guardedRequest(std::uint64_t generation = 7) {
+HidHideSessionRequest guardedRequest(
+    const Phase3HardwareAcceptanceEvidence& evidence,
+    std::uint64_t generation = 7) {
     HidHideSessionRequest request;
-    request.deviceInstanceIds = {L"HID\\VID_1111&PID_0001\\SESSION"};
+    request.deviceInstanceIds = test::SyntheticPhase3EvidenceFixture::requestedDeviceInstanceIds();
     request.allowedApplications = {
         L"\\Device\\HarddiskVolume3\\HydraSeat\\hydra_host.exe"};
     request.replacementPathVerified = true;
     request.recoveryReady = true;
     request.spareRecoveryInputPresent = true;
-    request.physicalAcceptanceRecorded = true;
+    request.physicalAcceptanceEvidence = evidence;
     request.nativeMutationApproved = true;
     request.expiryMilliseconds = 30'000;
     request.generation = generation;
@@ -181,8 +185,9 @@ void testGuardedOrderingAndCleanup() {
     auto platform = std::make_shared<FakePlatform>();
     platform->state = beforeState();
     GuardedHidHideSession guarded(platform, root, 0x55, 31, 4, 2'000);
+    test::SyntheticPhase3EvidenceFixture evidence;
 
-    const auto prepared = guarded.prepare(guardedRequest(13), 1'000);
+    const auto prepared = guarded.prepare(guardedRequest(evidence.evidence(), 13), 1'000);
     check(prepared.succeeded() && prepared.phase == HidHideSessionPhase::Prepared &&
               guarded.rollbackAction().has_value(),
           "guarded session persists a recovery plan before exposing activation");

@@ -35,6 +35,7 @@ struct TrackedWindow {
     WindowIdentity identity;
     SeatId seatId{0};
     WindowRole role{WindowRole::PrimaryGame};
+    bool rootProcess{false};
     std::uintptr_t ownerHandle{0};
     bool visible{false};
     WindowRect bounds;
@@ -42,6 +43,26 @@ struct TrackedWindow {
     std::wstring className;
 
     friend bool operator==(const TrackedWindow&, const TrackedWindow&) = default;
+};
+
+struct WindowTargetSnapshot {
+    SeatId seatId{0};
+    WindowTargetKind kind{WindowTargetKind::Visual};
+    WindowTargetStatus status{WindowTargetStatus::Unresolved};
+    WindowRole desiredRole{WindowRole::PrimaryGame};
+    std::uint64_t bindingGeneration{0};
+    std::optional<TrackedWindow> window;
+
+    friend bool operator==(const WindowTargetSnapshot&, const WindowTargetSnapshot&) = default;
+};
+
+struct SeatWindowTargets {
+    SeatId seatId{0};
+    WindowTargetSnapshot visual;
+    WindowTargetSnapshot input;
+    bool inputDistinct{false};
+
+    friend bool operator==(const SeatWindowTargets&, const SeatWindowTargets&) = default;
 };
 
 struct WindowTrackerEvent {
@@ -56,11 +77,21 @@ struct WindowTrackerSnapshot {
     std::uint64_t sequence{0};
     std::uint64_t droppedCallbackEvents{0};
     std::vector<TrackedWindow> windows;
+    std::vector<SeatWindowTargets> targets;
 };
 
 struct WindowTrackerOptions {
     std::size_t callbackQueueCapacity{256};
     std::size_t eventHistoryCapacity{256};
+    std::uint32_t reacquisitionTimeoutMs{5000};
+};
+
+class WindowTargetObserver {
+public:
+    virtual ~WindowTargetObserver() = default;
+    // Called from the tracker's worker after ownership state has been committed.
+    // Implementations must only enqueue bounded work and return promptly.
+    virtual void onWindowTargetChanged(const WindowTargetSnapshot& target) noexcept = 0;
 };
 
 class WindowTracker {
@@ -85,11 +116,20 @@ public:
     bool notifyWindowChange(std::uintptr_t nativeHandle, WindowChangeHint hint) noexcept;
 
     WindowTrackerSnapshot snapshot() const;
+    // Input mirrors the validated visual target when no distinct input role is
+    // configured. With a distinct role it never falls back to a visual/helper HWND:
+    // consumers must require Bound, observe bindingGeneration changes, and call
+    // validateIdentity() immediately before using the returned WindowIdentity.
+    std::optional<WindowTargetSnapshot> target(SeatId seatId,
+                                               WindowTargetKind kind) const;
     std::vector<WindowTrackerEvent> eventsAfter(std::uint64_t sequence,
                                                  std::size_t maxEvents,
                                                  bool& overflow) const;
 
     bool validateIdentity(const WindowIdentity& identity) const noexcept;
+    std::uint64_t addTargetObserver(SeatId seatId, WindowTargetKind kind,
+                                    std::weak_ptr<WindowTargetObserver> observer) const;
+    void removeTargetObserver(std::uint64_t observerId) const noexcept;
 
 private:
     class Impl;

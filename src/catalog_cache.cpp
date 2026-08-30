@@ -76,16 +76,14 @@ CatalogRefreshResult CatalogCacheModel::refresh(const CatalogRefreshInput& input
         return result(CatalogRefreshState::Rejected, CatalogRefreshCode::InvalidArtifact,
                       "downloaded catalog artifact metadata is invalid");
     }
-    if (current_ && current_->catalogId == artifact.catalogId &&
-        artifact.revision <= current_->revision) {
-        if (artifact.revision == current_->revision &&
-            artifact.expectedSha256 == current_->expectedSha256 &&
-            artifact.observedSha256 == current_->observedSha256) {
+    if (current_ && artifact.revision <= current_->revision &&
+        current_->catalogId == artifact.catalogId) {
+        if (artifact == *current_) {
             return result(CatalogRefreshState::UpToDate, CatalogRefreshCode::Success,
-                          "catalog cache already contains this trusted revision");
+                          "catalog cache already contains this exact trusted revision");
         }
         return result(CatalogRefreshState::Rejected, CatalogRefreshCode::StaleRevision,
-                      "downloaded catalog revision is stale or conflicts with the installed revision");
+                      "downloaded catalog revision is stale or conflicts with the installed revision metadata");
     }
 
     trust::ArtifactManifest manifest;
@@ -114,11 +112,17 @@ CatalogRefreshResult CatalogCacheModel::refresh(const CatalogRefreshInput& input
         return result(CatalogRefreshState::Rejected, CatalogRefreshCode::TrustRejected,
                       "downloaded catalog failed trust validation: " + trustEvaluation.message);
     }
+    if (current_ && (current_->catalogId != artifact.catalogId ||
+                     current_->sourceId != artifact.sourceId)) {
+        return result(CatalogRefreshState::Rejected, CatalogRefreshCode::InvalidArtifact,
+                      "downloaded catalog identity/provenance does not match the installed cache lineage");
+    }
 
     try {
+        auto nextCurrent = current_;
         auto nextHistory = history_;
-        if (current_) {
-            nextHistory.push_back(*current_);
+        if (nextCurrent) {
+            nextHistory.push_back(*nextCurrent);
             if (nextHistory.size() > kMaximumCatalogCacheHistory) {
                 nextHistory.erase(nextHistory.begin(),
                                   nextHistory.begin() +
@@ -126,8 +130,9 @@ CatalogRefreshResult CatalogCacheModel::refresh(const CatalogRefreshInput& input
                                                                   kMaximumCatalogCacheHistory));
             }
         }
-        current_ = artifact;
-        history_ = std::move(nextHistory);
+        nextCurrent = artifact;
+        current_.swap(nextCurrent);
+        history_.swap(nextHistory);
         return result(CatalogRefreshState::Applied, CatalogRefreshCode::Success,
                       "trusted data-only catalog revision applied to the local cache");
     } catch (...) {
@@ -146,11 +151,13 @@ CatalogRefreshResult CatalogCacheModel::rollback() {
                       "no previous valid catalog cache revision exists");
     }
     try {
-        auto history = history_;
-        auto previous = history.back();
-        history.pop_back();
-        current_ = std::move(previous);
-        history_ = std::move(history);
+        auto nextCurrent = current_;
+        auto nextHistory = history_;
+        auto previous = nextHistory.back();
+        nextHistory.pop_back();
+        nextCurrent = std::move(previous);
+        current_.swap(nextCurrent);
+        history_.swap(nextHistory);
         return result(CatalogRefreshState::RolledBack, CatalogRefreshCode::Success,
                       "previous valid catalog cache revision restored");
     } catch (...) {

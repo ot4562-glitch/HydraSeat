@@ -1,5 +1,6 @@
 #pragma once
 
+#include "hydra/production_launch_runtime.hpp"
 #include "hydra/runtime_state.hpp"
 
 #include <cstddef>
@@ -79,6 +80,24 @@ public:
                                               std::string diagnostic,
                                               std::uint64_t correlationId);
 
+    SeatGameCommandResult observeSeatGameExit(SeatId seatId,
+                                               std::uint64_t expectedGeneration,
+                                               bool cleanExit,
+                                               std::string diagnostic,
+                                               std::uint64_t correlationId);
+
+    production::ProviderPlanRegistrySnapshot providerPlanRegistrySnapshot() const;
+    production::ProviderPlanInstallResult installProviderPlan(
+        const production::ProviderPlanInstallRequest& request);
+    production::ProviderPlanInstallResult removeProviderPlan(
+        const production::ProviderPlanRemoveRequest& request);
+
+    // Production host composition may replace only the constructor's fail-closed
+    // placeholder. Explicit test/custom factories are never silently overridden.
+    bool installSeatGameFactoryIfUnavailable(
+        std::shared_ptr<ISeatGameInstanceFactory> factory,
+        std::string* error = nullptr);
+
     void controlClientConnected();
     void controlClientDisconnected();
 
@@ -118,13 +137,20 @@ private:
     std::vector<SeatConfig> profile_;
     std::vector<SeatRuntimeState> seats_;
     std::vector<std::shared_ptr<IRuntimeBackend>> backends_;
+    bool seatGameFactoryExplicit_{false};
     std::shared_ptr<ISeatGameInstanceFactory> seatGameFactory_;
+    std::shared_ptr<production::IHostLaunchPlanRegistry> launchRegistry_;
     std::unique_ptr<SeatGameLifecycle> seatGameLifecycle_;
+    std::uint64_t profileFingerprint_{0};
     std::size_t preparedBackendCount_{0};
     std::size_t startedBackendCount_{0};
     std::optional<RuntimeTransition> lastTransition_;
     std::deque<RuntimeTransition> transitionEvents_;
     std::string diagnostic_;
 };
+
+std::uint64_t runtimeProfileFingerprint(
+    std::span<const SeatConfig> seats,
+    SeatId managementSeatId) noexcept;
 
 } // namespace hydra::runtime

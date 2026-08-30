@@ -11,6 +11,59 @@ namespace hydra::runtime {
 namespace {
 
 constexpr std::size_t kMaximumDiagnosticBytes = 2048;
+constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
+constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+
+class StableProfileHash final {
+public:
+    void byte(std::uint8_t value) noexcept {
+        value_ ^= static_cast<std::uint64_t>(value);
+        value_ *= kFnvPrime;
+    }
+    void boolean(bool value) noexcept { byte(value ? 1u : 0u); }
+    void u32(std::uint32_t value) noexcept {
+        for (unsigned shift = 0; shift < 32u; shift += 8u) {
+            byte(static_cast<std::uint8_t>((value >> shift) & 0xffu));
+        }
+    }
+    void u64(std::uint64_t value) noexcept {
+        for (unsigned shift = 0; shift < 64u; shift += 8u) {
+            byte(static_cast<std::uint8_t>((value >> shift) & 0xffu));
+        }
+    }
+    void wide(std::wstring_view value) noexcept {
+        u64(static_cast<std::uint64_t>(value.size()));
+        for (const wchar_t ch : value) u32(static_cast<std::uint32_t>(ch));
+    }
+    std::uint64_t value() const noexcept { return value_; }
+
+private:
+    std::uint64_t value_{kFnvOffset};
+};
+
+template <typename Range>
+void hashSortedWide(StableProfileHash& hash, const Range& range) {
+    std::vector<std::wstring> values(range.begin(), range.end());
+    std::sort(values.begin(), values.end());
+    hash.u64(static_cast<std::uint64_t>(values.size()));
+    for (const auto& value : values) hash.wide(value);
+}
+
+void hashSeatProfile(StableProfileHash& hash, const SeatConfig& seat) {
+    hash.u32(seat.seatId);
+    hash.boolean(seat.active);
+    hash.wide(seat.name);
+    hashSortedWide(hash, seat.displayIds);
+    hash.boolean(seat.primaryDisplayId.has_value());
+    if (seat.primaryDisplayId) hash.wide(*seat.primaryDisplayId);
+    hashSortedWide(hash, seat.keyboardIds);
+    hashSortedWide(hash, seat.mouseIds);
+    hashSortedWide(hash, seat.controllerIds);
+    hash.boolean(seat.audioOutputEndpointId.has_value());
+    if (seat.audioOutputEndpointId) hash.wide(*seat.audioOutputEndpointId);
+    hash.boolean(seat.audioInputEndpointId.has_value());
+    if (seat.audioInputEndpointId) hash.wide(*seat.audioInputEndpointId);
+}
 
 void appendDiagnostic(std::string& destination, std::string_view value) {
     if (value.empty() || destination.size() >= kMaximumDiagnosticBytes) return;
@@ -33,11 +86,14 @@ RuntimeHost::RuntimeHost(
     std::vector<std::shared_ptr<IRuntimeBackend>> backends,
     std::shared_ptr<ISeatGameInstanceFactory> seatGameFactory)
     : backends_(std::move(backends)),
+      seatGameFactoryExplicit_(static_cast<bool>(seatGameFactory)),
       seatGameFactory_(seatGameFactory ? std::move(seatGameFactory)
                                        : std::make_shared<UnavailableSeatGameFactory>()) {
     backends_.erase(
         std::remove(backends_.begin(), backends_.end(), nullptr),
         backends_.end());
+    launchRegistry_ = std::dynamic_pointer_cast<production::IHostLaunchPlanRegistry>(
+        seatGameFactory_);
     hostPhase_ = HostLifecyclePhase::Running;
     diagnostic_ = "host is running and session is idle";
 }
@@ -159,6 +215,7 @@ RuntimeCommandResult RuntimeHost::loadProfile(std::vector<SeatConfig> seats, Sea
     }
     managementSeatId_ = managementSeatId;
     profile_ = std::move(seats);
+    profileFingerprint_ = runtimeProfileFingerprint(profile_, managementSeatId_);
     seats_.clear();
     std::vector<SeatId> activeSeatIds;
     for (const auto& seat : profile_) {
@@ -169,6 +226,9 @@ RuntimeCommandResult RuntimeHost::loadProfile(std::vector<SeatConfig> seats, Sea
     }
     seatGameLifecycle_ = std::make_unique<SeatGameLifecycle>(activeSeatIds,
                                                              seatGameFactory_);
+    if (launchRegistry_) {
+        launchRegistry_->resetContext(profileFingerprint_, {}, 0u, profile_);
+    }
     return finishLocked(RuntimeCommand::LoadProfile, from, RuntimeResultCode::Ok,
                         "validated profile loaded without activating backends",
                         correlationId);
@@ -200,6 +260,9 @@ RuntimeCommandResult RuntimeHost::plan(std::uint64_t correlationId) {
     sessionId_ = newSessionId(generation_);
     preparedBackendCount_ = 0;
     startedBackendCount_ = 0;
+    if (launchRegistry_) {
+        launchRegistry_->resetContext(profileFingerprint_, sessionId_, generation_, profile_);
+    }
     setSessionPhaseLocked(SeatSessionPhase::Planning, "plan compiled");
     return finishLocked(RuntimeCommand::Plan, from, RuntimeResultCode::Ok,
                         "immutable session plan created", correlationId);
@@ -597,6 +660,13 @@ SeatGameCommandResult RuntimeHost::reconcileSeatGames(std::uint64_t correlationI
 SeatGameCommandResult RuntimeHost::observeSeatGameExit(
     SeatId seatId, bool cleanExit, std::string diagnostic,
     std::uint64_t correlationId) {
+    return observeSeatGameExit(seatId, 0u, cleanExit, std::move(diagnostic),
+                               correlationId);
+}
+
+SeatGameCommandResult RuntimeHost::observeSeatGameExit(
+    SeatId seatId, std::uint64_t expectedGeneration, bool cleanExit,
+    std::string diagnostic, std::uint64_t correlationId) {
     std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
     if (!mutationLock.owns_lock()) {
         return {SeatGameResultCode::Busy, {}, false,
@@ -608,10 +678,194 @@ SeatGameCommandResult RuntimeHost::observeSeatGameExit(
                 "a validated active-Seat profile is required"};
     }
     auto result = seatGameLifecycle_->observeTargetExit(
-        seatId, cleanExit, std::move(diagnostic), correlationId);
+        seatId, expectedGeneration, cleanExit, std::move(diagnostic),
+        correlationId);
     recordSeatTransitionLocked(RuntimeCommand::ObserveSeatGameExit, seatId,
                                result, correlationId);
     return result;
+}
+
+bool RuntimeHost::installSeatGameFactoryIfUnavailable(
+    std::shared_ptr<ISeatGameInstanceFactory> factory,
+    std::string* error) {
+    if (error != nullptr) error->clear();
+    if (!factory) {
+        if (error != nullptr) *error = "Seat game factory registration requires a factory";
+        return false;
+    }
+    auto registry = std::dynamic_pointer_cast<production::IHostLaunchPlanRegistry>(factory);
+    if (!registry) {
+        if (error != nullptr) {
+            *error = "production Seat game factory must expose the host launch-plan registry";
+        }
+        return false;
+    }
+
+    std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
+    if (!mutationLock.owns_lock()) {
+        if (error != nullptr) *error = "another runtime mutation is in progress";
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    if (launchRegistry_) return true;
+    if (seatGameFactoryExplicit_) {
+        // An explicit factory is an intentional composition choice (for
+        // controlled/test hosts and future alternate runtimes), not a failed
+        // production auto-install. Keep it authoritative and let provider-plan
+        // RPCs fail closed because no launchRegistry_ is present.
+        return true;
+    }
+    if (sessionPhase_ != SeatSessionPhase::Idle) {
+        if (error != nullptr) {
+            *error = "production Seat game factory may be registered only while session is Idle";
+        }
+        return false;
+    }
+    if (seatGameLifecycle_) {
+        for (const auto& state : seatGameLifecycle_->snapshot()) {
+            if (state.phase != SeatGamePhase::Idle || state.binding) {
+                if (error != nullptr) {
+                    *error = "production Seat game factory requires every Seat lifecycle to be Idle";
+                }
+                return false;
+            }
+        }
+    }
+
+    seatGameFactory_ = std::move(factory);
+    seatGameFactoryExplicit_ = true;
+    launchRegistry_ = std::move(registry);
+    if (!profile_.empty()) {
+        std::vector<SeatId> activeSeatIds;
+        for (const auto& seat : profile_) {
+            if (seat.active) activeSeatIds.push_back(seat.seatId);
+        }
+        seatGameLifecycle_ = std::make_unique<SeatGameLifecycle>(
+            activeSeatIds, seatGameFactory_);
+        launchRegistry_->resetContext(profileFingerprint_, {}, 0u, profile_);
+    }
+    return true;
+}
+
+production::ProviderPlanRegistrySnapshot
+RuntimeHost::providerPlanRegistrySnapshot() const {
+    std::shared_ptr<production::IHostLaunchPlanRegistry> registry;
+    {
+        std::lock_guard lock(mutex_);
+        registry = launchRegistry_;
+    }
+    return registry ? registry->registrySnapshot()
+                    : production::ProviderPlanRegistrySnapshot{};
+}
+
+production::ProviderPlanInstallResult RuntimeHost::installProviderPlan(
+    const production::ProviderPlanInstallRequest& request) {
+    std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
+    if (!mutationLock.owns_lock()) {
+        production::ProviderPlanInstallResult result;
+        result.code = production::ProviderPlanInstallCode::BackendFailure;
+        result.registry = providerPlanRegistrySnapshot();
+        result.diagnostic = "another runtime mutation is in progress";
+        return result;
+    }
+    std::lock_guard lock(mutex_);
+    auto reject = [&](production::ProviderPlanInstallCode code,
+                      std::string diagnostic) {
+        production::ProviderPlanInstallResult result;
+        result.code = code;
+        result.registry = launchRegistry_
+            ? launchRegistry_->registrySnapshot()
+            : production::ProviderPlanRegistrySnapshot{};
+        result.diagnostic = std::move(diagnostic);
+        return result;
+    };
+    if (!launchRegistry_ || !seatGameLifecycle_) {
+        return reject(production::ProviderPlanInstallCode::BackendFailure,
+                      "host has no production provider-plan registry");
+    }
+    if (sessionPhase_ != SeatSessionPhase::Active &&
+        sessionPhase_ != SeatSessionPhase::Degraded) {
+        return reject(production::ProviderPlanInstallCode::InvalidSession,
+                      "provider plan installation requires the active host session");
+    }
+    if (request.profileFingerprint != profileFingerprint_) {
+        return reject(production::ProviderPlanInstallCode::InvalidProfile,
+                      "provider plan was compiled for a different host profile");
+    }
+    if (request.sessionId != sessionId_ ||
+        request.sessionGeneration != generation_) {
+        return reject(production::ProviderPlanInstallCode::InvalidSession,
+                      "provider plan was compiled for a stale/foreign host session");
+    }
+    const auto states = seatGameLifecycle_->snapshot();
+    const auto found = std::find_if(states.begin(), states.end(),
+                                    [&](const SeatGameState& state) {
+                                        return state.seatId == request.seatId;
+                                    });
+    if (found == states.end()) {
+        return reject(production::ProviderPlanInstallCode::InvalidSeat,
+                      "provider plan targets a Seat outside the active profile");
+    }
+    if (found->phase != SeatGamePhase::Idle || found->binding) {
+        return reject(production::ProviderPlanInstallCode::SeatNotIdle,
+                      "provider plan may be installed only while the target Seat is Idle");
+    }
+    if (found->generation == std::numeric_limits<std::uint64_t>::max() ||
+        request.seatGameGeneration != found->generation + 1u) {
+        return reject(production::ProviderPlanInstallCode::InvalidSeatGeneration,
+                      "provider plan does not target the exact next Seat activation generation");
+    }
+    return launchRegistry_->install(request);
+}
+
+production::ProviderPlanInstallResult RuntimeHost::removeProviderPlan(
+    const production::ProviderPlanRemoveRequest& request) {
+    std::unique_lock mutationLock(mutationMutex_, std::try_to_lock);
+    if (!mutationLock.owns_lock()) {
+        production::ProviderPlanInstallResult result;
+        result.code = production::ProviderPlanInstallCode::BackendFailure;
+        result.registry = providerPlanRegistrySnapshot();
+        result.diagnostic = "another runtime mutation is in progress";
+        return result;
+    }
+    std::lock_guard lock(mutex_);
+    auto reject = [&](production::ProviderPlanInstallCode code,
+                      std::string diagnostic) {
+        production::ProviderPlanInstallResult result;
+        result.code = code;
+        result.registry = launchRegistry_
+            ? launchRegistry_->registrySnapshot()
+            : production::ProviderPlanRegistrySnapshot{};
+        result.diagnostic = std::move(diagnostic);
+        return result;
+    };
+    if (!launchRegistry_ || !seatGameLifecycle_) {
+        return reject(production::ProviderPlanInstallCode::BackendFailure,
+                      "host has no production provider-plan registry");
+    }
+    if (request.profileFingerprint != profileFingerprint_) {
+        return reject(production::ProviderPlanInstallCode::InvalidProfile,
+                      "provider plan removal has the wrong host profile fingerprint");
+    }
+    if (request.sessionId != sessionId_ ||
+        request.sessionGeneration != generation_) {
+        return reject(production::ProviderPlanInstallCode::InvalidSession,
+                      "provider plan removal has a stale/foreign host session");
+    }
+    const auto states = seatGameLifecycle_->snapshot();
+    const auto found = std::find_if(states.begin(), states.end(),
+                                    [&](const SeatGameState& state) {
+                                        return state.seatId == request.seatId;
+                                    });
+    if (found == states.end()) {
+        return reject(production::ProviderPlanInstallCode::InvalidSeat,
+                      "provider plan removal targets an unknown Seat");
+    }
+    if (found->phase != SeatGamePhase::Idle || found->binding) {
+        return reject(production::ProviderPlanInstallCode::SeatNotIdle,
+                      "provider plan removal requires an Idle target Seat");
+    }
+    return launchRegistry_->remove(request);
 }
 
 void RuntimeHost::controlClientConnected() {
@@ -803,6 +1057,22 @@ RuntimeSessionId RuntimeHost::newSessionId(std::uint64_t generation) {
     }
     if (id.empty()) id.bytes[0] = 1;
     return id;
+}
+
+std::uint64_t runtimeProfileFingerprint(
+    std::span<const SeatConfig> seats,
+    SeatId managementSeatId) noexcept {
+    StableProfileHash hash;
+    hash.u32(1u); // Host profile fingerprint schema.
+    hash.u32(managementSeatId);
+    std::vector<SeatConfig> ordered(seats.begin(), seats.end());
+    std::sort(ordered.begin(), ordered.end(), [](const auto& left, const auto& right) {
+        return left.seatId < right.seatId;
+    });
+    hash.u64(static_cast<std::uint64_t>(ordered.size()));
+    for (const auto& seat : ordered) hashSeatProfile(hash, seat);
+    const auto value = hash.value();
+    return value == 0 ? 1u : value;
 }
 
 } // namespace hydra::runtime

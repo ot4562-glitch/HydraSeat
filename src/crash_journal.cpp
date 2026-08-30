@@ -486,6 +486,27 @@ bool isZeroHash(const Hash256& hash) noexcept {
                        [](std::uint8_t byte) { return byte == 0; });
 }
 
+std::optional<SnapshotReference> makeRecoveryProcessAttachmentSnapshot(
+    const RecoveryProcessAttachmentIdentity& identity,
+    std::string* error) {
+    const auto canonical = encodeRecoveryProcessAttachmentIdentity(identity);
+    if (canonical.size() != kRecoveryProcessAttachmentIdentityBytes) {
+        setError(error, "recovery attachment identity cannot be encoded for journal binding");
+        return std::nullopt;
+    }
+    const auto digest = hashCrashJournalBytes(canonical);
+    if (isZeroHash(digest)) {
+        setError(error, "recovery attachment journal binding hash is zero");
+        return std::nullopt;
+    }
+    SnapshotReference snapshot;
+    snapshot.snapshotId = kRecoveryProcessAttachmentSnapshotId;
+    snapshot.sha256 = digest;
+    snapshot.generation = identity.recoveryEpoch;
+    if (error != nullptr) error->clear();
+    return snapshot;
+}
+
 bool validateCrashJournalState(const CrashJournalState& state,
                                std::string* error) {
     if (watchdog::isZeroSessionId(state.sessionId) ||
@@ -557,6 +578,31 @@ bool validateCrashJournalAgainstPlan(
             previousRollbackOrdinal = action->activationOrdinal;
         }
     }
+    return true;
+}
+
+bool validateRecoveryProcessAttachmentJournalBinding(
+    const CrashJournalState& state,
+    const RecoveryProcessAttachmentIdentity& identity,
+    std::string* error) {
+    if (!validateCrashJournalState(state, error)) return false;
+    const auto expected = makeRecoveryProcessAttachmentSnapshot(identity, error);
+    if (!expected) return false;
+    const auto found = std::find_if(
+        state.snapshots.begin(), state.snapshots.end(), [](const auto& snapshot) {
+            return snapshot.snapshotId == kRecoveryProcessAttachmentSnapshotId;
+        });
+    if (found == state.snapshots.end()) {
+        setError(error,
+                 "crash journal has no exact recovery-process attachment binding");
+        return false;
+    }
+    if (*found != *expected) {
+        setError(error,
+                 "crash journal recovery-process attachment binding does not match the exact epoch");
+        return false;
+    }
+    if (error != nullptr) error->clear();
     return true;
 }
 

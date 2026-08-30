@@ -1,5 +1,6 @@
 #pragma once
 
+#include "hydra/game_runtime_requirement_resolver.hpp"
 #include "hydra/host_protocol.hpp"
 #include "hydra/runtime_host.hpp"
 
@@ -12,7 +13,11 @@
 
 namespace hydra::hostipc {
 
-constexpr std::uint32_t kDefaultHostIpcTimeoutMs = 3000u;
+// Runtime mutations can include the bounded Seat process stop policy
+// (3 s graceful + 3 s forced cleanup). Keep the transport deadline above that
+// bound so a valid cleanup response cannot arrive after the client has already
+// reused the stream for another correlation.
+constexpr std::uint32_t kDefaultHostIpcTimeoutMs = 8000u;
 
 std::wstring currentHostPipeName();
 
@@ -69,6 +74,20 @@ public:
         std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
         std::string* error = nullptr,
         std::optional<ErrorPayload>* protocolError = nullptr);
+    std::optional<production::ProviderPlanRegistrySnapshot> providerPlanRegistry(
+        std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
+        std::string* error = nullptr,
+        std::optional<ErrorPayload>* protocolError = nullptr);
+    std::optional<production::ProviderPlanInstallResult> installProviderPlan(
+        const production::ProviderPlanInstallRequest& request,
+        std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
+        std::string* error = nullptr,
+        std::optional<ErrorPayload>* protocolError = nullptr);
+    std::optional<production::ProviderPlanInstallResult> removeProviderPlan(
+        const production::ProviderPlanRemoveRequest& request,
+        std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
+        std::string* error = nullptr,
+        std::optional<ErrorPayload>* protocolError = nullptr);
     bool ping(std::uint64_t nonce,
               std::uint32_t timeoutMs = kDefaultHostIpcTimeoutMs,
               std::string* error = nullptr);
@@ -99,6 +118,9 @@ private:
 class HostControlServer {
 public:
     explicit HostControlServer(runtime::RuntimeHost& host);
+    HostControlServer(
+        runtime::RuntimeHost& host,
+        std::shared_ptr<requirement::ITrustedRequirementSource> trustedRequirements);
     ~HostControlServer();
     HostControlServer(const HostControlServer&) = delete;
     HostControlServer& operator=(const HostControlServer&) = delete;

@@ -116,6 +116,26 @@ void printUsage(std::ostream& output) {
         << "not inject, hook, hide devices, or attach to a commercial game.\n";
 }
 
+bool decodeTargetInputVerification(
+    const hydra::gatec::DecodedFrame& frame,
+    std::uint64_t expectedSequence,
+    StateSnapshotMessage& snapshot,
+    std::string* error = nullptr) {
+    if (expectedSequence == 0u || frame.sequence != expectedSequence) {
+        if (error != nullptr) *error = "target verification frame sequence mismatch";
+        return false;
+    }
+    if (!hydra::gatec::decodeStateSnapshot(frame, snapshot, error)) {
+        return false;
+    }
+    if (snapshot.lastAppliedSequence != expectedSequence) {
+        if (error != nullptr) *error = "target verification snapshot applied sequence mismatch";
+        return false;
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 #ifndef _WIN32
 
 int portableSelfTest() {
@@ -127,6 +147,29 @@ int portableSelfTest() {
     if (!hydra::gatec::tokenFromHex(tokenText)) {
         return 10;
     }
+
+    StateSnapshotMessage receipt;
+    receipt.lastAppliedSequence = 7u;
+    const auto encoded = hydra::gatec::encodeStateSnapshot(7u, receipt);
+    const auto decoded = hydra::gatec::decodeFrame(encoded);
+    StateSnapshotMessage verified;
+    std::string error;
+    if (!decoded || !decoded.frame ||
+        !decodeTargetInputVerification(*decoded.frame, 7u, verified, &error)) {
+        return 11;
+    }
+
+    receipt.lastAppliedSequence = 6u;
+    const auto staleEncoded = hydra::gatec::encodeStateSnapshot(7u, receipt);
+    const auto staleDecoded = hydra::gatec::decodeFrame(staleEncoded);
+    if (!staleDecoded || !staleDecoded.frame ||
+        decodeTargetInputVerification(*staleDecoded.frame, 7u, verified, &error)) {
+        return 12;
+    }
+    if (decodeTargetInputVerification(*decoded.frame, 8u, verified, &error)) {
+        return 13;
+    }
+
     std::cout << "HydraSeat Gate C host portable self-test passed.\n";
     return EXIT_SUCCESS;
 }
@@ -1087,6 +1130,7 @@ struct GateCRecoveryContext {
     hydra::recovery::NativeCrashJournalStorage storage;
     hydra::recovery::CrashJournalStore store;
     hydra::reset::RuntimeResetRegistrationStore resetRegistration;
+    bool resetRegistrationWritten{false};
     GateCWatchdogClient watchdog;
     std::optional<hydra::gatec::GateCRecoveryJournal> journal;
     std::uint64_t runtimeGeneration{0};
@@ -1142,6 +1186,7 @@ public:
                 return false;
             }
             const auto sequence = m_session.nextSequence++;
+            queued.protocolSequence = sequence;
             queued.frame = hydra::gatec::encodeInputEvent(sequence, input);
             if (queued.frame.empty()) {
                 return false;
@@ -1197,6 +1242,7 @@ public:
 private:
     struct QueuedInputFrame {
         std::vector<std::byte> frame;
+        std::uint64_t protocolSequence{0};
         std::uint64_t correlationId{0};
         hydra::InputMetricEventClass eventClass{hydra::InputMetricEventClass::None};
         std::uint32_t detailCode{0};
@@ -1206,7 +1252,9 @@ private:
         hydra::InputMetricStage stage,
         const QueuedInputFrame& queued,
         std::uint64_t timestampMicros,
-        std::optional<std::uint64_t> droppedOverride = std::nullopt) noexcept {
+        std::optional<std::uint64_t> droppedOverride = std::nullopt,
+        std::uint32_t receivingSeatId = 0u,
+        std::uint32_t receivingProcessId = 0u) noexcept {
         if (m_metrics == nullptr) return;
 
         hydra::InputMetricSample sample;
@@ -1215,11 +1263,11 @@ private:
         sample.stage = stage;
         sample.eventClass = queued.eventClass;
         sample.expectedSeatId = m_session.seatId;
-        // Host queue/write stages describe routing intent only. Actual receiver
-        // identity stays unknown until a target-side apply/query sample confirms it.
-        sample.receivingSeatId = 0u;
+        // Host queue/write stages describe routing intent only. Receiver identity
+        // is populated exclusively from an exact target receipt.
+        sample.receivingSeatId = receivingSeatId;
         sample.targetProcessId = m_session.process.processId();
-        sample.receivingProcessId = 0u;
+        sample.receivingProcessId = receivingProcessId;
         sample.detailCode = queued.detailCode;
         sample.queueDepth = m_queueDepth.load(std::memory_order_relaxed);
         sample.queueHighWater = m_queueHighWater.load(std::memory_order_relaxed);
@@ -1276,6 +1324,51 @@ private:
             }
             recordMetric(hydra::InputMetricStage::RouteWritten, queued,
                          hydra::monotonicInputMetricTimestampMicros());
+
+            const auto receiptResult = m_session.channel.readFrame(kWriteTimeoutMs);
+            hydra::gatec::StateSnapshotMessage receipt;
+            std::string receiptError;
+            const bool receiptValid =
+                receiptResult && receiptResult.frame &&
+                decodeTargetInputVerification(
+                    *receiptResult.frame, queued.protocolSequence,
+                    receipt, &receiptError);
+            if (!receiptValid) {
+                if (receiptError.empty()) {
+                    receiptError = receiptResult.error.empty()
+                        ? "missing or stale target verification snapshot"
+                        : receiptResult.error;
+                }
+                {
+                    std::scoped_lock lock(m_errorMutex);
+                    m_lastError = "target input verification failed: " + receiptError +
+                                  " (" + std::to_string(receiptResult.systemError) + ")";
+                }
+                m_failed.store(true);
+                m_stopping.store(true);
+                std::scoped_lock lock(m_mutex);
+                const auto discarded = static_cast<std::uint64_t>(m_queue.size());
+                if (discarded != 0u) {
+                    const auto dropped = m_droppedFrames.fetch_add(
+                        discarded, std::memory_order_relaxed) + discarded;
+                    recordMetric(hydra::InputMetricStage::RouteDropped,
+                                 m_queue.back(),
+                                 hydra::monotonicInputMetricTimestampMicros(),
+                                 dropped);
+                }
+                m_queue.clear();
+                m_queueDepth.store(0u, std::memory_order_relaxed);
+                break;
+            }
+
+            recordMetric(hydra::InputMetricStage::TargetApplied, queued,
+                         hydra::monotonicInputMetricTimestampMicros(),
+                         std::nullopt, m_session.seatId,
+                         m_session.process.processId());
+            recordMetric(hydra::InputMetricStage::TargetQueried, queued,
+                         hydra::monotonicInputMetricTimestampMicros(),
+                         std::nullopt, m_session.seatId,
+                         m_session.process.processId());
         }
     }
 
@@ -1534,10 +1627,18 @@ private:
                     session.process.terminate(0x52454354u); // "RECT".
                 }
             }
-            if (session.process.running()) processesClean = false;
+            const bool actionClean = !session.process.running();
+            if (!actionClean) {
+                processesClean = false;
+                if (error.empty()) {
+                    error = "controlled target remained live after rollback attempt";
+                }
+            }
             session.channel.close();
             session.connected = false;
-            if (journalHealthy) {
+            // Never persist ActionRolledBack for an exact process identity that
+            // is still live. The journal must remain an honest recovery record.
+            if (journalHealthy && actionClean) {
                 journalHealthy = recovery.journal->markActionRolledBack(
                     static_cast<std::uint32_t>(index + 1), &error);
             }
@@ -1551,13 +1652,16 @@ private:
             watchdogVerified = recovery.watchdog.disarm(&error);
         }
 
-        bool resetRegistrationCleared = false;
+        bool resetRegistrationCleared = !recovery.resetRegistrationWritten;
         if (journalHealthy && processesClean && watchdogVerified) {
             journalHealthy = recovery.journal->verifyRollback(&error) &&
                 recovery.journal->markCleanStop(&error);
-            if (journalHealthy) {
+            if (journalHealthy && recovery.resetRegistrationWritten) {
                 resetRegistrationCleared =
                     recovery.resetRegistration.remove(&error);
+                if (resetRegistrationCleared) {
+                    recovery.resetRegistrationWritten = false;
+                }
             }
         }
         if (!journalHealthy || !processesClean || !watchdogVerified ||
@@ -1584,6 +1688,7 @@ private:
             std::nullopt,
         std::uint32_t leaseTimeoutMilliseconds = 20'000) {
         std::string error;
+        std::vector<hydra::recovery::SnapshotReference> recoverySnapshots;
         if (!preflightRecovery(recovery, &error)) {
             std::cerr << "Gate C recovery preflight blocked activation: "
                       << error << '\n';
@@ -1638,26 +1743,56 @@ private:
             terminateSessionsNoJournal(sessions);
             return false;
         }
-        hydra::reset::RuntimeResetRegistration resetRegistration;
-        resetRegistration.ownerProcess = ownerIdentity;
-        resetRegistration.manifest = *manifest;
-        if (!recovery.resetRegistration.write(resetRegistration, &error)) {
-            std::cerr << "Gate C reset registration failed: " << error << '\n';
-            terminateSessionsNoJournal(sessions);
-            return false;
+        // Runtime reset v2 is deliberately exact-process authority. The legacy
+        // controlled Gate-C harness can still exercise a two-target watchdog/journal,
+        // but it must not manufacture one reset registration that authorizes both
+        // Seats. Emergency-reset scenarios therefore run one target and persist the
+        // exact attachment that hydra_reset is allowed to consume; two-target soak
+        // scenarios remain watchdog/journal-only controlled evidence.
+        if (sessions.size() == 1u) {
+            hydra::reset::RuntimeResetRegistration resetRegistration;
+            resetRegistration.ownerProcess = ownerIdentity;
+            resetRegistration.manifest = *manifest;
+            hydra::recovery::RecoveryProcessAttachmentIdentity attachment;
+            attachment.seatId = sessions.front().seatId;
+            attachment.hostSessionId.bytes = sessionId;
+            attachment.sessionGeneration = recovery.runtimeGeneration;
+            attachment.seatGameGeneration = recovery.runtimeGeneration;
+            attachment.process = targets.front().process;
+            attachment.recoveryEpoch = manifest->lease.generation;
+            const auto snapshot =
+                hydra::recovery::makeRecoveryProcessAttachmentSnapshot(
+                    attachment, &error);
+            if (!snapshot) {
+                std::cerr << "Gate C recovery attachment snapshot failed: "
+                          << error << '\n';
+                terminateSessionsNoJournal(sessions);
+                return false;
+            }
+            recoverySnapshots.push_back(*snapshot);
+            resetRegistration.attachment = attachment;
+            if (!recovery.resetRegistration.write(resetRegistration, &error)) {
+                std::cerr << "Gate C reset registration failed: " << error << '\n';
+                terminateSessionsNoJournal(sessions);
+                return false;
+            }
+            recovery.resetRegistrationWritten = true;
         }
         if (!recovery.watchdog.start(
                 *manifest, recovery.recoveryDirectory, &error)) {
             std::cerr << "Gate C watchdog arm failed: " << error << '\n';
             terminateSessionsNoJournal(sessions);
-            std::string ignored;
-            (void)recovery.resetRegistration.remove(&ignored);
+            if (recovery.resetRegistrationWritten) {
+                std::string ignored;
+                (void)recovery.resetRegistration.remove(&ignored);
+                recovery.resetRegistrationWritten = false;
+            }
             return false;
         }
 
         recovery.journal.emplace(recovery.store, *manifest,
                                  recovery.runtimeGeneration);
-        if (!recovery.journal->begin({}, &error)) {
+        if (!recovery.journal->begin(recoverySnapshots, &error)) {
             std::cerr << "Gate C journal begin failed: " << error << '\n';
             terminateSessionsNoJournal(sessions);
             (void)recovery.watchdog.disarm();
@@ -1745,7 +1880,10 @@ private:
             m_options.recoveryScenario == "shim-abnormal-exit";
         const bool adapterScenario =
             m_options.recoveryScenario == "adapter-failure";
-        std::vector<TargetSession> sessions(shimScenario || adapterScenario ? 1 : 2);
+        const bool exactResetScenario =
+            m_options.recoveryScenario == "wait-host-kill";
+        std::vector<TargetSession> sessions(
+            shimScenario || adapterScenario || exactResetScenario ? 1 : 2);
         for (std::size_t index = 0; index < sessions.size(); ++index) {
             sessions[index].seatId = static_cast<SeatId>(index + 1);
         }
@@ -2116,9 +2254,20 @@ private:
     bool sendInput(TargetSession& session,
                    const InputEventMessage& input) {
         const auto sequence = session.nextSequence++;
-        return session.channel.writeFrame(
-            hydra::gatec::encodeInputEvent(sequence, input),
-            kIoTimeoutMs);
+        if (!session.channel.writeFrame(
+                hydra::gatec::encodeInputEvent(sequence, input),
+                kIoTimeoutMs)) {
+            return false;
+        }
+
+        const auto response = session.channel.readFrame(kIoTimeoutMs);
+        if (!response || !response.frame || response.frame->sequence != sequence) {
+            return false;
+        }
+        hydra::gatec::StateSnapshotMessage receipt;
+        std::string error;
+        return decodeTargetInputVerification(
+            *response.frame, sequence, receipt, &error);
     }
 
     std::optional<StateSnapshotMessage> querySnapshot(
@@ -3472,10 +3621,12 @@ private:
                          "Windows session end was vetoed.\n";
         }
 
-        auto rollbackComplete = rollbackStart;
-        rollbackComplete.timestampMicros = hydra::monotonicInputMetricTimestampMicros();
-        rollbackComplete.stage = hydra::InputMetricStage::RollbackCompleted;
-        (void)metrics.tryRecord(rollbackComplete);
+        if (cleanExit) {
+            auto rollbackComplete = rollbackStart;
+            rollbackComplete.timestampMicros = hydra::monotonicInputMetricTimestampMicros();
+            rollbackComplete.stage = hydra::InputMetricStage::RollbackCompleted;
+            (void)metrics.tryRecord(rollbackComplete);
+        }
 
         bool metricsFailure = false;
         const auto metricsSnapshot = metrics.snapshot();

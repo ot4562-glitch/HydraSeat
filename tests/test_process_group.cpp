@@ -140,8 +140,8 @@ void testParentChildGrandchildAndRootExit() {
     const auto directory = tempCaseDirectory(L"tree");
     const auto pidFile = directory / L"pids.txt";
     auto spec = baseSpec(11);
-    spec.arguments = {L"--depth", L"2", L"--sleep-ms", L"250",
-                      L"--descendant-sleep-ms", L"2500",
+    spec.arguments = {L"--depth", L"2", L"--sleep-ms", L"800",
+                      L"--descendant-sleep-ms", L"4000",
                       L"--pid-file", pidFile.wstring()};
 
     std::string error;
@@ -151,6 +151,14 @@ void testParentChildGrandchildAndRootExit() {
     check(launched.group->capability() == ChildTrackingCapability::FullJobObject,
           "strict launch reports full Job Object capability");
     check(launched.root.valid(), "root process has PID plus creation identity");
+    check(launched.group->configureTrustedHandoffExecutables(
+              {launched.root.executablePath}, &error),
+          "trusted executable evidence binds to the exact launch root");
+    const auto rootAuthority = launched.group->handoffSnapshot();
+    check(rootAuthority.state == ProcessHandoffState::RootActive &&
+              rootAuthority.handoffGeneration == 0u &&
+              rootAuthority.authoritativeProcess.sameInstance(launched.root),
+          "surviving launcher remains the exact authoritative root");
 
     const bool trackedThree = waitUntil([&] {
         return launched.group->snapshot().processes.size() >= 3u;
@@ -173,6 +181,17 @@ void testParentChildGrandchildAndRootExit() {
     }
     check(ids.size() == initial.processes.size(), "tracked process PIDs are unique while alive");
     check(childOfRoot && grandchild, "process snapshot preserves parent/child/grandchild topology");
+    const bool exactParents = std::all_of(
+        initial.processes.begin(), initial.processes.end(),
+        [&](const ProcessRecord& record) {
+            if (record.root) return true;
+            if (!record.parentIdentityVerified) return false;
+            return std::any_of(initial.processes.begin(), initial.processes.end(),
+                               [&](const ProcessRecord& parent) {
+                                   return parent.identity.sameInstance(record.parentIdentity);
+                               });
+        });
+    check(exactParents, "every tracked descendant binds to an exact owned parent identity");
 
     const bool rootExitedFirst = waitUntil([&] {
         const auto snapshot = launched.group->snapshot();
@@ -183,13 +202,301 @@ void testParentChildGrandchildAndRootExit() {
         return rootExited && snapshot.runningCount() >= 1u;
     }, std::chrono::milliseconds(1800));
     check(rootExitedFirst, "root exit does not lose still-running descendants");
+    const bool handedOff = waitUntil([&] {
+        const auto handoff = launched.group->handoffSnapshot();
+        return handoff.state == ProcessHandoffState::DescendantActive &&
+               handoff.handoffGeneration >= 1u &&
+               !handoff.authoritativeProcess.sameInstance(launched.root);
+    }, std::chrono::milliseconds(2000));
+    check(handedOff, "launcher exit promotes only the unique exact owned descendant branch");
 
     ProcessStopPolicy stop;
     stop.gracefulTimeoutMs = 20;
     stop.forcedTimeoutMs = 2500;
     check(launched.group->stop(stop, &error), "owned descendant tree force-cleans after graceful timeout");
+    const auto cleaned = launched.group->snapshot();
+    check(launched.group->waitForEmpty(0u) && cleaned.runningCount() == 0u,
+          "cleanup proves Job active-process count and tracked orphan count are zero");
+    check(cleaned.trackingComplete,
+          "bounded process tracking remained complete for the normal handoff tree");
+
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+}
+
+void testTwoLevelLauncherLoaderGameHandoff() {
+    const auto directory = tempCaseDirectory(L"two-level-handoff");
+    const auto pidFile = directory / L"pids.txt";
+    auto spec = baseSpec(18);
+    spec.arguments = {L"--depth", L"2", L"--sleep-ms", L"5000",
+                      L"--exit-after-spawn", L"--pid-file", pidFile.wstring()};
+
+    std::string error;
+    auto launched = ProcessLauncher::launch(spec, &error);
+    check(launched.group != nullptr, "two-level launcher fixture starts in a strict Job Object");
+    if (!launched.group) return;
+    check(launched.group->configureTrustedHandoffExecutables(
+              {launched.root.executablePath}, &error),
+          "two-level handoff uses trusted executable evidence plus exact Job lineage");
+
+    check(waitUntil([&] { return readPids(pidFile).size() >= 3u; },
+                    std::chrono::milliseconds(2000)),
+          "launcher, loader, and final game all report exact PIDs");
+    const bool promotedThroughTwoLevels = waitUntil([&] {
+        const auto handoff = launched.group->handoffSnapshot();
+        return handoff.state == ProcessHandoffState::DescendantActive &&
+               handoff.handoffGeneration >= 1u;
+    }, std::chrono::milliseconds(2500));
+    check(promotedThroughTwoLevels,
+          "launcher to loader to game reaches a trusted exact-lineage descendant");
+
+    const auto pids = readPids(pidFile);
+    FixtureIdentity leaf;
+    if (pids.size() >= 3u) leaf = captureFixtureIdentity(pids.back());
+    const auto handoff = launched.group->handoffSnapshot();
+    check(leaf.processId != 0 &&
+              handoff.authoritativeProcess.processId == leaf.processId &&
+              handoff.authoritativeProcess.creationTime100ns == leaf.creationTime,
+          "final surviving game process becomes the exact authoritative owned descendant");
+    check(launched.group->ownsExactIdentity(handoff.authoritativeProcess),
+          "authoritative handoff identity is present in the exact Seat-owned tree");
+
+    ProcessStopPolicy stop;
+    stop.gracefulTimeoutMs = 20;
+    stop.forcedTimeoutMs = 2500;
+    check(launched.group->stop(stop, &error) && launched.group->waitForEmpty(0u),
+          "cleanup after two-level handoff proves orphan=0 in the owned Job");
+    check(leaf.processId == 0 || !processAlive(leaf),
+          "final exact game instance is gone after handoff cleanup");
+
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+}
+
+void testExactOwnershipIsolationAndPidReuse() {
+    auto firstSpec = baseSpec(19);
+    auto secondSpec = baseSpec(20);
+    firstSpec.arguments = {L"--depth", L"0", L"--sleep-ms", L"5000"};
+    secondSpec.arguments = firstSpec.arguments;
+
+    std::string firstError;
+    std::string secondError;
+    auto first = ProcessLauncher::launch(firstSpec, &firstError);
+    auto second = ProcessLauncher::launch(secondSpec, &secondError);
+    check(first.group != nullptr && second.group != nullptr,
+          "two independent Seats can launch the same executable fixture");
+    if (!first.group || !second.group) {
+        ProcessStopPolicy cleanup;
+        if (first.group) (void)first.group->stop(cleanup, &firstError);
+        if (second.group) (void)second.group->stop(cleanup, &secondError);
+        return;
+    }
+
+    check(first.root.executablePath == second.root.executablePath,
+          "cross-Seat rejection is tested with identical executable path/name");
+    check(first.group->ownsExactIdentity(first.root) &&
+              !first.group->ownsExactIdentity(second.root) &&
+              !second.group->ownsExactIdentity(first.root),
+          "same executable path never crosses private Seat Job ownership");
+
+    auto reusedIdentity = first.root;
+    ++reusedIdentity.creationTime100ns;
+    check(!first.group->ownsExactIdentity(reusedIdentity),
+          "same PID with a different creation identity is rejected as stale/PID reuse");
+
+    const auto secondProbe = captureFixtureIdentity(second.root.processId);
+    ProcessStopPolicy stop;
+    stop.gracefulTimeoutMs = 20;
+    stop.forcedTimeoutMs = 2000;
+    check(first.group->stop(stop, &firstError), "Seat A exact tree stops independently");
+    check(processAlive(secondProbe), "Seat A cleanup does not disturb Seat B process ownership");
+    check(second.group->stop(stop, &secondError), "Seat B exact tree stops independently");
+}
+
+void testUntrustedHelperIsNeverAuthority() {
+    const auto directory = tempCaseDirectory(L"untrusted-helper");
+    const auto pidFile = directory / L"pids.txt";
+    const auto helperPidFile = directory / L"helper-pids.txt";
+    auto spec = baseSpec(22);
+    spec.arguments = {L"--depth", L"1", L"--sleep-ms", L"5000",
+                      L"--exit-after-spawn", L"--spawn-untrusted-helper",
+                      L"--pid-file", pidFile.wstring(),
+                      L"--helper-pid-file", helperPidFile.wstring()};
+
+    std::string error;
+    auto launched = ProcessLauncher::launch(spec, &error);
+    check(launched.group != nullptr, "untrusted-helper fixture launches in the owned Job");
+    if (!launched.group) return;
+    check(launched.group->configureTrustedHandoffExecutables(
+              {launched.root.executablePath}, &error),
+          "untrusted-helper test binds only the controlled game executable as trusted");
+
+    const bool childrenReported = waitUntil([&] {
+        return readPids(pidFile).size() >= 2u && readPids(helperPidFile).size() >= 1u;
+    }, std::chrono::milliseconds(2000));
+    check(childrenReported, "trusted child and untrusted helper both become live descendants");
+
+    const auto gamePids = readPids(pidFile);
+    const auto helperPids = readPids(helperPidFile);
+    const std::uint32_t trustedChildPid = gamePids.size() >= 2u ? gamePids[1] : 0u;
+    const std::uint32_t helperPid = helperPids.empty() ? 0u : helperPids.front();
+    const auto helperIdentity = captureFixtureIdentity(helperPid);
+
+    const bool promotedTrustedChild = waitUntil([&] {
+        const auto handoff = launched.group->handoffSnapshot();
+        return handoff.state == ProcessHandoffState::DescendantActive &&
+               handoff.authoritativeProcess.processId == trustedChildPid;
+    }, std::chrono::milliseconds(2500));
+    check(promotedTrustedChild,
+          "only the trusted exact descendant becomes authority when an untrusted helper is also owned");
+
+    const auto snapshot = launched.group->snapshot();
+    check(helperPid != 0u &&
+              std::any_of(snapshot.processes.begin(), snapshot.processes.end(),
+                          [&](const ProcessRecord& record) {
+                              return record.identity.processId == helperPid;
+                          }),
+          "untrusted helper remains bounded cleanup ownership inside the Seat Job");
+    const auto handoff = launched.group->handoffSnapshot();
+    check(helperPid == 0u || handoff.authoritativeProcess.processId != helperPid,
+          "untrusted helper PID is never promoted to game authority");
+
+    ProcessStopPolicy stop;
+    stop.gracefulTimeoutMs = 20;
+    stop.forcedTimeoutMs = 2500;
+    check(launched.group->stop(stop, &error) && launched.group->waitForEmpty(0u),
+          "helper-containing owned tree cleans to verified orphan=0");
+    check(!processAlive(helperIdentity),
+          "cleanup terminates the owned untrusted helper without treating it as authority");
+
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+}
+
+void testAmbiguousTrustedFrontierFailsClosed() {
+    const auto directory = tempCaseDirectory(L"ambiguous-frontier");
+    const auto pidFile = directory / L"pids.txt";
+    auto spec = baseSpec(23);
+    spec.arguments = {L"--depth", L"1", L"--sleep-ms", L"5000",
+                      L"--child-count", L"2", L"--exit-after-spawn",
+                      L"--pid-file", pidFile.wstring()};
+
+    std::string error;
+    auto launched = ProcessLauncher::launch(spec, &error);
+    check(launched.group != nullptr, "ambiguous-frontier fixture launches in the owned Job");
+    if (!launched.group) return;
+    check(launched.group->configureTrustedHandoffExecutables(
+              {launched.root.executablePath}, &error),
+          "ambiguous-frontier test binds exact trusted executable evidence");
+    check(waitUntil([&] { return readPids(pidFile).size() >= 3u; },
+                    std::chrono::milliseconds(2000)),
+          "launcher reports two simultaneously eligible trusted children");
+
+    const bool rejected = waitUntil([&] {
+        return launched.group->handoffSnapshot().state == ProcessHandoffState::Unverifiable;
+    }, std::chrono::milliseconds(2500));
+    check(rejected, "multiple trusted frontier descendants fail closed as unverifiable");
+    const auto handoff = launched.group->handoffSnapshot();
+    check(handoff.authoritativeProcess.sameInstance(launched.root),
+          "ambiguous handoff never silently replaces the previous exact authority");
+
+    std::vector<FixtureIdentity> descendants;
+    const auto pids = readPids(pidFile);
+    for (const auto pid : pids) {
+        if (pid != launched.root.processId) descendants.push_back(captureFixtureIdentity(pid));
+    }
+    ProcessStopPolicy stop;
+    stop.gracefulTimeoutMs = 20;
+    stop.forcedTimeoutMs = 2500;
+    check(launched.group->stop(stop, &error) && launched.group->waitForEmpty(0u),
+          "ambiguous authority still retains exact cleanup ownership to orphan=0");
+    check(std::none_of(descendants.begin(), descendants.end(), processAlive),
+          "all ambiguous owned descendants are gone after fail-closed cleanup");
+
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+}
+
+void testStopDuringHandoffPending() {
+    const auto directory = tempCaseDirectory(L"handoff-pending-stop");
+    const auto helperPidFile = directory / L"helper-pids.txt";
+    auto spec = baseSpec(24);
+    spec.arguments = {L"--depth", L"0", L"--sleep-ms", L"5000",
+                      L"--spawn-untrusted-helper", L"--exit-after-spawn",
+                      L"--helper-pid-file", helperPidFile.wstring()};
+
+    std::string error;
+    auto launched = ProcessLauncher::launch(spec, &error);
+    check(launched.group != nullptr, "handoff-pending stop fixture launches");
+    if (!launched.group) return;
+    auto futureGamePath = launched.root.executablePath;
+    futureGamePath += L".future-game";
+    check(launched.group->configureTrustedHandoffExecutables(
+              {launched.root.executablePath, futureGamePath}, &error),
+          "handoff-pending fixture binds current launcher plus not-yet-created trusted game evidence");
+
+    check(waitUntil([&] { return !readPids(helperPidFile).empty(); },
+                    std::chrono::milliseconds(1500)),
+          "untrusted owned helper is live while the trusted final process is absent");
+    const auto helperPids = readPids(helperPidFile);
+    const auto helperIdentity = helperPids.empty()
+        ? FixtureIdentity{} : captureFixtureIdentity(helperPids.front());
+    check(waitUntil([&] {
+              return launched.group->handoffSnapshot().state ==
+                     ProcessHandoffState::HandoffPending;
+          }, std::chrono::milliseconds(2000)),
+          "launcher exit enters explicit bounded handoff-pending instead of guessing the helper");
+
+    ProcessStopPolicy stop;
+    stop.gracefulTimeoutMs = 20;
+    stop.forcedTimeoutMs = 2500;
+    check(launched.group->stop(stop, &error) && launched.group->waitForEmpty(0u),
+          "stop during handoff-pending terminates only the exact owned Job and verifies empty");
+    check(!processAlive(helperIdentity),
+          "handoff-pending cleanup leaves no owned helper orphan");
     check(launched.group->snapshot().runningCount() == 0u,
-          "no Job Object test process remains after cleanup");
+          "tracked running owned process count is zero after pending-handoff stop");
+
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+}
+
+void testGameExitAfterHandoff() {
+    const auto directory = tempCaseDirectory(L"handoff-exit");
+    const auto pidFile = directory / L"pids.txt";
+    auto spec = baseSpec(21);
+    spec.arguments = {L"--depth", L"1", L"--sleep-ms", L"1000",
+                      L"--exit-after-spawn", L"--pid-file", pidFile.wstring()};
+
+    std::string error;
+    auto launched = ProcessLauncher::launch(spec, &error);
+    check(launched.group != nullptr, "handoff-exit fixture launches");
+    if (!launched.group) return;
+    check(launched.group->configureTrustedHandoffExecutables(
+              {launched.root.executablePath}, &error),
+          "handoff-exit fixture binds trusted executable evidence");
+
+    ProcessIdentity promoted;
+    const bool descendantActive = waitUntil([&] {
+        const auto handoff = launched.group->handoffSnapshot();
+        if (handoff.state == ProcessHandoffState::DescendantActive &&
+            handoff.handoffGeneration >= 1u) {
+            promoted = handoff.authoritativeProcess;
+            return true;
+        }
+        return false;
+    }, std::chrono::milliseconds(1800));
+    check(descendantActive, "legitimate child becomes authoritative after launcher exits");
+
+    const bool treeExited = waitUntil([&] {
+        return launched.group->handoffSnapshot().state == ProcessHandoffState::TreeExited;
+    }, std::chrono::milliseconds(2500));
+    check(treeExited, "final game exit is distinguished from PID reuse and handoff failure");
+    const auto finalHandoff = launched.group->handoffSnapshot();
+    check(!promoted.valid() || finalHandoff.authoritativeProcess.sameInstance(promoted),
+          "untrusted helper descendants never replace the final game authority on exit");
+    check(launched.group->waitForEmpty(0u),
+          "naturally exited handoff tree is verifiably empty without adopting another process");
 
     std::error_code ignored;
     std::filesystem::remove_all(directory, ignored);
@@ -381,6 +688,12 @@ int main() {
     testPidReuseIdentityGuard();
 #ifdef _WIN32
     testParentChildGrandchildAndRootExit();
+    testTwoLevelLauncherLoaderGameHandoff();
+    testExactOwnershipIsolationAndPidReuse();
+    testUntrustedHelperIsNeverAuthority();
+    testAmbiguousTrustedFrontierFailsClosed();
+    testStopDuringHandoffPending();
+    testGameExitAfterHandoff();
     testStrictBreakawayIsRejected();
     testAllowedBreakawayIsExplicitAndUnowned();
     testExplicitRootOnlyCapability();

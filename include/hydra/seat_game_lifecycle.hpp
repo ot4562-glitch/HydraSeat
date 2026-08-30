@@ -88,6 +88,17 @@ public:
     virtual ~ISeatGameInstanceFactory() = default;
     virtual std::unique_ptr<ISeatGameInstance> create(SeatId seatId,
                                                        std::string& error) = 0;
+    // Binding-aware creation lets a host-owned immutable plan registry resolve
+    // the exact Seat/Player/Game activation epoch without weakening existing
+    // factories. Implementations that do not need this context retain the old
+    // create(SeatId) behavior by default.
+    virtual std::unique_ptr<ISeatGameInstance> createForBinding(
+        SeatId seatId, const SeatGameBinding& binding,
+        std::uint64_t expectedGeneration, std::string& error) {
+        (void)binding;
+        (void)expectedGeneration;
+        return create(seatId, error);
+    }
 };
 
 // Authoritative in-memory per-Seat lifecycle. Producers are host control/target
@@ -110,6 +121,11 @@ public:
     SeatGameCommandResult observeTargetExit(SeatId seatId, bool cleanExit,
                                             std::string diagnostic,
                                             std::uint64_t correlationId);
+    SeatGameCommandResult observeTargetExit(SeatId seatId,
+                                             std::uint64_t expectedGeneration,
+                                             bool cleanExit,
+                                             std::string diagnostic,
+                                             std::uint64_t correlationId);
     SeatGameCommandResult reconcile(std::uint64_t correlationId);
     SeatGameCommandResult emergencyStopAll(std::uint64_t correlationId);
     // Internal host teardown path. It intentionally bypasses external command

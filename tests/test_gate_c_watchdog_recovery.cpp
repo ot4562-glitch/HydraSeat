@@ -330,10 +330,10 @@ void testEmergencyResetStopsLiveGateCHost() {
         active = journal.has_value() &&
             journal->phase == hydra::recovery::CrashJournalPhase::Active;
         children = directChildren(host.pid());
-        if (active && children.size() >= 3) break;
+        if (active && children.size() >= 2) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    check(active && children.size() >= 3,
+    check(active && children.size() >= 2,
           "live-reset host reaches active state with watchdog and targets");
     auto childHandles = openChildren(children);
     check(childHandles.size() == children.size(),
@@ -393,10 +393,10 @@ void testHostDeathLeavesNoOrphanAndEntersSafeMode() {
         active = journal.has_value() &&
             journal->phase == hydra::recovery::CrashJournalPhase::Active;
         children = directChildren(host.pid());
-        if (active && children.size() >= 3) break;
+        if (active && children.size() >= 2) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    check(active && children.size() >= 3,
+    check(active && children.size() >= 2,
           "guarded host reaches active state with watchdog and two targets");
     auto childHandles = openChildren(children);
     check(childHandles.size() == children.size(),

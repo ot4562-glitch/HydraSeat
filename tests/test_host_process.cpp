@@ -97,6 +97,20 @@ bool launchHost(const std::filesystem::path& profile, OwnedProcess& owned) {
                           &startup, &owned.process) != FALSE;
 }
 
+bool exitsNonzeroWithin(OwnedProcess& owned, DWORD timeoutMs) {
+    if (owned.process.hProcess == nullptr) return false;
+    const DWORD wait = WaitForSingleObject(owned.process.hProcess, timeoutMs);
+    if (wait != WAIT_OBJECT_0) {
+        if (wait == WAIT_TIMEOUT) {
+            (void)TerminateProcess(owned.process.hProcess, 0x44555048u); // DUPH
+            (void)WaitForSingleObject(owned.process.hProcess, 2000u);
+        }
+        return false;
+    }
+    DWORD exitCode = 0;
+    return GetExitCodeProcess(owned.process.hProcess, &exitCode) != FALSE && exitCode != 0u;
+}
+
 DWORD runHostCtl(std::wstring arguments) {
     const auto executable = executableDirectory() / L"hydra_hostctl.exe";
     std::wstring command = L"\"" + executable.wstring() + L"\" " + arguments;
@@ -135,8 +149,8 @@ bool waitForClient(HostControlClient& client, ClientRole role, hydra::SeatId sea
 }
 
 void testRealHostProcess() {
-    check(currentHostPipeName().find(L"HydraSeat.Host.v3.") != std::wstring::npos,
-          "host protocol v3 uses a distinct same-session pipe namespace");
+    check(currentHostPipeName().find(L"HydraSeat.Host.v4.") != std::wstring::npos,
+          "host protocol v4 uses a distinct same-session pipe namespace");
     const auto profile = writeProfile();
     OwnedProcess hostProcess;
     check(launchHost(profile, hostProcess), "real hydra_host process launches");
@@ -149,8 +163,14 @@ void testRealHostProcess() {
     check(waitForClient(control, ClientRole::Control, 2),
           "Management Seat control client connects simultaneously");
 
+    OwnedProcess duplicateHost;
+    check(launchHost(profile, duplicateHost),
+          "second host process can be created for single-authority rejection test");
+    check(exitsNonzeroWithin(duplicateHost, 3000u),
+          "second host fails fast instead of creating a competing runtime authority");
+
     check(runHostCtl(L"--json snapshot") == 0,
-          "hostctl snapshot reports protocol v3 state from a separate process");
+          "hostctl snapshot reports protocol v4 state from a separate process");
     check(runHostCtl(L"--json seat-assign 1 cli-player cli-game") == 0,
           "hostctl discovers Management Seat 2 and assigns Seat 1 without hardcoded authority");
     std::string cliError;
@@ -320,6 +340,26 @@ void testRealHostProcess() {
               duplicateError->code == ErrorCode::DuplicateCorrelation,
           "duplicate command correlation is rejected without replaying work");
 
+    HostControlClient boundedReplayClient;
+    check(waitForClient(boundedReplayClient, ClientRole::ReadOnly),
+          "bounded replay-window client connects");
+    bool replayWindowRetired = false;
+    for (std::uint64_t nonce = 1u; nonce <= 256u; ++nonce) {
+        if (!boundedReplayClient.ping(nonce, 2000u, &error)) {
+            replayWindowRetired = !boundedReplayClient.connected();
+            break;
+        }
+    }
+    check(replayWindowRetired,
+          "bounded correlation history retires the stream instead of forgetting replay IDs");
+    check(waitForClient(boundedReplayClient, ClientRole::ReadOnly),
+          "client reconnects after replay-window retirement");
+    const auto replayResnapshot = boundedReplayClient.getSnapshot(2000u, &error);
+    check(replayResnapshot && replayResnapshot->profileLoaded &&
+              replayResnapshot->sessionPhase == SeatSessionPhase::Idle,
+          "reconnected client must resnapshot authoritative Host state after replay-window retirement");
+    boundedReplayClient.close();
+
     const auto planned = control.command(MessageType::PlanSession, 2000u, &error);
     check(planned && planned->succeeded() &&
               planned->snapshot.sessionPhase == SeatSessionPhase::Planning,
@@ -460,9 +500,71 @@ void testRealHostProcess() {
 
 #endif
 
+class CountingTrustedRequirementSource final
+    : public hydra::requirement::ITrustedRequirementSource {
+public:
+    hydra::requirement::RequirementSnapshotDiagnostic resolveCurrent(
+        hydra::requirement::TrustedRequirementSnapshot& output) override {
+        ++resolveCount;
+        output = {};
+        return {hydra::requirement::RequirementSnapshotCode::InputUnavailable,
+                "controlled trusted source is intentionally unavailable"};
+    }
+
+    std::size_t resolveCount{0u};
+};
+
+void testHostServerComposesTrustedRequirementSource() {
+    auto prepareProbeRequest = [](RuntimeHost& host) {
+        std::vector<hydra::SeatConfig> seats(2);
+        seats[0].seatId = 1;
+        seats[0].name = L"Composition Seat 1";
+        seats[1].seatId = 2;
+        seats[1].name = L"Composition Seat 2";
+        check(host.loadProfile(seats, 1, 9101u).succeeded(),
+              "composition probe profile loads");
+        check(host.plan(9102u).succeeded(), "composition probe session plans");
+        check(host.prepare(9103u).succeeded(), "composition probe session prepares");
+        check(host.start(9104u).succeeded(), "composition probe session starts");
+
+        const auto runtime = host.snapshot();
+        const auto registry = host.providerPlanRegistrySnapshot();
+        hydra::production::ProviderPlanInstallRequest request;
+        request.seatId = 1;
+        request.expectedRegistryRevision = registry.registryRevision;
+        request.profileFingerprint = registry.profileFingerprint;
+        request.sessionId = registry.sessionId;
+        request.sessionGeneration = registry.sessionGeneration;
+        request.seatGameGeneration = runtime.seatGames.empty()
+            ? 1u
+            : runtime.seatGames.front().generation + 1u;
+        return request;
+    };
+
+    RuntimeHost explicitHost;
+    auto explicitSource = std::make_shared<CountingTrustedRequirementSource>();
+    HostControlServer explicitServer(explicitHost, explicitSource);
+    const auto explicitRequest = prepareProbeRequest(explicitHost);
+    const auto explicitDenied = explicitHost.installProviderPlan(explicitRequest);
+    check(explicitSource->resolveCount == 1u &&
+              explicitDenied.code == hydra::production::ProviderPlanInstallCode::InvalidPlan &&
+              explicitDenied.diagnostic.find("resolution failed") != std::string::npos,
+          "HostControlServer injects its trusted requirement source into the production registry");
+
+    RuntimeHost defaultHost;
+    HostControlServer defaultServer(defaultHost);
+    const auto defaultRequest = prepareProbeRequest(defaultHost);
+    const auto defaultDenied = defaultHost.installProviderPlan(defaultRequest);
+    check(defaultDenied.code == hydra::production::ProviderPlanInstallCode::InvalidPlan &&
+              defaultDenied.diagnostic.find("source is unavailable; provider plan installation is denied") ==
+                  std::string::npos,
+          "generic HostControlServer uses a non-null fail-closed requirement source instead of nullptr");
+}
+
 } // namespace
 
 int main() {
+    testHostServerComposesTrustedRequirementSource();
 #ifdef _WIN32
     testRealHostProcess();
 #else

@@ -76,6 +76,15 @@ void testAutomaticAndManualPathsConverge() {
           "automatic setup generation succeeds from read-only Game metadata");
     check(generated.intendedMutations.size() == 2u,
           "automatic generation previews both isolated data-root mutations");
+    check(generated.intendedMutations.size() == 2u &&
+              generated.intendedMutations[0].phase == RecipeExecutionPhase::PreSpawn &&
+              generated.intendedMutations[1].phase == RecipeExecutionPhase::PreSpawn &&
+              generated.intendedMutations[0].scope == MutationScope::SeatWritableInstance &&
+              generated.intendedMutations[1].scope == MutationScope::SeatWritableInstance,
+          "automatic setup mutations declare explicit PreSpawn Seat-writable timing/scope");
+    check(recipeExecutionPhaseName(RecipeExecutionPhase::PreSpawn) == "PreSpawn" &&
+              mutationScopeName(MutationScope::SeatWritableInstance) == "SeatWritableInstance",
+          "recipe timing/scope names are stable for diagnostics and integration");
 
     profile::TwoPlayerSetup manualSeed;
     manualSeed.setupId = "setup-a";

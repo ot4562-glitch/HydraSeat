@@ -45,6 +45,7 @@ using hydra::gatec::PipeChannel;
 using hydra::gatec::ProbeComparison;
 using hydra::gatec::QuerySnapshotMessage;
 using hydra::gatec::SessionToken;
+using hydra::gatec::StateSnapshotMessage;
 using hydra::gatec::TransportStatus;
 
 class AdapterOwner {
@@ -96,6 +97,32 @@ private:
     result.clip_top = message.clipTop;
     result.clip_right = message.clipRight;
     result.clip_bottom = message.clipBottom;
+    return result;
+}
+
+[[maybe_unused]] StateSnapshotMessage fromAdapterSnapshot(
+    const HydraGateCAdapterSnapshotV1& source) noexcept {
+    StateSnapshotMessage result;
+    result.lastAppliedSequence = source.last_applied_sequence;
+    std::copy_n(source.key_down_bits, result.keyDownBits.size(),
+                result.keyDownBits.begin());
+    std::copy_n(source.key_pressed_edge_bits,
+                result.keyPressedEdgeBits.size(),
+                result.keyPressedEdgeBits.begin());
+    result.mouseButtonsDown = source.mouse_buttons_down;
+    result.wheelAccumulator = source.wheel_accumulator;
+    result.probeVkey = source.probe_vkey;
+    result.asyncKeyStateValue = source.async_key_state_value;
+    result.keyboardStateByte = source.keyboard_state_byte;
+    result.clipEnabled = source.clip_enabled != 0;
+    result.virtualForeground = source.virtual_foreground != 0;
+    result.virtualCapture = source.virtual_capture != 0;
+    result.cursorX = source.cursor_x;
+    result.cursorY = source.cursor_y;
+    result.clipLeft = source.clip_left;
+    result.clipTop = source.clip_top;
+    result.clipRight = source.clip_right;
+    result.clipBottom = source.clip_bottom;
     return result;
 }
 
@@ -2000,6 +2027,30 @@ private:
             }
             if (m_options.rawInputShim && !m_shim.dispatchRawInput()) {
                 return sendError(frame.sequence, 1108);
+            }
+
+            // The host treats an InputEvent as applied only after the receiving
+            // process proves that the exact protocol sequence is visible in its
+            // adapter state. Keep the API-probe target on the same receipt
+            // contract as hydra_gate_c_target so process self-tests cannot pass
+            // on host-side routing intent alone.
+            HydraGateCAdapterSnapshotV1 adapterSnapshot{};
+            adapterSnapshot.struct_size = sizeof(adapterSnapshot);
+            const auto snapshotResult = hydra_gate_c_adapter_get_snapshot(
+                m_adapter.get(), HYDRA_GATE_C_ADAPTER_NO_PROBE_KEY,
+                &adapterSnapshot);
+            if (snapshotResult != HYDRA_GATE_C_ADAPTER_OK) {
+                return sendError(frame.sequence,
+                    1150u + static_cast<std::uint32_t>(snapshotResult));
+            }
+            if (adapterSnapshot.last_applied_sequence != frame.sequence) {
+                return sendError(frame.sequence, 1199u);
+            }
+            if (!m_channel.writeFrame(
+                    hydra::gatec::encodeStateSnapshot(
+                        frame.sequence, fromAdapterSnapshot(adapterSnapshot)),
+                    kIoTimeoutMs)) {
+                return false;
             }
             notifyStateChanged();
             return true;

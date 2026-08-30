@@ -25,6 +25,7 @@ $script:RepoRoot = Split-Path -Parent $PSScriptRoot
 $script:ManifestName = "phase3-hardware-manifest.json"
 $script:ReportName = "phase3-hardware-report.json"
 $script:OwnedProcess = $null
+$script:EvidenceValiditySeconds = 24 * 60 * 60
 
 $GateAChecks = @(
     "two_keyboards_distinct",
@@ -128,13 +129,17 @@ function New-StageRecord {
     param([Parameter(Mandatory = $true)][string[]]$ManualChecks)
     return [pscustomobject][ordered]@{
         status = "PENDING"
+        verdict = "PENDING"
         started_utc = $null
         ended_utc = $null
         duration_seconds = 0.0
         process_exit_code = $null
         trace = $null
+        trace_sha256 = $null
         metrics_report = $null
+        metrics_report_sha256 = $null
         auxiliary_traces = @()
+        auxiliary_trace_sha256 = @()
         manual_checks = New-ManualChecks -Names $ManualChecks
         notes = ""
     }
@@ -211,12 +216,52 @@ function Get-ProfileSnapshot {
         }
     }
 
+    $firstTwoIds = @($firstTwo | ForEach-Object { [int]$_.id })
+    $nativeScope = @()
+    foreach ($owned in @($ownership | Where-Object { $firstTwoIds -contains [int]$_.seat_id })) {
+        $expectedPrefix = if ([string]$owned.category -eq "keyboard") { "Keyboard:" } else { "Mouse:" }
+        $stableId = [string]$owned.device_id
+        if (-not $stableId.StartsWith($expectedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "P3-HW-01 cannot derive a native HidHide instance ID from '$stableId'; expected the stable $expectedPrefix prefix."
+        }
+        $instanceId = $stableId.Substring($expectedPrefix.Length)
+        if ([string]::IsNullOrWhiteSpace($instanceId)) {
+            throw "P3-HW-01 derived an empty native HidHide instance ID from '$stableId'."
+        }
+        $nativeScope += [pscustomobject][ordered]@{
+            device_id = $stableId
+            instance_id = $instanceId
+            category = [string]$owned.category
+            seat_id = [int]$owned.seat_id
+        }
+    }
+    if ($nativeScope.Count -lt 4 -or $nativeScope.Count -gt 16) {
+        throw "P3-HW-01 native HidHide scope must contain between four and sixteen exclusive keyboard/mouse identities across the first two active Seats."
+    }
+
     return [pscustomobject]@{
         raw = $profile
         activeSeats = $activeSeats
         ownership = @($ownership)
+        nativeScope = @($nativeScope)
         shareable = @($profile.shareable_resources)
     }
+}
+
+function Reset-FinalAcceptanceForStage {
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)]$StageRecord
+    )
+    $StageRecord.verdict = "PENDING"
+    $StageRecord.trace_sha256 = $null
+    $StageRecord.metrics_report_sha256 = $null
+    $StageRecord.auxiliary_trace_sha256 = @()
+    $Manifest.manual_verdict = "PENDING"
+    $Manifest.manual_verdict_note = ""
+    $Manifest.manual_verdict_unix = $null
+    $Manifest.evidence_valid_until_unix = $null
+    $Manifest.state = "IN_PROGRESS"
 }
 
 function New-SharedCaseProfile {
@@ -412,6 +457,7 @@ function Invoke-GateA {
         Write-Host "Gate A already recorded; use -ForceStage to rerun." -ForegroundColor Yellow
         return
     }
+    Reset-FinalAcceptanceForStage -Manifest $Manifest -StageRecord $record
     Show-StageInstructions "Gate A"
     $tracePath = Join-Path $SessionPath "gate-a.jsonl"
     $record.status = "RUNNING"
@@ -426,6 +472,7 @@ function Invoke-GateA {
     $record.duration_seconds = $result.duration_seconds
     $record.process_exit_code = $result.exit_code
     $record.status = if ($result.exit_code -eq 0 -and (Test-Path -LiteralPath $tracePath)) { "RECORDED" } else { "FAILED" }
+    $record.trace_sha256 = if (Test-Path -LiteralPath $tracePath -PathType Leaf) { Get-Sha256Hex -PathValue $tracePath } else { $null }
     $record.manual_checks.soak_minimum_duration = if ($result.duration_seconds -ge ($MinimumSoakMinutes * 60)) { "PASS" } else { "FAIL" }
     Set-ManualChecks -StageName "gate_a" -StageRecord $record
     Write-Manifest $Manifest $ManifestPath
@@ -444,6 +491,7 @@ function Invoke-GateB {
         Write-Host "Gate B already recorded; use -ForceStage to rerun." -ForegroundColor Yellow
         return
     }
+    Reset-FinalAcceptanceForStage -Manifest $Manifest -StageRecord $record
     Show-StageInstructions "Gate B"
     $tracePath = Join-Path $SessionPath "gate-b-exclusive.jsonl"
     $sharedTracePath = Join-Path $SessionPath "gate-b-shared.jsonl"
@@ -471,6 +519,8 @@ function Invoke-GateB {
     $record.process_exit_code = if ($first.exit_code -ne 0) { $first.exit_code } else { $second.exit_code }
     $evidencePresent = (Test-Path -LiteralPath $tracePath) -and (Test-Path -LiteralPath $sharedTracePath)
     $record.status = if ($record.process_exit_code -eq 0 -and $evidencePresent) { "RECORDED" } else { "FAILED" }
+    $record.trace_sha256 = if (Test-Path -LiteralPath $tracePath -PathType Leaf) { Get-Sha256Hex -PathValue $tracePath } else { $null }
+    $record.auxiliary_trace_sha256 = if (Test-Path -LiteralPath $sharedTracePath -PathType Leaf) { @(Get-Sha256Hex -PathValue $sharedTracePath) } else { @() }
     Set-ManualChecks -StageName "gate_b" -StageRecord $record
     Write-Manifest $Manifest $ManifestPath
 }
@@ -489,6 +539,7 @@ function Invoke-GateC {
         Write-Host "Gate C already recorded; use -ForceStage to rerun." -ForegroundColor Yellow
         return
     }
+    Reset-FinalAcceptanceForStage -Manifest $Manifest -StageRecord $record
     Show-StageInstructions "Gate C"
     $tracePath = Join-Path $SessionPath "gate-c.jsonl"
     $metricsPath = Join-Path $SessionPath "gate-c-metrics.json"
@@ -511,6 +562,8 @@ function Invoke-GateC {
     $record.process_exit_code = $result.exit_code
     $evidencePresent = (Test-Path -LiteralPath $tracePath) -and (Test-Path -LiteralPath $metricsPath)
     $record.status = if ($result.exit_code -eq 0 -and $evidencePresent) { "RECORDED" } else { "FAILED" }
+    $record.trace_sha256 = if (Test-Path -LiteralPath $tracePath -PathType Leaf) { Get-Sha256Hex -PathValue $tracePath } else { $null }
+    $record.metrics_report_sha256 = if (Test-Path -LiteralPath $metricsPath -PathType Leaf) { Get-Sha256Hex -PathValue $metricsPath } else { $null }
     Set-ManualChecks -StageName "gate_c" -StageRecord $record
     Write-Manifest $Manifest $ManifestPath
 }
@@ -540,13 +593,29 @@ function Invoke-Summarizer {
     }
     $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
     Write-Host "P3-HW-01 evidence report: $reportPath" -ForegroundColor Cyan
-    Write-Host "Final verdict: $($report.final_verdict)" -ForegroundColor $(if ($report.final_verdict -eq "PASS") { "Green" } elseif ($report.final_verdict -eq "FAIL") { "Red" } else { "Yellow" })
+    Write-Host "Guarded HidHide activation verdict: $($report.native_hidhide_activation_verdict)" -ForegroundColor $(if ($report.native_hidhide_activation_verdict -eq "PASS") { "Green" } elseif ($report.native_hidhide_activation_verdict -eq "FAIL") { "Red" } else { "Yellow" })
+    Write-Host "Physical isolation / release verdict: $($report.physical_isolation_release_verdict)" -ForegroundColor $(if ($report.physical_isolation_release_verdict -eq "FAIL") { "Red" } else { "Yellow" })
+    Write-Host "Final verdict: $($report.final_verdict)" -ForegroundColor $(if ($report.final_verdict -eq "FAIL") { "Red" } else { "Yellow" })
     foreach ($item in @($report.errors)) { Write-Host "ERROR: $item" -ForegroundColor Red }
     foreach ($item in @($report.warnings)) { Write-Host "WARN:  $item" -ForegroundColor Yellow }
     if ($exitCode -ne 0 -and $report.final_verdict -ne "FAIL") {
         throw "Summarizer exited with unexpected code $exitCode"
     }
     return $report
+}
+
+function Set-StageVerdictsFromReport {
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)]$Report
+    )
+    foreach ($name in @("gate_a", "gate_b", "gate_c")) {
+        $computed = [string]$Report.stages.$name.verdict
+        if ($computed -notin @("PENDING", "PASS", "FAIL")) {
+            throw "Summarizer returned an invalid $name verdict: $computed"
+        }
+        $Manifest.stages.$name.verdict = $computed
+    }
 }
 
 function Read-FinalManualVerdict {
@@ -556,14 +625,21 @@ function Read-FinalManualVerdict {
     Write-Host "A process exit code or clean automatic summary is NOT physical acceptance." -ForegroundColor Yellow
     Write-Host "Type PASS only if you personally certify the required physical observations; type FAIL for a failed run; otherwise press Enter to keep PENDING."
     $answer = (Read-Host "Manual verdict").Trim().ToUpperInvariant()
+    $verdictUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     if ($answer -eq "PASS") {
         $Manifest.manual_verdict = "PASS"
+        $Manifest.manual_verdict_unix = $verdictUnix
+        $Manifest.evidence_valid_until_unix = $verdictUnix + $script:EvidenceValiditySeconds
         $Manifest.state = "MANUAL_PASS"
     } elseif ($answer -eq "FAIL") {
         $Manifest.manual_verdict = "FAIL"
+        $Manifest.manual_verdict_unix = $verdictUnix
+        $Manifest.evidence_valid_until_unix = $null
         $Manifest.state = "MANUAL_FAIL"
     } else {
         $Manifest.manual_verdict = "PENDING"
+        $Manifest.manual_verdict_unix = $null
+        $Manifest.evidence_valid_until_unix = $null
         $Manifest.state = "READY_FOR_REVIEW"
     }
     $Manifest.manual_verdict_note = Read-Host "Optional verdict note"
@@ -613,6 +689,9 @@ function Test-RunnerSelfTest {
         $snapshot = Get-ProfileSnapshot -ResolvedProfilePath $profilePath
         if (@($snapshot.ownership).Count -ne 4) {
             throw "Runner self-test expected four exclusive fixture input identities."
+        }
+        if (@($snapshot.nativeScope).Count -ne 4) {
+            throw "Runner self-test expected the first two Seats to produce a four-device native HidHide scope."
         }
         $shared = New-SharedCaseProfile -ProfileSnapshot $snapshot -DestinationPath $derivedPath -RequestedDeviceId "Keyboard:A"
         $afterHash = Get-Sha256Hex -PathValue $profilePath
@@ -676,13 +755,11 @@ if (-not [string]::IsNullOrWhiteSpace($Resume)) {
         throw "Resume manifest was not found: $manifestPath"
     }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($Stage -ne "Summarize") {
-        $resolvedProfile = Resolve-ExistingPath ([string]$manifest.profile.source_path)
-        $profileSnapshot = Get-ProfileSnapshot -ResolvedProfilePath $resolvedProfile
-        $currentHash = Get-Sha256Hex -PathValue $resolvedProfile
-        if ($currentHash -ne [string]$manifest.profile.sha256) {
-            throw "The profile changed since this session started. Start a new acceptance session instead of mixing evidence."
-        }
+    $resolvedProfile = Resolve-ExistingPath ([string]$manifest.profile.source_path)
+    $profileSnapshot = Get-ProfileSnapshot -ResolvedProfilePath $resolvedProfile
+    $currentHash = Get-Sha256Hex -PathValue $resolvedProfile
+    if ($currentHash -ne [string]$manifest.profile.sha256) {
+        throw "The profile changed since this session started. Start a new acceptance session instead of mixing evidence."
     }
     if ([bool]$manifest.privacy.sensitive_key_ids_enabled) {
         Write-Host "WARNING: this resumed session was created with sensitive key-ID logging enabled." -ForegroundColor Red
@@ -724,6 +801,7 @@ if (-not [string]::IsNullOrWhiteSpace($Resume)) {
             sha256 = $profileHash
             schema_version = 2
             expected_ownership = @($profileSnapshot.ownership)
+            native_hidhide_scope = @($profileSnapshot.nativeScope)
             shareable_resources = @($profileSnapshot.shareable)
             shared_case = $sharedCase
         }
@@ -734,6 +812,8 @@ if (-not [string]::IsNullOrWhiteSpace($Resume)) {
         }
         manual_verdict = "PENDING"
         manual_verdict_note = ""
+        manual_verdict_unix = $null
+        evidence_valid_until_unix = $null
     }
     Write-Manifest $manifest $manifestPath
     Write-Host "Created P3-HW-01 session: $sessionPath" -ForegroundColor Cyan
@@ -777,6 +857,9 @@ try {
     if ($Stage -eq "All" -or $Stage -eq "Summarize") {
         Read-FinalManualVerdict -Manifest $manifest
         if ($manifest.manual_verdict -eq "PENDING") { $manifest.state = "READY_FOR_REVIEW" }
+        Write-Manifest $manifest $manifestPath
+        $firstReport = Invoke-Summarizer -Manifest $manifest -ManifestPath $manifestPath -SessionPath $sessionPath
+        Set-StageVerdictsFromReport -Manifest $manifest -Report $firstReport
         Write-Manifest $manifest $manifestPath
         [void](Invoke-Summarizer -Manifest $manifest -ManifestPath $manifestPath -SessionPath $sessionPath)
     } else {

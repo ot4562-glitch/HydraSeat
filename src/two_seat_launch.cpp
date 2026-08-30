@@ -372,8 +372,11 @@ CompileResult compileTwoSeatLaunchPlan(std::span<const SeatLaunchInput> inputs) 
 
 PlannedSeatGameInstance::PlannedSeatGameInstance(
     SeatActivationPlan plan,
-    std::shared_ptr<ISeatActivationResourceFactory> factory)
-    : plan_(std::move(plan)), factory_(std::move(factory)) {}
+    std::shared_ptr<ISeatActivationResourceFactory> factory,
+    std::unique_ptr<ISeatActivationLifecycleHook> lifecycleHook)
+    : plan_(std::move(plan)),
+      factory_(std::move(factory)),
+      lifecycleHook_(std::move(lifecycleHook)) {}
 
 PlannedSeatGameInstance::~PlannedSeatGameInstance() {
     std::string ignored;
@@ -398,57 +401,102 @@ bool PlannedSeatGameInstance::start(const runtime::SeatGameBinding& binding,
         return false;
     }
 
-    resources_.clear();
-    resources_.reserve(plan_.resources.size());
-    for (const auto kind : plan_.resources) {
-        std::string createError;
-        auto resource = factory_->create(kind, plan_, createError);
-        if (!resource || resource->kind() != kind) {
-            error = "Seat activation resource creation failed for " +
-                    std::string(resourceKindName(kind)) +
-                    (createError.empty() ? "" : ": " + createError);
-            std::string rollbackError;
-            const bool safe = rollbackResources(rollbackError) &&
-                              verifySafeResources(rollbackError);
-            recoveryRequired_ = !safe;
-            if (!safe && !rollbackError.empty()) error += "; rollback: " + rollbackError;
-            if (safe) resources_.clear();
-            return false;
-        }
-        resources_.push_back(std::move(resource));
+    if (lifecycleHook_) {
         std::string prepareError;
-        if (!resources_.back()->prepare(plan_, binding, prepareError)) {
-            error = "Seat activation prepare failed for " +
-                    std::string(resourceKindName(kind)) +
+        bool prepared = false;
+        try {
+            prepared = lifecycleHook_->prepare(plan_, binding, prepareError);
+        } catch (const std::exception& exception) {
+            prepareError = std::string("exception: ") + exception.what();
+        } catch (...) {
+            prepareError = "unknown exception";
+        }
+        if (!prepared) {
+            error = "Seat activation lifecycle prepare failed" +
                     (prepareError.empty() ? "" : ": " + prepareError);
-            std::string rollbackError;
-            const bool safe = rollbackResources(rollbackError) &&
-                              verifySafeResources(rollbackError);
+            std::string verifyError;
+            const bool safe = lifecycleHook_->verifySafe(verifyError) &&
+                              !lifecycleHook_->recoveryRequired();
             recoveryRequired_ = !safe;
-            if (!safe && !rollbackError.empty()) error += "; rollback: " + rollbackError;
-            if (safe) resources_.clear();
+            if (!safe && !verifyError.empty()) error += "; verify-safe: " + verifyError;
             return false;
         }
     }
 
+    resources_.clear();
+    resources_.reserve(plan_.resources.size());
+
+    const auto failAndRollback = [&](std::string primaryError) {
+        error = std::move(primaryError);
+        std::string rollbackError;
+        const bool rolledBack = rollbackActivation(rollbackError);
+        std::string verifySafeError;
+        const bool verifiedSafe = verifySafeActivation(verifySafeError);
+        const bool safe = rolledBack && verifiedSafe;
+        recoveryRequired_ = !safe;
+        if (!safe && !rollbackError.empty()) error += "; rollback: " + rollbackError;
+        if (!safe && !verifySafeError.empty()) error += "; verify-safe: " + verifySafeError;
+        if (safe) resources_.clear();
+        return false;
+    };
+
+    for (const auto kind : plan_.resources) {
+        std::string createError;
+        auto resource = factory_->create(kind, plan_, createError);
+        if (!resource || resource->kind() != kind) {
+            return failAndRollback(
+                "Seat activation resource creation failed for " +
+                std::string(resourceKindName(kind)) +
+                (createError.empty() ? "" : ": " + createError));
+        }
+        resources_.push_back(std::move(resource));
+        std::string prepareError;
+        if (!resources_.back()->prepare(plan_, binding, prepareError)) {
+            return failAndRollback(
+                "Seat activation prepare failed for " +
+                std::string(resourceKindName(kind)) +
+                (prepareError.empty() ? "" : ": " + prepareError));
+        }
+    }
+
     for (auto& resource : resources_) {
+        if (resource->kind() == ResourceKind::Process &&
+            !invokeLifecycleBoundary("PreSpawn",
+                                     &ISeatActivationLifecycleHook::preSpawn,
+                                     error)) {
+            return failAndRollback(error);
+        }
+
         std::string activationError;
         const bool activated = resource->activate(activationError);
         std::string verificationError;
         const bool verified = activated && resource->verifyActive(verificationError);
         if (!verified) {
-            error = "Seat activation failed for " +
-                    std::string(resourceKindName(resource->kind()));
-            if (!activationError.empty()) error += ": " + activationError;
-            if (!verificationError.empty()) error += "; verify: " + verificationError;
-            std::string rollbackError;
-            const bool safe = rollbackResources(rollbackError) &&
-                              verifySafeResources(rollbackError);
-            recoveryRequired_ = !safe;
-            if (!safe && !rollbackError.empty()) error += "; rollback: " + rollbackError;
-            if (safe) resources_.clear();
-            return false;
+            std::string failure = "Seat activation failed for " +
+                                  std::string(resourceKindName(resource->kind()));
+            if (!activationError.empty()) failure += ": " + activationError;
+            if (!verificationError.empty()) failure += "; verify: " + verificationError;
+            return failAndRollback(std::move(failure));
         }
+
+        if (resource->kind() == ResourceKind::Process &&
+            !invokeLifecycleBoundary("Startup",
+                                     &ISeatActivationLifecycleHook::startup,
+                                     error)) {
+            return failAndRollback(error);
+        }
+        if (resource->kind() == ResourceKind::Window &&
+            !invokeLifecycleBoundary("PostWindow",
+                                     &ISeatActivationLifecycleHook::postWindow,
+                                     error)) {
+            return failAndRollback(error);
+        }
+    }
+
+    if (!invokeLifecycleBoundary("Runtime",
+                                 &ISeatActivationLifecycleHook::runtime,
+                                 error)) {
+        return failAndRollback(error);
     }
 
     started_ = true;
@@ -456,11 +504,50 @@ bool PlannedSeatGameInstance::start(const runtime::SeatGameBinding& binding,
     return true;
 }
 
-bool PlannedSeatGameInstance::rollbackResources(std::string& error) noexcept {
+bool PlannedSeatGameInstance::invokeLifecycleBoundary(
+    const char* boundary,
+    bool (ISeatActivationLifecycleHook::*callback)(std::string&),
+    std::string& error) {
+    if (!lifecycleHook_) return true;
+    std::string localError;
+    bool succeeded = false;
+    try {
+        succeeded = (lifecycleHook_.get()->*callback)(localError);
+    } catch (const std::exception& exception) {
+        localError = std::string("exception: ") + exception.what();
+    } catch (...) {
+        localError = "unknown exception";
+    }
+    if (succeeded) return true;
+    error = std::string("Seat compatibility lifecycle ") + boundary + " failed" +
+            (localError.empty() ? "" : ": " + localError);
+    return false;
+}
+
+bool PlannedSeatGameInstance::rollbackActivation(std::string& error) noexcept {
     bool success = true;
     std::string firstError;
+    bool lifecycleRolledBack = lifecycleHook_ == nullptr;
+
+    const auto rollbackLifecycle = [&]() noexcept {
+        if (lifecycleRolledBack || !lifecycleHook_) return;
+        std::string localError;
+        if (!lifecycleHook_->rollback(localError) || lifecycleHook_->recoveryRequired()) {
+            success = false;
+            if (firstError.empty()) {
+                firstError = "compatibility lifecycle rollback failed" +
+                             (localError.empty() ? "" : ": " + localError);
+            }
+        }
+        lifecycleRolledBack = true;
+    };
+
     for (auto iterator = resources_.rbegin(); iterator != resources_.rend(); ++iterator) {
         if (!*iterator) continue;
+        // Recovery is the outermost ownership resource. The compatibility
+        // transaction outlives Process/Window/later resources so no running
+        // process can observe files while they are restored or removed.
+        if ((*iterator)->kind() == ResourceKind::Recovery) rollbackLifecycle();
         std::string localError;
         if (!(*iterator)->rollback(localError)) {
             success = false;
@@ -471,11 +558,12 @@ bool PlannedSeatGameInstance::rollbackResources(std::string& error) noexcept {
             }
         }
     }
+    rollbackLifecycle();
     if (!success) error = std::move(firstError);
     return success;
 }
 
-bool PlannedSeatGameInstance::verifySafeResources(std::string& error) noexcept {
+bool PlannedSeatGameInstance::verifySafeActivation(std::string& error) noexcept {
     bool success = true;
     std::string firstError;
     for (auto& resource : resources_) {
@@ -490,35 +578,49 @@ bool PlannedSeatGameInstance::verifySafeResources(std::string& error) noexcept {
             }
         }
     }
+    if (lifecycleHook_) {
+        std::string localError;
+        if (!lifecycleHook_->verifySafe(localError) || lifecycleHook_->recoveryRequired()) {
+            success = false;
+            if (firstError.empty()) {
+                firstError = "compatibility lifecycle safe-state verification failed" +
+                             (localError.empty() ? "" : ": " + localError);
+            }
+        }
+    }
     if (!success) error = std::move(firstError);
     return success;
 }
 
 bool PlannedSeatGameInstance::stop(std::string& error) noexcept {
     error.clear();
-    if (resources_.empty()) {
+    if (resources_.empty() && !lifecycleHook_) {
         started_ = false;
         recoveryRequired_ = false;
         return true;
     }
-    const bool rolledBack = rollbackResources(error);
+    const bool rolledBack = rollbackActivation(error);
     std::string verifyError;
-    const bool safe = verifySafeResources(verifyError);
+    const bool safe = verifySafeActivation(verifyError);
     if (!safe && error.empty()) error = std::move(verifyError);
     started_ = false;
     recoveryRequired_ = !(rolledBack && safe);
-    if (!recoveryRequired_) resources_.clear();
+    if (!recoveryRequired_) {
+        resources_.clear();
+        lifecycleHook_.reset();
+    }
     return !recoveryRequired_;
 }
 
 bool PlannedSeatGameInstance::verifyStopped(std::string& error) noexcept {
     error.clear();
-    if (resources_.empty()) return !started_ && !recoveryRequired_;
-    const bool safe = verifySafeResources(error);
+    if (resources_.empty() && !lifecycleHook_) return !started_ && !recoveryRequired_;
+    const bool safe = verifySafeActivation(error);
     if (safe) {
         started_ = false;
         recoveryRequired_ = false;
         resources_.clear();
+        lifecycleHook_.reset();
     } else {
         recoveryRequired_ = true;
     }
@@ -537,8 +639,11 @@ bool PlannedSeatGameInstance::running() const noexcept {
 
 PlannedSeatGameInstanceFactory::PlannedSeatGameInstanceFactory(
     TwoSeatLaunchPlan plan,
-    std::shared_ptr<ISeatActivationResourceFactory> resources)
-    : plan_(std::move(plan)), resources_(std::move(resources)) {}
+    std::shared_ptr<ISeatActivationResourceFactory> resources,
+    std::shared_ptr<ISeatActivationLifecycleHookFactory> lifecycleHooks)
+    : plan_(std::move(plan)),
+      resources_(std::move(resources)),
+      lifecycleHooks_(std::move(lifecycleHooks)) {}
 
 std::unique_ptr<runtime::ISeatGameInstance>
 PlannedSeatGameInstanceFactory::create(SeatId seatId, std::string& error) {
@@ -555,7 +660,16 @@ PlannedSeatGameInstanceFactory::create(SeatId seatId, std::string& error) {
         error = "requested Seat is absent from the immutable two-Seat launch plan";
         return nullptr;
     }
-    return std::make_unique<PlannedSeatGameInstance>(*found, resources_);
+    std::unique_ptr<ISeatActivationLifecycleHook> lifecycleHook;
+    if (lifecycleHooks_) {
+        lifecycleHook = lifecycleHooks_->create(*found, error);
+        if (!lifecycleHook) {
+            if (error.empty()) error = "Seat activation lifecycle hook creation failed";
+            return nullptr;
+        }
+    }
+    return std::make_unique<PlannedSeatGameInstance>(
+        *found, resources_, std::move(lifecycleHook));
 }
 
 std::string_view resourceKindName(ResourceKind kind) noexcept {

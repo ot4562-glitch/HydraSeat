@@ -71,7 +71,6 @@ bool SeatRuntimePolicyCoordinator::consume(const RuntimePolicyEvent& event,
     if (event.sequence <= state.lastEventSequence) {
         return true;
     }
-    state.lastEventSequence = event.sequence;
 
     switch (event.kind) {
         case RuntimePolicyEventKind::WindowChanged:
@@ -82,18 +81,64 @@ bool SeatRuntimePolicyCoordinator::consume(const RuntimePolicyEvent& event,
                 addDiagnostic(state, error ? *error : "invalid window-change event");
                 return false;
             }
+            if (const auto existing = state.windows.find(
+                    event.window->identity.nativeHandle);
+                existing != state.windows.end() &&
+                !existing->second.identity.sameInstance(event.window->identity)) {
+                if (event.window->identity.trackerGeneration <
+                    existing->second.identity.trackerGeneration) {
+                    addDiagnostic(state,
+                                  "stale window-change identity ignored after HWND reuse");
+                    state.lastEventSequence = event.sequence;
+                    return true;
+                }
+                if (event.window->identity.trackerGeneration ==
+                    existing->second.identity.trackerGeneration) {
+                    if (error) {
+                        *error = "window-change identity conflicts within one tracker generation";
+                    }
+                    state.health = RuntimePolicyHealth::RecoveryRequired;
+                    addDiagnostic(state, error ? *error
+                                               : "conflicting window-change identity");
+                    return false;
+                }
+                // A newer tracker generation is authoritative evidence that the
+                // native handle was reused for a different exact window. Never
+                // carry a placement cache across the identity boundary.
+                state.lastAppliedPlans.erase(event.window->identity.nativeHandle);
+            }
             state.windows[event.window->identity.nativeHandle] = *event.window;
             break;
         case RuntimePolicyEventKind::WindowRemoved:
             if (!event.window || event.window->seatId != event.seatId ||
-                event.window->identity.nativeHandle == 0) {
+                !event.window->identity.valid()) {
                 if (error) *error = "window-remove event has invalid or cross-Seat identity";
                 state.health = RuntimePolicyHealth::RecoveryRequired;
                 addDiagnostic(state, error ? *error : "invalid window-remove event");
                 return false;
             }
-            state.windows.erase(event.window->identity.nativeHandle);
-            state.lastAppliedPlans.erase(event.window->identity.nativeHandle);
+            if (const auto existing = state.windows.find(
+                    event.window->identity.nativeHandle);
+                existing != state.windows.end()) {
+                if (!existing->second.identity.sameInstance(event.window->identity)) {
+                    if (event.window->identity.trackerGeneration <
+                        existing->second.identity.trackerGeneration) {
+                        addDiagnostic(state,
+                                      "stale window-remove identity ignored after HWND reuse");
+                        state.lastEventSequence = event.sequence;
+                        return true;
+                    }
+                    if (error) {
+                        *error = "window-remove identity conflicts with current HWND ownership";
+                    }
+                    state.health = RuntimePolicyHealth::RecoveryRequired;
+                    addDiagnostic(state, error ? *error
+                                               : "conflicting window-remove identity");
+                    return false;
+                }
+                state.windows.erase(existing);
+                state.lastAppliedPlans.erase(event.window->identity.nativeHandle);
+            }
             break;
         case RuntimePolicyEventKind::DisplayLayoutChanged:
             if (!event.displayGroup || event.displayGroup->seatId != event.seatId) {
@@ -108,6 +153,10 @@ bool SeatRuntimePolicyCoordinator::consume(const RuntimePolicyEvent& event,
         case RuntimePolicyEventKind::Reconcile:
             break;
     }
+    // Invalid payloads above must not be able to poison the sequence watermark
+    // and make a later valid event look stale. Once the event has been accepted
+    // into Seat state, consume its sequence even if reconciliation later fails.
+    state.lastEventSequence = event.sequence;
     return reconcile(state, error);
 }
 

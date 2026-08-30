@@ -14,6 +14,7 @@
 namespace hydra::support {
 
 inline constexpr std::uint32_t kSupportBundleSchemaVersion = 1u;
+inline constexpr std::uint32_t kSupportBundleCanonicalizationVersion = 1u;
 inline constexpr std::size_t kMaximumSupportEvents = 256u;
 inline constexpr std::size_t kMaximumSupportBundleBytes = 512u * 1024u;
 
@@ -78,6 +79,8 @@ enum class SupportCode : std::uint8_t {
     TooLarge,
     PreviewRequired,
     PreviewMismatch,
+    StaleApproval,
+    PayloadIdentityMismatch,
 };
 
 struct SupportDiagnostic {
@@ -92,8 +95,11 @@ SupportDiagnostic encodeSupportBundleJson(const SupportBundle& bundle, std::stri
 std::string buildSupportBundlePreview(const SupportBundle& bundle);
 
 struct SupportExportPreview {
+    std::uint32_t canonicalizationVersion{kSupportBundleCanonicalizationVersion};
     std::string humanSummary;
     std::string exactJson;
+    std::string payloadIdentity;
+    std::uint64_t generation{0u};
 
     bool operator==(const SupportExportPreview&) const = default;
 };
@@ -101,7 +107,7 @@ struct SupportExportPreview {
 class SupportExportSession final {
 public:
     SupportDiagnostic prepare(const SupportBundle& bundle, SupportExportPreview& preview);
-    SupportDiagnostic approve(std::string_view exactPreviewJson);
+    SupportDiagnostic approve(const SupportExportPreview& approvedPreview);
     SupportDiagnostic exportApproved(std::string& output) const;
 
     bool hasPreview() const noexcept { return prepared_; }
@@ -111,6 +117,9 @@ private:
     bool prepared_{false};
     bool approved_{false};
     std::string exactJson_;
+    std::string payloadIdentity_;
+    std::uint64_t nextGeneration_{1u};
+    std::uint64_t preparedGeneration_{0u};
 };
 
 std::string_view supportCodeName(SupportCode code) noexcept;

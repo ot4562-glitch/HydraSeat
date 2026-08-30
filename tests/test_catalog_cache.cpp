@@ -106,6 +106,36 @@ void testTamperAndSourceFailurePreserveLastValidCache() {
           "missing optional source is non-fatal and preserves offline cache");
 }
 
+void testRefreshCannotSilentlySwitchCacheLineage() {
+    CatalogCacheModel cache;
+    CatalogRefreshPolicy policy;
+    const auto first = artifact();
+    check(cache.refresh({true, first}, policy, trustPolicy()).succeeded(),
+          "baseline catalog lineage applies before identity/provenance drift checks");
+    const auto before = *cache.current();
+
+    auto differentCatalog = artifact(2u, "1.1.0", 'b');
+    differentCatalog.catalogId = "other-catalog";
+    check(cache.refresh({true, differentCatalog}, policy, trustPolicy()).code ==
+              CatalogRefreshCode::InvalidArtifact &&
+              *cache.current() == before && cache.history().empty(),
+          "refresh cannot silently replace the installed cache with a different catalog identity");
+
+    auto differentSource = artifact(2u, "1.1.0", 'b');
+    differentSource.sourceId = "secondary-reviewed";
+    auto multipleAllowedSources = trustPolicy();
+    multipleAllowedSources.allowedSourceIds.push_back("secondary-reviewed");
+    check(cache.refresh({true, differentSource}, policy, multipleAllowedSources).code ==
+              CatalogRefreshCode::InvalidArtifact &&
+              *cache.current() == before && cache.history().empty(),
+          "refresh cannot silently move an existing catalog lineage to another allowed provenance source");
+
+    cache.clear();
+    check(cache.refresh({true, differentCatalog}, policy, trustPolicy()).succeeded() &&
+              cache.current() && cache.current()->catalogId == "other-catalog",
+          "explicit cache clear permits a deliberate new catalog lineage on the next first download");
+}
+
 void testUpdateRollbackAndStaleConflict() {
     CatalogCacheModel cache;
     CatalogRefreshPolicy policy;
@@ -116,6 +146,13 @@ void testUpdateRollbackAndStaleConflict() {
           "sequential trusted catalog revisions apply");
     check(cache.current()->revision == 2u && cache.history().size() == 1u,
           "prior revision is retained for rollback");
+
+    auto sameRevisionMetadataDrift = second;
+    sameRevisionMetadataDrift.licenseId = "MIT";
+    check(cache.refresh({true, sameRevisionMetadataDrift}, policy, trustPolicy()).code ==
+              CatalogRefreshCode::StaleRevision &&
+              cache.current() && *cache.current() == second && cache.history().size() == 1u,
+          "same revision/hash cannot silently change catalog provenance or license metadata");
 
     auto stale = artifact(1u, "0.9.0", 'c');
     check(cache.refresh({true, stale}, policy, trustPolicy()).code ==
@@ -128,6 +165,22 @@ void testUpdateRollbackAndStaleConflict() {
           "explicit rollback restores previous trusted catalog revision");
     check(cache.rollback().code == CatalogRefreshCode::NoRollbackVersion,
           "rollback history is consumed deterministically");
+}
+
+void testHistoryRemainsBoundedAcrossManyTrustedUpdates() {
+    CatalogCacheModel cache;
+    CatalogRefreshPolicy policy;
+    for (std::uint64_t revision = 1u; revision <= 12u; ++revision) {
+        const char hashChar = static_cast<char>('a' + static_cast<int>(revision % 6u));
+        auto next = artifact(revision, "1.0." + std::to_string(revision), hashChar);
+        check(cache.refresh({true, next}, policy, trustPolicy()).succeeded(),
+              "trusted catalog update in bounded-history sequence applies");
+    }
+    check(cache.current() && cache.current()->revision == 12u &&
+              cache.history().size() == kMaximumCatalogCacheHistory &&
+              cache.history().front().revision == 4u &&
+              cache.history().back().revision == 11u,
+          "catalog cache keeps only the newest bounded rollback history");
 }
 
 void testNoCacheOfflineAndRedistributionPolicy() {
@@ -152,7 +205,9 @@ void testNoCacheOfflineAndRedistributionPolicy() {
 int main() {
     testFirstDownloadOfflineAndDisabledRemainIndependent();
     testTamperAndSourceFailurePreserveLastValidCache();
+    testRefreshCannotSilentlySwitchCacheLineage();
     testUpdateRollbackAndStaleConflict();
+    testHistoryRemainsBoundedAcrossManyTrustedUpdates();
     testNoCacheOfflineAndRedistributionPolicy();
     if (failures != 0) {
         std::cerr << failures << " catalog cache test(s) failed.\n";

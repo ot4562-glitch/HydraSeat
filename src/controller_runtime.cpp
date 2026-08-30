@@ -45,6 +45,17 @@ bool validSource(const SourceDescriptor& source, std::string& error) {
         error = "controller source runtime key is empty or exceeds the bound";
         return false;
     }
+    if (source.api != ApiSurface::XInput &&
+        source.api != ApiSurface::DirectInput &&
+        source.api != ApiSurface::GameInput) {
+        error = "controller source API surface is invalid";
+        return false;
+    }
+    if (source.identityQuality != IdentityQuality::RuntimeOnly &&
+        source.identityQuality != IdentityQuality::Stable) {
+        error = "controller source identity quality is invalid";
+        return false;
+    }
     if (source.displayName.size() > kMaxControllerDisplayNameChars ||
         source.displayName.find(L'\0') != std::wstring::npos) {
         error = "controller source display name exceeds the bound or is malformed";
@@ -65,6 +76,28 @@ bool validSource(const SourceDescriptor& source, std::string& error) {
         source.runtimeXInputSlotHint != gatec::kNoRuntimeXInputSlot &&
         source.runtimeXInputSlotHint >= gatec::kVirtualXInputSlotCount) {
         error = "controller source has an invalid XInput slot hint";
+        return false;
+    }
+    if (!source.connected &&
+        (source.stateAvailable || source.capabilitiesAvailable ||
+         source.batteryInformationAvailable || source.vibrationSupported)) {
+        error = "disconnected controller source exposes live state or metadata";
+        return false;
+    }
+    if (source.capabilitiesAvailable &&
+        !gatec::validXInputCapabilities(source.capabilities)) {
+        error = "controller source capabilities are malformed";
+        return false;
+    }
+    if (source.batteryInformationAvailable &&
+        !gatec::validXInputBattery(source.battery)) {
+        error = "controller source battery information is malformed";
+        return false;
+    }
+    if (source.vibrationSupported &&
+        (!source.capabilitiesAvailable ||
+         !source.capabilities.vibrationSupported)) {
+        error = "controller source vibration support has no matching capabilities";
         return false;
     }
     if (source.sourceGeneration == std::numeric_limits<std::uint64_t>::max()) {
@@ -118,7 +151,10 @@ const SourceDescriptor* findPersistentSource(const SourceSnapshot& snapshot,
     const auto wanted = canonicalWide(persistentId);
     const SourceDescriptor* selected = nullptr;
     for (const auto& source : snapshot.sources) {
-        if (source.api != api || !source.persistentId) continue;
+        if (source.api != api || source.identityQuality != IdentityQuality::Stable ||
+            !source.persistentId) {
+            continue;
+        }
         if (canonicalWide(*source.persistentId) != wanted) continue;
         ++matches;
         selected = &source;
@@ -156,6 +192,21 @@ gatec::ControllerSourceIdentity gateSource(const SeatBinding& binding) noexcept 
     return result;
 }
 
+bool sourceMatchesBindingAuthority(const SeatBinding& binding,
+                                   const SourceDescriptor& source) {
+    if (source.runtimeKey != binding.runtimeKey || source.api != binding.api) {
+        return false;
+    }
+    if (binding.persistentControllerId) {
+        return source.identityQuality == IdentityQuality::Stable &&
+               source.persistentId &&
+               canonicalWide(*source.persistentId) ==
+                   canonicalWide(*binding.persistentControllerId);
+    }
+    return binding.api == ApiSurface::XInput &&
+           source.runtimeXInputSlotHint == binding.runtimeXInputSlotHint;
+}
+
 } // namespace
 
 PollWorker::PollWorker(std::shared_ptr<SourceBackend> backend)
@@ -165,10 +216,31 @@ PollWorker::~PollWorker() {
     stop();
 }
 
+void PollWorker::invalidateSnapshot() noexcept {
+    std::lock_guard lock(mutex_);
+    for (auto& [runtimeKey, wasConnected] : previousConnected_) {
+        if (!wasConnected) continue;
+        wasConnected = false;
+        auto& generation = sourceGenerations_[runtimeKey];
+        if (generation != std::numeric_limits<std::uint64_t>::max()) {
+            ++generation;
+        }
+    }
+    if (snapshot_.pollSequence != std::numeric_limits<std::uint64_t>::max()) {
+        ++snapshot_.pollSequence;
+    }
+    if (snapshot_.generation != std::numeric_limits<std::uint64_t>::max()) {
+        ++snapshot_.generation;
+    }
+    snapshot_.authoritative = false;
+    snapshot_.sources.clear();
+}
+
 bool PollWorker::pollOnce(std::string* error) {
     if (error != nullptr) error->clear();
     if (!backend_) {
         if (error != nullptr) *error = "controller source backend is unavailable";
+        invalidateSnapshot();
         return false;
     }
 
@@ -179,10 +251,12 @@ bool PollWorker::pollOnce(std::string* error) {
             *error = localError.empty() ? "controller source scan failed"
                                         : std::move(localError);
         }
+        invalidateSnapshot();
         return false;
     }
     if (!normalizeSources(sources, localError)) {
         if (error != nullptr) *error = std::move(localError);
+        invalidateSnapshot();
         return false;
     }
 
@@ -192,6 +266,13 @@ bool PollWorker::pollOnce(std::string* error) {
         seen.insert(source.runtimeKey);
         const auto previous = previousConnected_.find(source.runtimeKey);
         const auto previousSlot = previousRuntimeSlots_.find(source.runtimeKey);
+        const auto previousAuthority = previousAuthorities_.find(source.runtimeKey);
+        SourceAuthoritySnapshot currentAuthority;
+        currentAuthority.api = source.api;
+        currentAuthority.identityQuality = source.identityQuality;
+        if (source.persistentId) {
+            currentAuthority.persistentId = canonicalWide(*source.persistentId);
+        }
         auto generation = sourceGenerations_[source.runtimeKey];
         if (generation == 0) generation = 1;
         const bool connectionChanged =
@@ -200,11 +281,16 @@ bool PollWorker::pollOnce(std::string* error) {
         const bool runtimeRouteChanged =
             previousSlot != previousRuntimeSlots_.end() &&
             previousSlot->second != source.runtimeXInputSlotHint;
-        if (connectionChanged || runtimeRouteChanged) {
+        const bool authorityChanged =
+            previousAuthority != previousAuthorities_.end() &&
+            previousAuthority->second != currentAuthority;
+        if (connectionChanged || runtimeRouteChanged || authorityChanged) {
             if (generation == std::numeric_limits<std::uint64_t>::max()) {
                 if (error != nullptr) {
                     *error = "controller source generation overflow";
                 }
+                snapshot_.authoritative = false;
+                snapshot_.sources.clear();
                 return false;
             }
             ++generation;
@@ -212,6 +298,7 @@ bool PollWorker::pollOnce(std::string* error) {
         sourceGenerations_[source.runtimeKey] = generation;
         previousConnected_[source.runtimeKey] = source.connected;
         previousRuntimeSlots_[source.runtimeKey] = source.runtimeXInputSlotHint;
+        previousAuthorities_[source.runtimeKey] = std::move(currentAuthority);
         source.sourceGeneration = generation;
     }
     for (auto& [runtimeKey, wasConnected] : previousConnected_) {
@@ -222,6 +309,8 @@ bool PollWorker::pollOnce(std::string* error) {
                 if (error != nullptr) {
                     *error = "controller source generation overflow";
                 }
+                snapshot_.authoritative = false;
+                snapshot_.sources.clear();
                 return false;
             }
             ++generation;
@@ -230,10 +319,13 @@ bool PollWorker::pollOnce(std::string* error) {
     if (snapshot_.pollSequence == std::numeric_limits<std::uint64_t>::max() ||
         snapshot_.generation == std::numeric_limits<std::uint64_t>::max()) {
         if (error != nullptr) *error = "controller poll snapshot generation overflow";
+        snapshot_.authoritative = false;
+        snapshot_.sources.clear();
         return false;
     }
     snapshot_.pollSequence += 1u;
     snapshot_.generation += 1u;
+    snapshot_.authoritative = true;
     snapshot_.sources = std::move(sources);
     return true;
 }
@@ -339,7 +431,8 @@ BindingPlan planSeatBindings(std::span<const SeatBindingRequest> requests,
                 bool foundOtherApi = false;
                 const auto wanted = canonicalWide(*request.persistentControllerId);
                 for (const auto& candidate : sources.sources) {
-                    if (candidate.persistentId &&
+                    if (candidate.identityQuality == IdentityQuality::Stable &&
+                        candidate.persistentId &&
                         canonicalWide(*candidate.persistentId) == wanted) {
                         foundOtherApi = true;
                         break;
@@ -400,8 +493,8 @@ BindingPlan planSeatBindings(std::span<const SeatBindingRequest> requests,
         }
         plan.bindings.push_back(
             {request.seatId, source->api, source->runtimeKey,
-             source->persistentId, sourceKey, source->sourceGeneration,
-             source->runtimeXInputSlotHint});
+             request.persistentControllerId ? source->persistentId : std::nullopt,
+             sourceKey, source->sourceGeneration, source->runtimeXInputSlotHint});
     }
 
     std::sort(plan.bindings.begin(), plan.bindings.end(),
@@ -429,8 +522,17 @@ bool SeatControllerRuntime::configure(
         if (error != nullptr) *error = "controller runtime backend is unavailable";
         return false;
     }
-    if (!worker_->running() && !worker_->pollOnce(error)) return false;
+    if (!worker_->running() && !worker_->pollOnce(error)) {
+        snapshot_ = worker_->snapshot();
+        return false;
+    }
     snapshot_ = worker_->snapshot();
+    if (!snapshot_.authoritative) {
+        if (error != nullptr && error->empty()) {
+            *error = "controller source snapshot is not authoritative";
+        }
+        return false;
+    }
     const auto plan = planSeatBindings(requests, snapshot_);
     if (!plan.valid) {
         if (error != nullptr) {
@@ -453,8 +555,17 @@ bool SeatControllerRuntime::refresh(std::string* error) {
         if (error != nullptr) *error = "controller poll worker is unavailable";
         return false;
     }
-    if (!worker_->running() && !worker_->pollOnce(error)) return false;
+    if (!worker_->running() && !worker_->pollOnce(error)) {
+        snapshot_ = worker_->snapshot();
+        return false;
+    }
     snapshot_ = worker_->snapshot();
+    if (!snapshot_.authoritative) {
+        if (error != nullptr && error->empty()) {
+            *error = "controller source snapshot is not authoritative";
+        }
+        return false;
+    }
     return true;
 }
 
@@ -468,14 +579,20 @@ gatec::VirtualXInputResult SeatControllerRuntime::mapSeatToContext(
     if (!source || !source->connected) {
         return gatec::VirtualXInputResult::Disconnected;
     }
-    if (source->api != ApiSurface::XInput || !source->stateAvailable) {
+    if (!sourceMatchesBindingAuthority(found->second, *source) ||
+        source->api != ApiSurface::XInput || !source->stateAvailable) {
         return gatec::VirtualXInputResult::InvalidState;
     }
-    found->second.sourceGeneration = source->sourceGeneration;
-    found->second.runtimeXInputSlotHint = source->runtimeXInputSlotHint;
-    return context.mapLogicalSlot(nextSequence(), logicalSlot,
-                                  gateSource(found->second),
-                                  source->sourceGeneration);
+    auto proposed = found->second;
+    proposed.sourceGeneration = source->sourceGeneration;
+    proposed.runtimeXInputSlotHint = source->runtimeXInputSlotHint;
+    const auto result = context.mapLogicalSlot(nextSequence(), logicalSlot,
+                                               gateSource(proposed),
+                                               source->sourceGeneration);
+    if (result == gatec::VirtualXInputResult::Success) {
+        found->second = std::move(proposed);
+    }
+    return result;
 }
 
 gatec::VirtualXInputResult SeatControllerRuntime::updateSeatContext(
@@ -485,7 +602,8 @@ gatec::VirtualXInputResult SeatControllerRuntime::updateSeatContext(
     if (found == bindings_.end()) return gatec::VirtualXInputResult::NotMapped;
     const auto source = findSource(found->second.runtimeKey);
     const auto identity = gateSource(found->second);
-    if (!source || !source->connected) {
+    if (!source || !source->connected ||
+        !sourceMatchesBindingAuthority(found->second, *source)) {
         return context.disconnectSource(nextSequence(), identity,
                                         found->second.sourceGeneration);
     }
@@ -493,26 +611,26 @@ gatec::VirtualXInputResult SeatControllerRuntime::updateSeatContext(
         return gatec::VirtualXInputResult::InvalidState;
     }
 
-    auto result = context.applySourceState(nextSequence(), identity,
-                                           source->sourceGeneration,
-                                           source->gamepad);
-    if (result != gatec::VirtualXInputResult::Success) return result;
-    found->second.sourceGeneration = source->sourceGeneration;
-    found->second.runtimeXInputSlotHint = source->runtimeXInputSlotHint;
-
-    if (source->api == ApiSurface::XInput) {
-        result = context.applySourceCapabilities(
-            nextSequence(), gateSource(found->second),
-            source->sourceGeneration, source->capabilities);
-        if (result != gatec::VirtualXInputResult::Success) return result;
-        if (source->battery.available) {
-            result = context.applySourceBattery(
-                nextSequence(), gateSource(found->second),
-                source->sourceGeneration, source->battery);
-            if (result != gatec::VirtualXInputResult::Success) return result;
-        }
+    if (source->api != ApiSurface::XInput) {
+        return gatec::VirtualXInputResult::InvalidState;
     }
-    return gatec::VirtualXInputResult::Success;
+
+    auto proposed = found->second;
+    proposed.sourceGeneration = source->sourceGeneration;
+    proposed.runtimeXInputSlotHint = source->runtimeXInputSlotHint;
+    const auto* capabilities = source->capabilitiesAvailable
+        ? &source->capabilities
+        : nullptr;
+    const auto* battery = source->batteryInformationAvailable
+        ? &source->battery
+        : nullptr;
+    const auto result = context.applySourceSnapshot(
+        nextSequence(), gateSource(proposed), source->sourceGeneration,
+        source->gamepad, capabilities, battery);
+    if (result == gatec::VirtualXInputResult::Success) {
+        found->second = std::move(proposed);
+    }
+    return result;
 }
 
 bool SeatControllerRuntime::requestVibration(
@@ -533,18 +651,26 @@ bool SeatControllerRuntime::requestVibration(
         if (error != nullptr) *error = "controller source is disconnected";
         return false;
     }
-    if (!source->vibrationSupported || source->api != ApiSurface::XInput) {
-        if (error != nullptr) *error = "selected controller backend does not support routed vibration";
+    if (!sourceMatchesBindingAuthority(found->second, *source)) {
+        if (error != nullptr) {
+            *error = "controller source no longer matches the Seat binding authority";
+        }
+        return false;
+    }
+    if (source->api != ApiSurface::XInput || !source->capabilitiesAvailable ||
+        !source->capabilities.vibrationSupported || !source->vibrationSupported) {
+        if (error != nullptr) *error = "selected controller backend does not support current routed vibration";
         return false;
     }
 
+    const auto expectedSource = gateSource(found->second);
     gatec::VirtualXInputMapping mapping;
     if (context.getMapping(logicalSlot, mapping) !=
         gatec::VirtualXInputResult::Success) {
         if (error != nullptr) *error = "controller logical slot is not mapped";
         return false;
     }
-    if (mapping.source.sourceKey != found->second.sourceKey ||
+    if (mapping.source != expectedSource ||
         mapping.sourceGeneration != source->sourceGeneration ||
         mapping.sourceGeneration != found->second.sourceGeneration) {
         if (error != nullptr) *error = "controller vibration mapping has stale or foreign source identity";
@@ -563,8 +689,9 @@ bool SeatControllerRuntime::requestVibration(
         if (error != nullptr) *error = "controller vibration request was rejected by the Seat-local context";
         return false;
     }
-    if (route.source.sourceKey != found->second.sourceKey ||
-        route.sourceGeneration != source->sourceGeneration) {
+    if (route.source != expectedSource ||
+        route.sourceGeneration != source->sourceGeneration ||
+        route.mappingGeneration != mapping.mappingGeneration) {
         if (error != nullptr) *error = "controller vibration route changed source identity unexpectedly";
         return false;
     }

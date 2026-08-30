@@ -149,10 +149,38 @@ BrokerDiagnostic PrivilegeBrokerSession::authorize(const BrokerRequest& request,
 
 BrokerDiagnostic PrivilegeBrokerSession::execute(const BrokerRequest& request,
                                                  const AuthenticatedPeer& peer,
+                                                 PrivilegedArtifactAuthority& artifactAuthority,
                                                  PrivilegedMutationExecutor& executor,
                                                  BrokerReceipt& receipt) {
     const auto authorized = authorize(request, peer);
     if (!authorized.succeeded()) return authorized;
+
+    std::optional<trust::ArtifactManifest> authoritativeManifest;
+    std::optional<trust::ArtifactObservation> authoritativeObservation;
+    if (request.operation != BrokerOperation::Remove) {
+        trust::ArtifactManifest resolvedManifest;
+        trust::ArtifactObservation resolvedObservation;
+        if (!artifactAuthority.resolve(request.resource, resolvedManifest,
+                                       resolvedObservation)) {
+            return fail(BrokerCode::ArtifactAuthorityUnavailable,
+                        "broker-owned artifact manifest or file observation is unavailable");
+        }
+
+        BrokerRequest authoritativeRequest = request;
+        authoritativeRequest.artifactManifest = resolvedManifest;
+        authoritativeRequest.artifactObservation = resolvedObservation;
+        const auto authoritativeTrust =
+            validateArtifactForResource(authoritativeRequest, policy_);
+        if (!authoritativeTrust.succeeded()) return authoritativeTrust;
+
+        if (request.artifactManifest != authoritativeRequest.artifactManifest ||
+            request.artifactObservation != authoritativeRequest.artifactObservation) {
+            return fail(BrokerCode::ArtifactAuthorityMismatch,
+                        "caller artifact claim does not exactly match broker-owned evidence");
+        }
+        authoritativeManifest = std::move(resolvedManifest);
+        authoritativeObservation = std::move(resolvedObservation);
+    }
 
     std::string snapshotId;
     if (!executor.capture(request.resource, snapshotId) ||
@@ -196,8 +224,8 @@ BrokerDiagnostic PrivilegeBrokerSession::execute(const BrokerRequest& request,
                         : "privileged mutation verification failed and prior state was verified restored");
     };
 
-    if (!executor.apply(request.resource, request.operation, request.artifactManifest,
-                        request.artifactObservation, snapshotId)) {
+    if (!executor.apply(request.resource, request.operation, authoritativeManifest,
+                        authoritativeObservation, snapshotId)) {
         return rollbackAfterFailure(BrokerCode::ApplyFailedRolledBack);
     }
     if (!executor.verify(request.resource, request.operation)) {
@@ -247,6 +275,8 @@ std::string_view brokerCodeName(BrokerCode value) noexcept {
         case BrokerCode::ArtifactClassMismatch: return "ArtifactClassMismatch";
         case BrokerCode::ArtifactCapabilityMismatch: return "ArtifactCapabilityMismatch";
         case BrokerCode::ArtifactTrustRejected: return "ArtifactTrustRejected";
+        case BrokerCode::ArtifactAuthorityUnavailable: return "ArtifactAuthorityUnavailable";
+        case BrokerCode::ArtifactAuthorityMismatch: return "ArtifactAuthorityMismatch";
         case BrokerCode::CaptureFailed: return "CaptureFailed";
         case BrokerCode::ApplyFailedRolledBack: return "ApplyFailedRolledBack";
         case BrokerCode::VerifyFailedRolledBack: return "VerifyFailedRolledBack";

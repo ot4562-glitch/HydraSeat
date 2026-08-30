@@ -44,7 +44,8 @@ bool validStage(InputMetricStage stage) noexcept {
 struct EventAccumulator {
     std::array<std::optional<std::uint64_t>, kPrimaryStageCount> timestamps{};
     InputMetricEventClass eventClass{InputMetricEventClass::None};
-    bool receiverVerified{false};
+    bool targetAppliedReceiverVerified{false};
+    bool targetQueriedReceiverVerified{false};
     bool crossSeat{false};
     bool crossProcess{false};
     bool inputStageSeen{false};
@@ -316,8 +317,14 @@ InputMetricsReportResult buildInputMetricsReport(
                                       sample.receivingSeatId != 0u;
             const bool processEvidence = sample.targetProcessId != 0u &&
                                          sample.receivingProcessId != 0u;
-            event.receiverVerified = event.receiverVerified ||
-                                     (seatEvidence && processEvidence);
+            const bool receiverVerified = seatEvidence && processEvidence;
+            if (sample.stage == InputMetricStage::TargetApplied) {
+                event.targetAppliedReceiverVerified =
+                    event.targetAppliedReceiverVerified || receiverVerified;
+            } else {
+                event.targetQueriedReceiverVerified =
+                    event.targetQueriedReceiverVerified || receiverVerified;
+            }
             if (seatEvidence && sample.expectedSeatId != sample.receivingSeatId) {
                 event.crossSeat = true;
             }
@@ -345,8 +352,14 @@ InputMetricsReportResult buildInputMetricsReport(
             continue;
         }
         ++report.uniqueInputEvents;
-        report.receiverVerifiedEvents += event.receiverVerified ? 1u : 0u;
-        report.missingReceiverEvidenceEvents += event.receiverVerified ? 0u : 1u;
+        // Zero-bleed receiver evidence is complete only when the target both
+        // applied the event and subsequently queried that exact applied state.
+        // A single target-side stage must not mask the missing half.
+        const bool receiverVerified =
+            event.targetAppliedReceiverVerified &&
+            event.targetQueriedReceiverVerified;
+        report.receiverVerifiedEvents += receiverVerified ? 1u : 0u;
+        report.missingReceiverEvidenceEvents += receiverVerified ? 0u : 1u;
         report.crossSeatEvents += event.crossSeat ? 1u : 0u;
         report.crossProcessEvents += event.crossProcess ? 1u : 0u;
         report.keyEvents +=

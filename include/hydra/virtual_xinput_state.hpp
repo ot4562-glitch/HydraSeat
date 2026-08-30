@@ -178,6 +178,12 @@ public:
         std::uint64_t sequence, const ControllerSourceIdentity& source,
         std::uint64_t sourceGeneration,
         const NormalizedXInputGamepad& gamepad);
+    VirtualXInputResult applySourceSnapshot(
+        std::uint64_t sequence, const ControllerSourceIdentity& source,
+        std::uint64_t sourceGeneration,
+        const NormalizedXInputGamepad& gamepad,
+        const NormalizedXInputCapabilities* capabilities,
+        const NormalizedXInputBattery* battery);
     VirtualXInputResult applySourceCapabilities(
         std::uint64_t sequence, const ControllerSourceIdentity& source,
         std::uint64_t sourceGeneration,

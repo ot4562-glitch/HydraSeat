@@ -1,5 +1,7 @@
 #include "hydra/hidhide_session_backend.hpp"
 
+#include "phase3_hardware_evidence_fixture.hpp"
+
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -27,6 +29,7 @@ public:
     bool failRead{false};
     bool failWrite{false};
     bool failSessionAdd{false};
+    bool partialSessionAddFailure{false};
     bool failSessionClear{false};
     bool partialWriteFailure{false};
     bool corruptAfterWrite{false};
@@ -75,6 +78,12 @@ public:
         std::span<const std::wstring> deviceInstanceIds,
         std::string& error) noexcept override {
         ++sessionAdds;
+        if (partialSessionAddFailure) {
+            sessionDevices.assign(deviceInstanceIds.begin(), deviceInstanceIds.end());
+            if (!sessionDevices.empty()) sessionDevices.pop_back();
+            error = "injected partial session blacklist add failure";
+            return false;
+        }
         if (failSessionAdd) {
             error = "injected session blacklist add failure";
             return false;
@@ -105,10 +114,7 @@ public:
 
 HidHideSessionRequest request() {
     HidHideSessionRequest value;
-    value.deviceInstanceIds = {
-        L"hid\\vid_1111&pid_0001\\a",
-        L"hid\\vid_2222&pid_0002\\b",
-    };
+    value.deviceInstanceIds = test::SyntheticPhase3EvidenceFixture::requestedDeviceInstanceIds();
     value.allowedApplications = {
         L"\\Device\\HarddiskVolume3\\HydraSeat\\hydra_host.exe",
         L"\\Device\\HarddiskVolume3\\HydraSeat\\hydra_gate_c_host.exe",
@@ -118,6 +124,14 @@ HidHideSessionRequest request() {
     value.spareRecoveryInputPresent = true;
     value.expiryMilliseconds = 30'000;
     value.generation = 7;
+    return value;
+}
+
+HidHideSessionRequest approvedRequest(
+    const Phase3HardwareAcceptanceEvidence& evidence) {
+    auto value = request();
+    value.physicalAcceptanceEvidence = evidence;
+    value.nativeMutationApproved = true;
     return value;
 }
 
@@ -143,7 +157,7 @@ void testValidationAndPlanAreReadOnly() {
           "unverified replacement path is rejected before backend access");
 
     auto duplicate = request();
-    duplicate.deviceInstanceIds[1] = L"HID\\VID_1111&PID_0001\\A";
+    duplicate.deviceInstanceIds[1] = L"hid\\vid_1111&pid_0001\\k1";
     const auto duplicateResult = transaction.prepare(duplicate, 1'000);
     check(duplicateResult.code == HidHideSessionResultCode::InvalidRequest,
           "case-normalized duplicate device IDs are rejected");
@@ -169,6 +183,88 @@ void testValidationAndPlanAreReadOnly() {
           "prepared plan carries an explicit bounded expiry deadline");
 }
 
+void testTypedPhysicalEvidenceBoundary() {
+    test::SyntheticPhase3EvidenceFixture accepted;
+    check(accepted.loadResult().status == Phase3HardwareEvidenceStatus::Accepted &&
+              accepted.loadResult().evidence.has_value(),
+          "strict P3-HW loader produces typed evidence only for a complete synthetic unit fixture");
+
+    test::SyntheticPhase3EvidenceFixture pending(
+        test::SyntheticPhase3EvidenceMode::Pending);
+    check(pending.loadResult().status == Phase3HardwareEvidenceStatus::Pending &&
+              !pending.loadResult().evidence.has_value(),
+          "PENDING P3-HW evidence cannot produce the typed native-mutation capability");
+
+    test::SyntheticPhase3EvidenceFixture gatePending(
+        test::SyntheticPhase3EvidenceMode::GatePending);
+    check(gatePending.loadResult().status == Phase3HardwareEvidenceStatus::Pending &&
+              !gatePending.loadResult().evidence.has_value(),
+          "Gate C PENDING cannot be masked by a root manual PASS");
+
+    test::SyntheticPhase3EvidenceFixture stale(
+        test::SyntheticPhase3EvidenceMode::Stale);
+    check(stale.loadResult().status == Phase3HardwareEvidenceStatus::Stale &&
+              !stale.loadResult().evidence.has_value(),
+          "stale P3-HW evidence fails closed before a typed capability is created");
+
+    test::SyntheticPhase3EvidenceFixture missingReceiver(
+        test::SyntheticPhase3EvidenceMode::ReceiverMissing);
+    check(missingReceiver.loadResult().status == Phase3HardwareEvidenceStatus::Mismatched &&
+              !missingReceiver.loadResult().evidence.has_value(),
+          "missing Gate C receiver evidence fails closed instead of relying on zero cross counters");
+
+    test::SyntheticPhase3EvidenceFixture scopeMismatch(
+        test::SyntheticPhase3EvidenceMode::ScopeMismatch);
+    check(scopeMismatch.loadResult().status == Phase3HardwareEvidenceStatus::Mismatched &&
+              !scopeMismatch.loadResult().evidence.has_value(),
+          "manifest Seat/native-device identity mismatch fails closed");
+
+    auto wrongScope = test::SyntheticPhase3EvidenceFixture::requestedDeviceInstanceIds();
+    wrongScope.back() = L"HID\\VID_DEAD&PID_BEEF\\MISMATCH";
+    std::string error;
+    check(!validatePhase3HardwareAcceptanceEvidenceForDevices(
+              accepted.evidence(), wrongScope, 0u, &error) && !error.empty(),
+          "typed P3-HW evidence is bound to the exact HidHide device scope");
+
+    {
+        test::SyntheticPhase3EvidenceFixture profileTamper;
+        profileTamper.tamperProfile();
+        auto tamperPlatform = std::make_shared<FakePlatform>();
+        tamperPlatform->state = initialState();
+        HidHideSessionTransaction tamperTransaction(tamperPlatform);
+        const auto rejected = tamperTransaction.prepare(
+            approvedRequest(profileTamper.evidence()), 900);
+        check(rejected.code == HidHideSessionResultCode::InvalidRequest &&
+                  tamperPlatform->reads == 0 && tamperPlatform->writes == 0,
+              "profile SHA tamper after evidence load is rejected before backend access");
+    }
+
+    {
+        test::SyntheticPhase3EvidenceFixture manifestTamper;
+        manifestTamper.tamperManifest();
+        auto tamperPlatform = std::make_shared<FakePlatform>();
+        tamperPlatform->state = initialState();
+        HidHideSessionTransaction tamperTransaction(tamperPlatform);
+        const auto rejected = tamperTransaction.prepare(
+            approvedRequest(manifestTamper.evidence()), 950);
+        check(rejected.code == HidHideSessionResultCode::InvalidRequest &&
+                  tamperPlatform->reads == 0 && tamperPlatform->writes == 0,
+              "manifest tamper after evidence load is rejected before backend access");
+    }
+
+    auto platform = std::make_shared<FakePlatform>();
+    platform->state = initialState();
+    auto gated = approvedRequest(accepted.evidence());
+    HidHideSessionTransaction transaction(platform);
+    check(transaction.prepare(gated, 1'000).succeeded(),
+          "typed-evidence tamper test prepares without mutation");
+    accepted.tamperGateCTrace();
+    const auto tampered = transaction.activate(1'100);
+    check(tampered.code == HidHideSessionResultCode::PhysicalGateRequired &&
+              platform->writes == 0 && platform->sessionAdds == 0,
+          "evidence artifact tamper after prepare is revalidated and blocks all native mutation");
+}
+
 void testPhysicalGateAndApprovalBlockMutation() {
     auto platform = std::make_shared<FakePlatform>();
     platform->state = initialState();
@@ -181,8 +277,11 @@ void testPhysicalGateAndApprovalBlockMutation() {
               platform->writes == 0 && platform->sessionAdds == 0,
           "missing physical evidence blocks persistent and session mutation with zero writes");
 
+    test::SyntheticPhase3EvidenceFixture evidence;
+    check(evidence.loadResult().accepted(),
+          "synthetic unit fixture exercises the real P3-HW typed-evidence loader");
     auto approved = request();
-    approved.physicalAcceptanceRecorded = true;
+    approved.physicalAcceptanceEvidence = evidence.evidence();
     check(transaction.rollback().succeeded(), "prepared plan can be cancelled read-only");
     check(transaction.prepare(approved, 100).succeeded(),
           "physically eligible plan can prepare");
@@ -215,9 +314,8 @@ void testPhysicalGateAndApprovalBlockMutation() {
 void testActivationRollbackAndExpiry() {
     auto platform = std::make_shared<FakePlatform>();
     platform->state = initialState();
-    auto gated = request();
-    gated.physicalAcceptanceRecorded = true;
-    gated.nativeMutationApproved = true;
+    test::SyntheticPhase3EvidenceFixture evidence;
+    auto gated = approvedRequest(evidence.evidence());
 
     HidHideSessionTransaction transaction(platform);
     check(transaction.prepare(gated, 1'000).succeeded(),
@@ -225,7 +323,7 @@ void testActivationRollbackAndExpiry() {
     const auto activated = transaction.activate(2'000);
     check(activated.succeeded() && activated.phase == HidHideSessionPhase::Active &&
               platform->writes == 1 && platform->state.active &&
-              platform->sessionAdds == 1 && platform->sessionDevices.size() == 2,
+              platform->sessionAdds == 1 && platform->sessionDevices.size() == 4,
           "fake backend activation applies persistent state then owns only process-lifetime session device entries");
 
     const auto notExpired = transaction.expireIfNeeded(30'999);
@@ -248,9 +346,8 @@ void testSessionBlacklistFailurePaths() {
     auto addPlatform = std::make_shared<FakePlatform>();
     addPlatform->state = initialState();
     addPlatform->failSessionAdd = true;
-    auto gated = request();
-    gated.physicalAcceptanceRecorded = true;
-    gated.nativeMutationApproved = true;
+    test::SyntheticPhase3EvidenceFixture evidence;
+    auto gated = approvedRequest(evidence.evidence());
 
     HidHideSessionTransaction addFailure(addPlatform);
     check(addFailure.prepare(gated, 1'000).succeeded(),
@@ -259,8 +356,40 @@ void testSessionBlacklistFailurePaths() {
     check(addResult.code == HidHideSessionResultCode::BackendFailure &&
               addResult.phase == HidHideSessionPhase::Idle &&
               addPlatform->state == initialState() && addPlatform->writes == 2 &&
-              addPlatform->sessionAdds == 1 && addPlatform->sessionDevices.empty(),
-          "session blacklist add failure restores persistent state and returns Idle");
+              addPlatform->sessionAdds == 1 && addPlatform->sessionClears == 1 &&
+              addPlatform->sessionDevices.empty(),
+          "session blacklist add failure is treated as potentially side-effectful and verified clear before Idle");
+
+    auto partialAddPlatform = std::make_shared<FakePlatform>();
+    partialAddPlatform->state = initialState();
+    partialAddPlatform->partialSessionAddFailure = true;
+    HidHideSessionTransaction partialAddFailure(partialAddPlatform);
+    check(partialAddFailure.prepare(gated, 1'500).succeeded(),
+          "partial session-add failure test prepares");
+    const auto partialAddResult = partialAddFailure.activate(1'600);
+    check(partialAddResult.code == HidHideSessionResultCode::BackendFailure &&
+              partialAddResult.phase == HidHideSessionPhase::Idle &&
+              partialAddPlatform->state == initialState() &&
+              partialAddPlatform->sessionAdds == 1 &&
+              partialAddPlatform->sessionClears == 1 &&
+              partialAddPlatform->sessionDevices.empty(),
+          "partial session blacklist add failure cannot strand an untracked cloak entry");
+
+    auto partialAddClearFailurePlatform = std::make_shared<FakePlatform>();
+    partialAddClearFailurePlatform->state = initialState();
+    partialAddClearFailurePlatform->partialSessionAddFailure = true;
+    partialAddClearFailurePlatform->failSessionClear = true;
+    HidHideSessionTransaction partialAddClearFailure(partialAddClearFailurePlatform);
+    check(partialAddClearFailure.prepare(gated, 1'700).succeeded(),
+          "partial session-add plus clear-failure test prepares");
+    const auto partialAddClearResult = partialAddClearFailure.activate(1'800);
+    check(partialAddClearResult.code == HidHideSessionResultCode::RecoveryRequired &&
+              partialAddClearResult.phase == HidHideSessionPhase::RecoveryRequired &&
+              partialAddClearFailurePlatform->state == initialState() &&
+              partialAddClearFailurePlatform->sessionAdds == 1 &&
+              partialAddClearFailurePlatform->sessionClears == 1 &&
+              !partialAddClearFailurePlatform->sessionDevices.empty(),
+          "unverified cleanup after a partial session add remains RecoveryRequired");
 
     auto clearPlatform = std::make_shared<FakePlatform>();
     clearPlatform->state = initialState();
@@ -280,9 +409,8 @@ void testSessionBlacklistFailurePaths() {
 void testExternalDriftFailsClosed() {
     auto platform = std::make_shared<FakePlatform>();
     platform->state = initialState();
-    auto gated = request();
-    gated.physicalAcceptanceRecorded = true;
-    gated.nativeMutationApproved = true;
+    test::SyntheticPhase3EvidenceFixture evidence;
+    auto gated = approvedRequest(evidence.evidence());
 
     HidHideSessionTransaction transaction(platform);
     check(transaction.prepare(gated, 1'000).succeeded() &&
@@ -303,9 +431,8 @@ void testPartialMutationFailureRetainsRecoveryTruth() {
     auto platform = std::make_shared<FakePlatform>();
     platform->state = initialState();
     platform->partialWriteFailure = true;
-    auto gated = request();
-    gated.physicalAcceptanceRecorded = true;
-    gated.nativeMutationApproved = true;
+    test::SyntheticPhase3EvidenceFixture evidence;
+    auto gated = approvedRequest(evidence.evidence());
 
     HidHideSessionTransaction transaction(platform);
     check(transaction.prepare(gated, 1'000).succeeded(),
@@ -341,6 +468,7 @@ void testInverseModeAndWatchdogDescriptor() {
 
 int main() {
     testValidationAndPlanAreReadOnly();
+    testTypedPhysicalEvidenceBoundary();
     testPhysicalGateAndApprovalBlockMutation();
     testActivationRollbackAndExpiry();
     testSessionBlacklistFailurePaths();

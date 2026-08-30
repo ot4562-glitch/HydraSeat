@@ -127,6 +127,11 @@ PlanCompileResult compileProviderAwareLaunchPlan(
     std::span<const ProviderAdapterBinding> providers,
     std::span<const GameRuntimeRequirement> requirements);
 
+// Recomputes the immutable compiler fingerprint from canonical plan contents.
+// Runtime-side consumers use this instead of trusting a caller-provided number.
+std::uint64_t recomputeProviderAwareLaunchPlanFingerprint(
+    const ProviderAwareLaunchPlan& plan) noexcept;
+
 std::string_view planIssueCodeName(PlanIssueCode code) noexcept;
 
 } // namespace hydra::plan

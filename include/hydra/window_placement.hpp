@@ -3,10 +3,13 @@
 #include "hydra/window_policy.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace hydra::windowing {
+
+class WindowReacquisitionLease;
 
 enum class WindowPlacementStatus : std::uint8_t {
     NoChange = 0,
@@ -24,6 +27,9 @@ struct WindowRestoreState {
     bool wasIconic{false};
     bool wasZoomed{false};
     bool valid{false};
+    // Copies intentionally share one idempotent event-driven lease so existing
+    // runtime containers retain replacement-window placement ownership.
+    std::shared_ptr<WindowReacquisitionLease> reacquisitionLease;
 };
 
 struct WindowPlacementResult {
@@ -33,6 +39,7 @@ struct WindowPlacementResult {
     display::DisplayRect observedRect;
     std::uint32_t attempts{0};
     bool fightingApplication{false};
+    bool reacquisitionArmed{false};
     WindowRestoreState restoreState;
     std::vector<std::string> diagnostics;
 };

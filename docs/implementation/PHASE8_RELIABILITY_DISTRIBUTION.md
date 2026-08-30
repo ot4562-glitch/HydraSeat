@@ -152,7 +152,8 @@ Privilege-boundary tests prove normal flows stay standard-user and malformed/out
 
 - `PrivilegeBrokerSession` exposes only fixed `RuntimeService`, `WatchdogService`, and `RecoveryTool` resources plus typed Install/Repair/Remove operations. Requests have no executable path, registry path, device path, command line, shell, PowerShell, or general process-execution field.
 - The native IPC boundary must supply the authenticated caller SID, broker-owner SID, channel nonce, and broker elevation state separately from request payload. Wrong-user/wrong-channel/non-elevated/stale-sequence requests fail before mutation capture.
-- Install/repair binds each resource to one compiled artifact identity/capability and reuses broker-owned P8 artifact trust policy. Tampered/wrong-publisher/wrong-capability/substituted artifacts fail before the executor is called; remove cannot smuggle artifact metadata.
+- Install/repair binds each resource to one compiled artifact identity/capability and reuses broker-owned P8 artifact trust policy. `PrivilegedArtifactAuthority` resolves both the broker-owned release manifest and the actual fixed-resource observation behind the elevated/native boundary; caller-supplied `observedSha256` or signature fields are never sufficient authorization. Tampered/wrong-publisher/wrong-capability/substituted artifacts fail before the executor is called; remove cannot smuggle artifact metadata.
+- Forged-evidence tests prove a caller cannot make a self-consistent fake manifest/observation authoritative: matching forged expected/observed hashes are rejected as `ArtifactAuthorityMismatch`, unavailable broker-owned observation is retryable without capture, and a tampered broker-observed artifact fails trust before privileged mutation.
 - Every authorized mutation is capture-first and verify-after-apply. Apply/verification failure runs rollback + rollback verification; failed recovery is explicit `RecoveryRequired` rather than false success. Focused strict MinGW `privilege_broker_tests` pass.
 - This is the least-privilege broker core only. Real UAC/elevated IPC, SCM/installer mutation, clean-machine repair/uninstall, and standard-user/manual acceptance remain later P8-INST/BOOT/manual evidence, so `VALIDATED` is not claimed.
 
@@ -192,7 +193,7 @@ Logon/reboot tests prove all three user-selected modes, safe fallback, disable/u
 **Implementation evidence — 2026-08-29**
 
 - `StartupMode` is limited to Manual, BackgroundIdle, and AutoActivateValidatedSession. The startup config contains only mode/revision/approval and an optional validated-session identity; it has no executable path, command line, registry path, task XML, or shell field.
-- Auto activation requires explicit approved registration plus an exact validated session and clean journal/safe-mode/topology/capability/recovery preflight. Any unsafe/stale condition falls back to BackgroundIdle; an existing Host yields `ReuseExistingHost` instead of spawning a duplicate.
+- Auto activation requires explicit approved registration plus an exact validated session and clean journal/safe-mode/topology/capability/recovery preflight. Any unsafe/stale condition falls back to BackgroundIdle; exactly one existing Host yields `ReuseExistingHost`, while two or more existing Hosts fail closed with `DoNotStart / DuplicateHost` instead of selecting an ambiguous authority.
 - `updateRegistration` mutates a fixed native registration target transactionally: read prior state, write/remove, verify, and restore prior state on mutation/verification failure. Manual mode removes registration for disable/uninstall cleanup.
 - Focused strict MinGW `startup_policy_tests` pass. This is policy/registration-core evidence only; real Windows logon/reboot/task/startup integration and duplicate-process observation remain manual/native acceptance, so `VALIDATED` is not claimed.
 
@@ -235,7 +236,7 @@ Tampered, unknown-version, wrong-architecture, untrusted, and policy-disallowed 
 
 ## P8-SIGN-01 — Code and driver signing pipeline
 
-**State:** BLOCKED
+**State:** CODE_COMPLETE
 
 **Goal**
 
@@ -255,6 +256,15 @@ Prepare production signing/release provenance for executable/installer/driver ar
 **Done when**
 
 Release-candidate artifacts can be built/signed/verified through a documented secure pipeline or the release scope explicitly excludes any artifact type that cannot meet the requirement.
+
+**Implementation evidence — 2026-08-29**
+
+- `config/release-signing-manifest.json` is the fixed x64-host allowlist for the reviewed HydraSeat-owned end-user release set: seven executable targets plus the exact `tools/install_hydraseat.ps1` installer script. x86 remains target-process compatibility/build evidence rather than a second HydraSeat host package. Tests/probes/labs, third-party binaries, and drivers remain excluded until separately reviewed; there is no recursive/wildcard signing scope.
+- `tools/validate_release_signing_manifest.py` rejects unknown fields/targets/kinds, duplicate identities, path traversal/wildcards, unreviewed PowerShell sources, and any architecture coverage other than the exact x64 host scope. Its self-test also rejects reintroducing an x86 host package.
+- `tools/sign_release_artifacts.ps1` handles both artifact kinds, self-enforces the reviewed allowlist/exact clean commit/Release configuration, binds the supplied x64 CMake cache back to that checkout, performs one CMake `--clean-first` build of the complete allowlisted target set, rechecks checkout cleanliness, and rejects non-AMD64 or already-signed CMake outputs before certificate use. It then signs/verifies fixed executables with SignTool, signs the fixed installer script with `Set-AuthenticodeSignature`, and emits a detached CMS signature for the exact `signing-provenance.json` bytes. `Get-AuthenticodeSignature` and detached CMS verification recheck the selected publisher identity before staging completes.
+- `tools/validate_release_installer_contract.py` binds the signing manifest, signer, and installer's exact `$OwnedFiles` set together and self-tests rejection of file-set drift, missing script signing, broad ProgramData deletion, weakened ownership checks, forced elevation of read-only package validation, non-Release signing, unbound build roots, skipped/non-clean reviewed-target rebuilds, missing x64 PE checks, pre-signed build inputs, weakened leaf-reparse rejection, and missing pre-mutation stage verification. `tools/validate_release_powershell_syntax.ps1` AST-parses both release scripts with PowerShell 5.1. All three release CTests pass on the local Windows x64 MinGW scratch build.
+- `docs/security/SIGNING_PIPELINE.md` specifies exact-commit builds, protected environment approval, no repository/CI-log key material, ephemeral key handling, fixed staging, installer-script signing, and separate publication. The attempted repository workflow secret wiring was intentionally not forced through CodexPro's secret-content guard; actual GitHub Environment/signing-provider selection remains deployment work.
+- No production key/certificate, signed RC, timestamp provider, or driver-signing run has been exercised, so this packet is `CODE_COMPLETE` rather than `VALIDATED`.
 
 ---
 
@@ -300,6 +310,16 @@ Clean-machine install, repair, uninstall, interrupted install, missing optional 
 
 A clean supported Windows machine can install/use/repair/uninstall HydraSeat without Visual Studio/CMake and returns to ordinary Windows with no unexpected owned residue.
 
+**Automated implementation progress — 2026-08-29**
+
+- `installer_transaction` provides the pure owned-component install/repair/remove transaction contract and the Windows x64 MinGW focused test passes. Real filesystem/registry/UAC behavior remains owned by the PowerShell boundary and clean-machine evidence.
+- `tools/install_hydraseat.ps1` validates the exact signed architecture package and publisher/hash provenance, derives the mutation-blocking process set from every shipped `.exe` in the exact `$OwnedFiles` allowlist (including reset/profile/community tools rather than only UI/Host/Watchdog), stages/backs up the exact owned file set, and re-verifies the staged exact file set/hash/Authenticode signer/reparse safety before the first Program Files mutation. It then registers uninstall metadata, verifies the committed files, and restores the previous files/state/registration after a mutation failure.
+- Read-only `Validate` no longer requires administrator elevation; Install/Repair/Uninstall explicitly require an administrator token. Package/architecture, Install/Data/transaction roots reject reparse-point directories, while provenance, install-state, transaction-marker, staged/backup/installed owned files, and Program Files destinations reject leaf reparse/file-type drift before read, backup, replacement, removal, or verification.
+- Uninstall keeps the ProgramData rollback snapshot alive until machine-state removal succeeds, never recursively deletes the ProgramData root containing recovery state, and removes `%LOCALAPPDATA%\\HydraSeat` only after machine uninstall succeeds and only when the user explicitly selects `RemoveHydraSeatUserData`. A failed per-user removal warns and retains data instead of pretending it was removed.
+- Existing install state now requires an exact bounded schema/field set, canonical x64 install root, exact commit identity, complete unique owned-file allowlist, and lowercase SHA-256 metadata rather than accepting duplicate/missing/unknown state. Install-state writes and transaction-state markers are flushed before replacement.
+- Interrupted mutation recovery now uses a bounded `snapshotting -> prepared -> committed` transaction marker under ProgramData plus one named installer mutation mutex. Read-only `Validate` never repairs residue and instead fails closed when a pending transaction exists; elevated Install/Repair/Uninstall first recover every bounded prepared transaction, verify restored file/state/registration bytes, retain rollback evidence if rollback verification fails, and clean committed/pre-mutation residue idempotently. The integration validator self-tests removal of each recovery guard and rejects unconditional rollback-snapshot deletion.
+- This remains `BLOCKED` for packet completion/validation because clean-machine install/repair/uninstall, real forced-process/power interruption, UAC-cancel/reboot acceptance, final first-run UX, and ordinary-Windows postconditions have not been exercised. Automated recovery contracts do not replace those manual gates.
+
 ---
 
 ## P8-UPD-01 — User-approved program/runtime update with staged rollback
@@ -341,6 +361,13 @@ check metadata
 
 Upgrade, downgrade/rollback fixture, interrupted/tampered update, active-session refusal, UAC cancel, and post-update health tests pass.
 
+**Automated implementation progress — 2026-08-29**
+
+- `update_transaction` now binds explicit approval to the exact canonical trusted package contents rather than version/revision/release-note metadata alone. Replacing a component with different still-trusted bytes under reused release metadata invalidates the approval before executor mutation.
+- Apply revalidates the previewed installed-state identity against the installer's captured state and blocks the inner mutation if another install/update changed version/revision/component hashes after preview; the existing installer rollback path cleans the captured transaction snapshot. Focused tests cover same-metadata/different-package rejection, stale rev-100 preview versus actual rev-120 state, explicit rollback, tamper rejection, startup-policy preservation, and apply-failure rollback.
+- Full atomic compare-and-mutate under one installer transaction lock would require extending the shared `InstallerExecutor` contract; that public API change is intentionally not made in this packet. The current wrapper fails closed before inner apply and a follow-up API request is recorded separately.
+- This packet remains `BLOCKED` on P8-INST-01 plus real interrupted update/UAC/post-update health acceptance; automated transaction tests do not establish deployed updater validation.
+
 ---
 
 ## P8-DATA-01 — Optional compatibility/setup catalog refresh and offline cache
@@ -381,7 +408,8 @@ Network-off, stale-cache, corrupt/tampered download, update-disabled, first-down
 **Implementation evidence — 2026-08-29**
 
 - `CatalogCacheModel` is a no-I/O state machine for optional data refresh. A loader/network layer may supply an observed artifact, but offline, refresh-disabled, download-disabled, source-missing, tampered, stale, or failed refresh paths never replace the last valid local cache.
-- First install/update uses the P8 data-only trust class, exact expected/observed SHA-256, source/license/capability policy, and monotonic revision. Explicit rollback restores the previous trusted cache; no cache + network-off remains a valid non-fatal core state.
+- First install/update uses the P8 data-only trust class, exact expected/observed SHA-256, source/license/capability policy, and monotonic revision. Once a cache lineage exists, refresh also pins its `catalogId` and trusted `sourceId`; even another allowed source cannot silently replace that lineage without an explicit cache clear/new first download. A repeated revision is `UpToDate` only when the complete `CatalogArtifact` is identical, so hash-preserving version/license/provenance drift is a stale conflict rather than silently accepted metadata. Explicit rollback restores the previous trusted cache; no cache + network-off remains a valid non-fatal core state.
+- Refresh and rollback now construct the complete candidate current/history state before `swap` commit, preserving the previous cache if allocation/copy fails. A 12-revision regression proves rollback history remains bounded to the newest `kMaximumCatalogCacheHistory` entries.
 - Focused `CatalogCacheTests` pass. Real network transport/publication infrastructure is not required by this packet and remains separate from core offline operation.
 
 ---
@@ -417,8 +445,8 @@ Deterministic redaction tests and a human preview/export flow show exactly what 
 
 - `SupportBundle` accepts only bounded public environment tokens, Phase 5 aggregate session metrics, a reduced crash-journal phase/generation/count summary, the already-redacted public compatibility result, and stable Seat event codes. Raw journal identities, arbitrary diagnostic text, Player names, personal paths, credentials/authentication material, typed text, unrelated process data, and device serials have no default bundle field.
 - Mandatory redaction flags are validated again at encode time. Invalid/malformed environment/event/compatibility/recovery/metrics inputs leave caller output unchanged; event ordering canonicalizes deterministically.
-- `SupportExportSession` produces both a human summary and the exact JSON bytes, refuses export before explicit approval, and binds approval to those exact bytes so a changed payload must be previewed again.
-- Strict Windows x64 MinGW `support_bundle_tests` builds and passes. This is automated privacy/redaction evidence only; it does not imply public support service deployment.
+- `SupportExportSession` produces both a human summary and the exact JSON bytes, refuses export before explicit approval, and binds approval to those exact bytes so a changed payload must be previewed again. Any new prepare attempt revokes the previous prepared/approved bytes before validation, so a failed re-prepare cannot leave stale consent exportable.
+- Strict Windows x64 MinGW `support_bundle_tests` builds and passes, including the stale-consent regression. This is automated privacy/redaction evidence only; it does not imply public support service deployment.
 
 ---
 
