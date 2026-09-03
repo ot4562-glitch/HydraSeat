@@ -472,6 +472,16 @@ PlanCompileResult compileProviderAwareLaunchPlan(
                 return failure(PlanIssueCode::MissingRequirement, binding.seatId,
                                "selected Game has no exact runtime requirement record");
             }
+            const auto selectedGameSeatCount = static_cast<std::uint8_t>(std::count_if(
+                bindings.begin(), bindings.end(), [&](const profile::RuntimeBinding& candidate) {
+                    return candidate.gameId == binding.gameId;
+                }));
+            if (requirement->validatedSeatCount < 1u ||
+                requirement->validatedSeatCount > 2u ||
+                selectedGameSeatCount > requirement->validatedSeatCount) {
+                return failure(PlanIssueCode::ValidationSeatScopeExceeded, binding.seatId,
+                               "selected Game exceeds its trusted physical validation Seat scope");
+            }
             if (requirement->revision == 0u || requirement->compatibility != game->compatibility) {
                 return failure(PlanIssueCode::StaleCompatibility, binding.seatId,
                                "runtime requirement evidence does not match the selected Game");
@@ -609,6 +619,7 @@ std::string_view planIssueCodeName(PlanIssueCode code) noexcept {
     case PlanIssueCode::MissingCapability: return "MissingCapability";
     case PlanIssueCode::HighRiskApprovalRequired: return "HighRiskApprovalRequired";
     case PlanIssueCode::DuplicateExclusiveHardware: return "DuplicateExclusiveHardware";
+    case PlanIssueCode::ValidationSeatScopeExceeded: return "ValidationSeatScopeExceeded";
     }
     return "Unknown";
 }

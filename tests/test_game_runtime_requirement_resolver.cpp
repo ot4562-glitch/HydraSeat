@@ -111,6 +111,7 @@ LocalRequirementEvidenceRecord record(std::string gameId = "game:a") {
     value.evidenceResultId = "result-local-a";
     value.evidenceProvenanceId = "local-runtime-evidence";
     value.evidenceProvenanceRevision = 7u;
+    value.validatedSeatCount = 2u;
     value.requirements.display = true;
     value.requirements.keyboard = true;
     value.requirements.mouse = true;
@@ -219,6 +220,60 @@ void testStoreRoundTripAndTransactionalFailures() {
     check(decodeRequirementEvidenceDocumentJson(json, decoded).succeeded() && decoded == source,
           "requirement evidence JSON round-trips exactly");
 
+    const std::string currentSchemaToken =
+        "\"schema_version\":" + std::to_string(kRequirementEvidenceStoreSchemaVersion);
+    const std::string legacySchemaToken =
+        "\"schema_version\":" + std::to_string(kLegacyRequirementEvidenceStoreSchemaVersion);
+    auto legacyJson = json;
+    const auto schemaPosition = legacyJson.find(currentSchemaToken);
+    const std::string seatScopeField = "\"validated_seat_count\":2,";
+    const auto seatScopePosition = legacyJson.find(seatScopeField);
+    check(schemaPosition != std::string::npos && seatScopePosition != std::string::npos,
+          "current store fixture exposes schema and validation Seat scope fields");
+    if (schemaPosition != std::string::npos && seatScopePosition != std::string::npos) {
+        legacyJson.replace(schemaPosition, currentSchemaToken.size(), legacySchemaToken);
+        const auto legacySeatScopePosition = legacyJson.find(seatScopeField);
+        if (legacySeatScopePosition != std::string::npos) {
+            legacyJson.erase(legacySeatScopePosition, seatScopeField.size());
+        }
+        RequirementEvidenceDocument migrated;
+        check(decodeRequirementEvidenceDocumentJson(legacyJson, migrated).succeeded() &&
+                  migrated.schemaVersion == kRequirementEvidenceStoreSchemaVersion &&
+                  migrated.records.size() == 1u &&
+                  migrated.records.front().validatedSeatCount == 2u,
+              "legacy v1 authority migrates conservatively to two Seats because v1 evidence required exactly two Seats");
+    }
+
+    RequirementEvidenceDocument sentinel;
+    sentinel.records = {record("game:sentinel")};
+    const auto before = sentinel;
+    auto future = json;
+    const auto futureSchemaPosition = future.find(currentSchemaToken);
+    check(futureSchemaPosition != std::string::npos,
+          "future-schema fixture finds the current schema token");
+    if (futureSchemaPosition != std::string::npos) {
+        future.replace(
+            futureSchemaPosition, currentSchemaToken.size(),
+            "\"schema_version\":" +
+                std::to_string(kRequirementEvidenceStoreSchemaVersion + 1u));
+        check(decodeRequirementEvidenceDocumentJson(future, sentinel).code ==
+                  RequirementStoreCode::UnsupportedSchema && sentinel == before,
+              "future requirement evidence schema fails closed without replacing caller state");
+    }
+
+    auto invalidSeatScope = json;
+    const auto invalidScopePosition = invalidSeatScope.find("\"validated_seat_count\":2");
+    check(invalidScopePosition != std::string::npos,
+          "invalid-scope fixture finds the validation Seat field");
+    if (invalidScopePosition != std::string::npos) {
+        invalidSeatScope.replace(
+            invalidScopePosition, std::string("\"validated_seat_count\":2").size(),
+            "\"validated_seat_count\":0");
+        check(decodeRequirementEvidenceDocumentJson(invalidSeatScope, sentinel).code ==
+                  RequirementStoreCode::InvalidRecord && sentinel == before,
+              "zero validation Seat scope is rejected transactionally");
+    }
+
     auto duplicate = source;
     duplicate.records.push_back(duplicate.records.front());
     duplicate.records.back().recordId = "requirement-b";
@@ -226,9 +281,6 @@ void testStoreRoundTripAndTransactionalFailures() {
               RequirementStoreCode::DuplicateGameAuthority,
           "two stored authorities for one Game fail closed");
 
-    RequirementEvidenceDocument sentinel;
-    sentinel.records = {record("game:sentinel")};
-    const auto before = sentinel;
     auto unknown = json;
     unknown.insert(1u, "\"community_score\":100,");
     check(decodeRequirementEvidenceDocumentJson(unknown, sentinel).code ==
@@ -276,6 +328,34 @@ void testExactLocalEvidenceProducesTrustedSnapshot() {
                   planFor(snapshot), snapshot).succeeded(),
               "exact provider plan consumes the freshly resolved trusted authority");
     }
+}
+
+void testTrustedRuntimeRejectsSeatScopeExpansion() {
+    FakeProvider provider;
+    const std::vector<compat::CompatibilityResult> results{evidence()};
+    auto snapshot = resolve(document(), catalogFor(), provider, results, {}, context());
+    check(snapshot.requirements.size() == 1u && snapshot.authorities.size() == 1u,
+          "scope test starts from one freshly resolved trusted authority");
+    if (snapshot.requirements.size() != 1u || snapshot.authorities.size() != 1u) return;
+
+    snapshot.requirements.front().validatedSeatCount = 1u;
+    snapshot.authorities.front().requirement.validatedSeatCount = 1u;
+    auto oneSeatPlan = planFor(snapshot);
+    check(validateProviderAwareLaunchPlanAgainstTrustedRequirements(
+              oneSeatPlan, snapshot).succeeded(),
+          "fresh Host-side trusted gate accepts one planned Seat for one-Seat authority");
+
+    auto twoSeatPlan = oneSeatPlan;
+    auto second = twoSeatPlan.seats.front();
+    second.seatId = 2u;
+    second.playerId = "player-b";
+    second.launchRequest.launchCorrelationId = "trusted-plan-test-seat-2";
+    twoSeatPlan.seats.push_back(std::move(second));
+    const auto rejected = validateProviderAwareLaunchPlanAgainstTrustedRequirements(
+        twoSeatPlan, snapshot);
+    check(rejected.code == TrustedPlanRequirementCode::ValidationSeatScopeExceeded &&
+              rejected.gameId == "game:a",
+          "Host-side fresh trusted gate independently rejects one-Seat authority reused for two Seats");
 }
 
 void testProviderCatalogAndMissingEvidenceFailClosedPerGame() {
@@ -599,6 +679,7 @@ void testDuplicateLocalResultAuthorityDoesNotPublishSnapshot() {
 int main() {
     testStoreRoundTripAndTransactionalFailures();
     testExactLocalEvidenceProducesTrustedSnapshot();
+    testTrustedRuntimeRejectsSeatScopeExpansion();
     testProviderCatalogAndMissingEvidenceFailClosedPerGame();
     testCommunityFreshnessEnvironmentAndCapabilityEvidenceFailClosed();
     testTrustedPlanGateRejectsTamperedOrStaleAuthority();

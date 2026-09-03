@@ -476,6 +476,15 @@ target_link_libraries(hydra_launcher_ui_model PUBLIC
     hydra_plan_preflight hydra_two_player_setup_editor hydra_game_catalog)
 hydra_enable_strict_warnings(hydra_launcher_ui_model)
 
+# V1 hands-on durable launcher user state. This owns only Player profile and
+# last-selection persistence semantics; the Win32 launcher consumes the API.
+add_library(hydra_launcher_user_state STATIC
+    src/launcher_user_state.cpp
+    include/hydra/launcher_user_state.hpp
+)
+target_link_libraries(hydra_launcher_user_state PUBLIC hydra_profile_schema)
+hydra_enable_strict_warnings(hydra_launcher_user_state)
+
 # P7-SHELL-01 pure per-Seat presentation/policy state and its capability-
 # restricted host adapter. Neither surface exposes whole-machine commands.
 add_library(hydra_seat_launcher STATIC
@@ -719,6 +728,26 @@ target_link_libraries(hydra_production_launch_installer PUBLIC
 )
 hydra_enable_strict_warnings(hydra_production_launch_installer)
 
+# V1 end-user setup bootstrapper. The native UI does not reimplement installer
+# mutation authority; it invokes the signed transactional PowerShell contract.
+add_library(hydra_installer_bootstrap STATIC
+    src/installer_bootstrap.cpp
+    include/hydra/installer_bootstrap.hpp
+)
+hydra_enable_strict_warnings(hydra_installer_bootstrap)
+if(WIN32)
+    target_link_libraries(hydra_installer_bootstrap PRIVATE
+        Wintrust.lib Crypt32.lib Shell32.lib Advapi32.lib)
+endif()
+
+# HydraSeat v1 ships one x64 host/setup package. Win32 builds remain target-
+# process compatibility evidence and therefore do not produce a second setup EXE.
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    add_executable(HydraSeatSetup WIN32 src/installer_bootstrap_main.cpp)
+    target_link_libraries(HydraSeatSetup PRIVATE hydra_installer_bootstrap User32.lib)
+    hydra_enable_strict_warnings(HydraSeatSetup)
+endif()
+
 # Host protocol v4 serializes and validates production provider-plan registry
 # requests/results, including host-side fingerprint revalidation.
 target_link_libraries(hydra_host_protocol PUBLIC hydra_production_launch_runtime)
@@ -796,6 +825,34 @@ add_library(hydra_community_submission STATIC
 target_link_libraries(hydra_community_submission PUBLIC hydra_compatibility_result)
 hydra_enable_strict_warnings(hydra_community_submission)
 
+# V1 first-use Play authority closure. These modules deliberately keep evidence
+# collection, evidence persistence, and requirement publication as separate
+# authorities so ControlledProcess observations can never silently become
+# Physical normal-Play authority.
+add_library(hydra_local_compatibility_evidence STATIC
+    src/local_compatibility_evidence.cpp
+    include/hydra/local_compatibility_evidence.hpp
+)
+target_link_libraries(hydra_local_compatibility_evidence PUBLIC
+    hydra_community_submission)
+hydra_enable_strict_warnings(hydra_local_compatibility_evidence)
+
+add_library(hydra_runtime_requirement_authority STATIC
+    src/runtime_requirement_authority.cpp
+    include/hydra/runtime_requirement_authority.hpp
+)
+target_link_libraries(hydra_runtime_requirement_authority PUBLIC
+    hydra_game_runtime_requirement_resolver)
+hydra_enable_strict_warnings(hydra_runtime_requirement_authority)
+
+add_library(hydra_local_compatibility_runner STATIC
+    src/local_compatibility_runner.cpp
+    include/hydra/local_compatibility_runner.hpp
+)
+target_link_libraries(hydra_local_compatibility_runner PUBLIC
+    hydra_process hydra_window_tracking hydra_session_metrics)
+hydra_enable_strict_warnings(hydra_local_compatibility_runner)
+
 # P8-RESET-01 bounded runtime reset registration and verified emergency-reset
 # execution. The crash journal remains evidence-only; reset authority is the
 # journal-correlated exact watchdog manifest plus exact runtime-owner identity.
@@ -839,6 +896,17 @@ if(WIN32)
     target_link_libraries(hydra_gate_c_core PUBLIC Bcrypt.lib)
 endif()
 
+# Production Physical-input authority selection. The per-user store persists only
+# a path to an already accepted P3-HW manifest; every load revalidates the typed
+# evidence. Real-game Gate-C profiles remain release-owned and fail closed while
+# P3-E-02 has no reviewed profile.
+add_library(hydra_production_input_authority STATIC
+    src/production_input_authority.cpp
+    include/hydra/production_input_authority.hpp
+)
+target_link_libraries(hydra_production_input_authority PUBLIC hydra_hidhide_session)
+hydra_enable_strict_warnings(hydra_production_input_authority)
+
 # Production Recovery/Input bridge composition. The implementation reuses the
 # existing exact-process recovery, Gate-C, HidHide, and Raw Input authorities;
 # hydra_host reaches it through this single canonical production owner.
@@ -850,7 +918,9 @@ target_link_libraries(hydra_production_activation_bridges PUBLIC
     hydra_production_launch_runtime
 )
 target_link_libraries(hydra_production_activation_bridges PRIVATE
+    hydra_production_input_authority
     hydra_input_router
+    hydra_input_metrics
     hydra_hidhide_session
     hydra_hidhide_session_recovery
     hydra_watchdog_core
@@ -864,6 +934,10 @@ if(WIN32)
     target_link_libraries(hydra_production_activation_bridges PRIVATE User32.lib)
 endif()
 hydra_enable_strict_warnings(hydra_production_activation_bridges)
+# HostControlServer is the production composition root for the same bridge; keep
+# the dependency explicit so GUI/CLI consumers of host_transport cannot rely on a
+# final executable accidentally supplying these symbols.
+target_link_libraries(hydra_host_transport PRIVATE hydra_production_activation_bridges)
 
 # P3-RAW-01 fixed-width, versioned, bounded trace/parser contract. This
 # library is portable and contains no Raw Input virtualization.
@@ -931,6 +1005,23 @@ set_target_properties(hydra_gate_c_shim PROPERTIES
 hydra_set_gate_c_output(hydra_gate_c_shim)
 hydra_enable_strict_warnings(hydra_gate_c_shim)
 
+# Production Gate-C receiver loaded only by the exact-process production
+# activation runtime. Keep the injected DLL in its own production source so the
+# Host bridge and receiver have one unambiguous owner each.
+if(WIN32)
+    add_library(hydra_production_gate_c_bridge SHARED
+        src/production_gate_c_bridge.cpp
+    )
+    target_link_libraries(hydra_production_gate_c_bridge PRIVATE
+        hydra_gate_c_core hydra_gate_c_adapter hydra_gate_c_shim User32.lib
+    )
+    set_target_properties(hydra_production_gate_c_bridge PROPERTIES
+        OUTPUT_NAME hydra_production_gate_c_bridge
+    )
+    hydra_set_gate_c_output(hydra_production_gate_c_bridge)
+    hydra_enable_strict_warnings(hydra_production_gate_c_bridge)
+endif()
+
 # P3-E-01 narrow bridge for a newly created, suspended, non-protected external
 # acceptance target. It is not an attach/general injection surface and reuses
 # the existing Gate C adapter, profiled shim, transport, and rollback contract.
@@ -965,9 +1056,11 @@ endif()
 add_executable(HydraSeat WIN32 src/main.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(HydraSeat PRIVATE
     hydra_hardware hydra_input_router hydra_workspace hydra_host_transport hydra_control_surface hydra_session_control
-    hydra_launcher_ui_model hydra_steam_provider hydra_custom_executable_provider
+    hydra_launcher_ui_model hydra_launcher_user_state hydra_steam_provider hydra_custom_executable_provider
     hydra_ui_localization hydra_community_submission
-    hydra_game_runtime_requirement_resolver hydra_production_launch_installer)
+    hydra_game_runtime_requirement_resolver hydra_local_compatibility_evidence
+    hydra_runtime_requirement_authority hydra_local_compatibility_runner
+    hydra_production_input_authority hydra_production_launch_installer)
 
 if(WIN32)
     target_link_libraries(HydraSeat PRIVATE ${WIN32_LIBS})
@@ -984,7 +1077,9 @@ target_link_libraries(hydra_host PRIVATE
 hydra_enable_strict_warnings(hydra_host)
 if(WIN32)
     # The normal GUI bootstraps the per-user runtime authority on first run.
-    # Keep the sibling executable present whenever HydraSeat itself is built.
+    # Keep the Host and its architecture-matched production receiver present
+    # whenever HydraSeat itself is built.
+    add_dependencies(hydra_host hydra_production_gate_c_bridge)
     add_dependencies(HydraSeat hydra_host)
 endif()
 
@@ -1067,6 +1162,9 @@ add_executable(hydra_watchdog
 target_link_libraries(hydra_watchdog PRIVATE
     hydra_watchdog_core hydra_hidhide_session_recovery)
 hydra_enable_strict_warnings(hydra_watchdog)
+if(WIN32)
+    add_dependencies(hydra_host hydra_watchdog)
+endif()
 if(MINGW)
     target_link_options(hydra_watchdog PRIVATE -municode)
 endif()
@@ -1192,8 +1290,10 @@ endif()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(hydra_tests PRIVATE
     hydra_hardware hydra_input_router hydra_workspace hydra_host_transport hydra_control_surface hydra_session_control
-    hydra_launcher_ui_model hydra_steam_provider hydra_custom_executable_provider
-    hydra_ui_localization hydra_community_submission hydra_game_runtime_requirement_resolver)
+    hydra_launcher_ui_model hydra_launcher_user_state hydra_steam_provider hydra_custom_executable_provider
+    hydra_ui_localization hydra_community_submission hydra_game_runtime_requirement_resolver
+    hydra_local_compatibility_evidence hydra_local_compatibility_runner hydra_runtime_requirement_authority
+    hydra_production_input_authority)
 if(WIN32)
     target_link_libraries(hydra_tests PRIVATE ${WIN32_LIBS})
 endif()
@@ -1337,7 +1437,8 @@ if(WIN32)
              COMMAND seat_game_process_lifecycle_tests)
     set_tests_properties(SeatGameProcessLifecycleTests PROPERTIES
         TIMEOUT 45
-        LABELS "P4-SEAT-01;P4-REC-01")
+        LABELS "P4-SEAT-01;P4-REC-01"
+        RESOURCE_LOCK "HydraSeatHostPipe")
 endif()
 
 add_executable(process_group_tests tests/test_process_group.cpp)
@@ -1761,6 +1862,46 @@ add_test(NAME GameRuntimeRequirementResolverTests
 set_tests_properties(GameRuntimeRequirementResolverTests PROPERTIES
     LABELS "P6-PLAN-01;P7-LAUNCH-01")
 
+add_executable(local_compatibility_evidence_tests
+    tests/test_local_compatibility_evidence.cpp)
+target_link_libraries(local_compatibility_evidence_tests PRIVATE
+    hydra_local_compatibility_evidence)
+hydra_enable_strict_warnings(local_compatibility_evidence_tests)
+add_test(NAME LocalCompatibilityEvidenceTests
+         COMMAND local_compatibility_evidence_tests)
+set_tests_properties(LocalCompatibilityEvidenceTests PROPERTIES
+    LABELS "V1-PLAY-AUTHORITY")
+
+add_executable(runtime_requirement_authority_tests
+    tests/test_runtime_requirement_authority.cpp)
+target_link_libraries(runtime_requirement_authority_tests PRIVATE
+    hydra_runtime_requirement_authority)
+hydra_enable_strict_warnings(runtime_requirement_authority_tests)
+add_test(NAME RuntimeRequirementAuthorityTests
+         COMMAND runtime_requirement_authority_tests)
+set_tests_properties(RuntimeRequirementAuthorityTests PROPERTIES
+    LABELS "V1-PLAY-AUTHORITY")
+
+add_executable(local_compatibility_runner_tests
+    tests/test_local_compatibility_runner.cpp)
+target_link_libraries(local_compatibility_runner_tests PRIVATE
+    hydra_local_compatibility_runner)
+hydra_enable_strict_warnings(local_compatibility_runner_tests)
+add_test(NAME LocalCompatibilityRunnerTests
+         COMMAND local_compatibility_runner_tests)
+set_tests_properties(LocalCompatibilityRunnerTests PROPERTIES
+    LABELS "V1-PLAY-AUTHORITY")
+
+add_executable(production_input_authority_tests
+    tests/test_production_input_authority.cpp)
+target_link_libraries(production_input_authority_tests PRIVATE
+    hydra_production_input_authority)
+hydra_enable_strict_warnings(production_input_authority_tests)
+add_test(NAME ProductionInputAuthorityTests
+         COMMAND production_input_authority_tests)
+set_tests_properties(ProductionInputAuthorityTests PROPERTIES
+    LABELS "V1-PLAY-AUTHORITY")
+
 # P5/P7 production launch boundary: immutable Host registry, exact
 # profile/session/Seat generation binding, resource rollback at every activation
 # index, real controlled Job Object ownership, and IPC installer permissions.
@@ -1782,6 +1923,10 @@ else()
 endif()
 set_tests_properties(ProductionLaunchRuntimeTests PROPERTIES
     LABELS "P5-LAUNCH-01;P7-LAUNCH-01")
+if(WIN32)
+    set_tests_properties(ProductionLaunchRuntimeTests PROPERTIES
+        RESOURCE_LOCK "HydraSeatHostPipe")
+endif()
 
 add_executable(production_compatibility_activation_tests
     tests/test_production_compatibility_activation.cpp)
@@ -1864,6 +2009,34 @@ target_link_libraries(launcher_ui_model_tests PRIVATE hydra_launcher_ui_model)
 hydra_enable_strict_warnings(launcher_ui_model_tests)
 add_test(NAME LauncherUiModelTests COMMAND launcher_ui_model_tests)
 set_tests_properties(LauncherUiModelTests PROPERTIES LABELS "P6-UI-01")
+
+add_executable(launcher_user_state_tests tests/test_launcher_user_state.cpp)
+target_link_libraries(launcher_user_state_tests PRIVATE hydra_launcher_user_state)
+hydra_enable_strict_warnings(launcher_user_state_tests)
+add_test(NAME LauncherUserStateTests COMMAND launcher_user_state_tests)
+set_tests_properties(LauncherUserStateTests PROPERTIES LABELS "V1-HANDS-ON")
+
+add_executable(installer_bootstrap_tests tests/test_installer_bootstrap.cpp)
+target_link_libraries(installer_bootstrap_tests PRIVATE hydra_installer_bootstrap)
+hydra_enable_strict_warnings(installer_bootstrap_tests)
+add_test(NAME InstallerBootstrapTests COMMAND installer_bootstrap_tests)
+set_tests_properties(InstallerBootstrapTests PROPERTIES LABELS "P8-INST-01;V1-HANDS-ON")
+
+add_executable(v1_user_journey_tests tests/test_v1_user_journey.cpp)
+target_link_libraries(v1_user_journey_tests PRIVATE
+    hydra_launcher_ui_model hydra_launcher_user_state)
+hydra_enable_strict_warnings(v1_user_journey_tests)
+add_test(NAME V1UserJourneyTests COMMAND v1_user_journey_tests)
+set_tests_properties(V1UserJourneyTests PROPERTIES LABELS "V1-HANDS-ON")
+
+if(Python3_Interpreter_FOUND)
+    add_test(NAME V1HandsOnReadinessValidatorTests
+             COMMAND "${Python3_EXECUTABLE}"
+                     "${CMAKE_SOURCE_DIR}/tools/validate_v1_hands_on_readiness.py"
+                     --self-test)
+    set_tests_properties(V1HandsOnReadinessValidatorTests PROPERTIES
+        LABELS "V1-HANDS-ON")
+endif()
 
 # P6-PROFILE-01 automatic/manual convergence, transactional Save, bounded path,
 # shared-data-root, and cross-document runtime-selection validation tests.

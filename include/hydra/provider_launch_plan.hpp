@@ -19,6 +19,7 @@ inline constexpr std::uint32_t kProviderLaunchPlanSchemaVersion = 1u;
 struct GameRuntimeRequirement {
     std::string gameId;
     std::uint64_t revision{0};
+    std::uint8_t validatedSeatCount{0};
     launch::Requirements requirements;
     launch::Capabilities capabilities;
     bool highRiskApproved{false};
@@ -98,6 +99,7 @@ enum class PlanIssueCode : std::uint8_t {
     MissingCapability = 25,
     HighRiskApprovalRequired = 26,
     DuplicateExclusiveHardware = 27,
+    ValidationSeatScopeExceeded = 28,
 };
 
 struct PlanIssue {

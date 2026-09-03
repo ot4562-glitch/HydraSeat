@@ -2,7 +2,7 @@
 
 [English](README.md) · [한국어](README.ko.md)
 
-HydraSeat 面向 Windows 10/11 x64，用于在**一台 PC 上运行两个本地游戏 Seat**。Seat 是由显示器、输入设备、控制器和音频策略组成的物理座位，不是第二个 Windows 桌面或用户会话。正常流程是：选择游戏 → Seat 1、Seat 2 或 Both → Player → 启动。
+HydraSeat 面向 Windows 10/11 x64，用于在**一台 PC 上运行两个本地游戏 Seat**。Seat 是由显示器、输入设备、控制器和音频策略组成的物理座位，不是第二个 Windows 桌面或用户会话。正常流程是：创建/选择 Player 1 → 按需选择 Player 2 → 选择游戏 → 必要时配置显示器/输入设备 → 启动。
 
 当前仓库已有较完整的实现和测试基础，但**还不是完成的公开产品**。运行时、IPC、启动、回滚、恢复、provider、兼容性和发布基础已有大量 controlled tests；双键盘/双鼠标物理证据、真实游戏 campaign、clean-machine installer/UAC/reboot 证据和受保护的 production signing 仍是 release gate。
 
@@ -10,7 +10,8 @@ HydraSeat 面向 Windows 10/11 x64，用于在**一台 PC 上运行两个本地�
 
 | 组件 | 构建目标 | 当前职责 |
 | --- | --- | --- |
-| Management UI | `HydraSeat.exe` | Native Win32 game-first UI、Seat/profile/setup 选择、host 控制与诊断 |
+| Management UI | `HydraSeat.exe` | Native Win32 game-first UI、Player/game/setup 选择和 host 控制 |
+| Setup | `HydraSeatSetup.exe` | 基于签名 transactional installer 契约的原生 x64 双击 Install/Repair/Uninstall bootstrapper |
 | Runtime authority | `hydra_host.exe` | 会话权威、bounded/versioned IPC、immutable launch plan、进程树和 Seat 生命周期 |
 | Seat UI | `hydra_seat_ui.exe` | Seat 最小 launcher/status 界面，不是第二套 desktop shell |
 | Recovery | `hydra_watchdog.exe`, `hydra_reset.exe` | crash journal 恢复、owned-state 回滚和 emergency reset |
@@ -61,13 +62,13 @@ cmake --build C:\HydraSeat\build-x86 --config Release --parallel
 ctest --test-dir C:\HydraSeat\build-x86 -C Release --output-on-failure
 ```
 
-截至 2026-08-30，全新 x64 和 Win32 构建均无 warning，并分别通过 **133/133** CTest；production-launch/IPC focused regression 也已通过。该自动化结果不能替代尚未完成的物理和真实游戏 gate。
+截至 2026-08-31，当前 x64 和 Win32 构建都完成了完整 Release build，并分别通过 **139/139** CTest。V1 hands-on mock/readiness gate、production-launch/IPC regression 和有界的真实可执行文件首窗口探测也通过。开发构建树仍会输出已知的 MSBuild `MSB8029` intermediate/output-directory warning。该自动化结果不能替代 Computer Use、物理设备、真实游戏、clean-machine 和 signing gate。
 
 ## 安装与发布状态
 
-`tools/install_hydraseat.ps1` 已实现 x64 package 验证、install/repair/uninstall transaction、owned-path 检查和 rollback。发布 binary 是 `HydraSeat.exe`、`hydra_host.exe`、`hydra_seat_ui.exe`、`hydra_watchdog.exe` 和 `hydra_reset.exe`。
+`HydraSeatSetup.exe` 是用于 Install/Repair/Uninstall 的原生 x64 双击 bootstrapper。它提供面向用户的安装流程，并把需要管理员权限的实际变更委托给现有已签名的 `tools/install_hydraseat.ps1` transaction engine；该脚本负责精确 package 验证、owned-path 检查和 rollback。`tools/build_installer_package.ps1` 只 staging 已审查的 offline x64 payload，signing/release allowlist 同时明确包含 setup bootstrapper 与 installer script。
 
-目前不能宣称 installer 已完成 production 验证。仍需 clean Windows machine、UAC、reboot/interruption recovery、uninstall postcondition、受保护 signer、production certificate/timestamp provider 和 signed release-candidate 运行。
+目前不能宣称 installer 已完成 production 验证。Bootstrapper/package 契约和自动 installer validator 已通过，但仍需 clean Windows machine、真实 UAC 接受/取消、reboot/interruption recovery、uninstall postcondition、受保护 signer、production certificate/timestamp provider 和 signed release-candidate 运行。
 
 ## 文档地图
 

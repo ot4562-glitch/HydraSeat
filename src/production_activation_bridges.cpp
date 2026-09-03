@@ -1,5 +1,8 @@
 #include "hydra/production_activation_bridges.hpp"
 
+#include "hydra/production_input_authority.hpp"
+#include "production_gate_c_bridge_protocol.hpp"
+
 #include "hydra/crash_journal.hpp"
 #include "hydra/gate_c_adapter.h"
 #include "hydra/gate_c_architecture.hpp"
@@ -40,57 +43,6 @@
 #endif
 #include <windows.h>
 #endif
-
-namespace hydra::production::detail {
-
-#ifdef _WIN32
-inline constexpr std::uint32_t kProductionBridgeMappingMagic = 0x31424750u;
-inline constexpr std::uint32_t kProductionBridgeMappingVersion = 1u;
-inline constexpr std::size_t kProductionBridgePipeNameChars = 256u;
-
-enum class ProductionBridgeDllState : LONG {
-    Configured = 0,
-    Starting = 1,
-    Active = 2,
-    Stopping = 3,
-    Stopped = 4,
-    Failed = 5,
-};
-
-#pragma pack(push, 1)
-struct ProductionBridgeMappingV1 {
-    std::uint32_t structSize{sizeof(ProductionBridgeMappingV1)};
-    std::uint32_t magic{kProductionBridgeMappingMagic};
-    std::uint32_t version{kProductionBridgeMappingVersion};
-    std::uint32_t seatId{0};
-    std::uint32_t requiredApiMask{0};
-    std::uint32_t reserved0{0};
-    gatec::SessionToken token{};
-    wchar_t pipeName[kProductionBridgePipeNameChars]{};
-    LONG lifecycle{static_cast<LONG>(ProductionBridgeDllState::Configured)};
-    LONG lastResult{0};
-    LONG rollbackComplete{0};
-    LONG reserved1{0};
-};
-#pragma pack(pop)
-
-std::wstring productionBridgeMappingName(std::uint32_t processId) {
-    return L"Local\\HydraSeat.ProductionGateC." + std::to_wstring(processId);
-}
-
-void publishBridgeState(ProductionBridgeMappingV1* mapping,
-                        ProductionBridgeDllState state,
-                        LONG result,
-                        bool rollbackComplete) noexcept {
-    if (mapping == nullptr) return;
-    InterlockedExchange(&mapping->lastResult, result);
-    InterlockedExchange(&mapping->rollbackComplete, rollbackComplete ? 1 : 0);
-    InterlockedExchange(&mapping->lifecycle, static_cast<LONG>(state));
-    MemoryBarrier();
-}
-#endif
-
-} // namespace hydra::production::detail
 
 #if defined(HYDRA_PRODUCTION_GATE_C_BRIDGE_BUILD) && defined(_WIN32)
 
@@ -590,9 +542,34 @@ bool currentProcessContext(const launch::SeatActivationPlan& plan,
     return true;
 }
 
+bool sameGateRequestAuthority(const ProductionGateCSessionRequest& left,
+                              const ProductionGateCSessionRequest& right) noexcept {
+    return left.epoch == right.epoch &&
+           left.process.authoritativeProcess.sameInstance(
+               right.process.authoritativeProcess) &&
+           left.process.handoffGeneration == right.process.handoffGeneration &&
+           left.seat.seatId == right.seat.seatId && left.profile == right.profile &&
+           left.assignedStableDeviceIds == right.assignedStableDeviceIds;
+}
+
 std::filesystem::path seatRecoveryRoot(const std::filesystem::path& base,
                                        SeatId seatId) {
     return base / "production-activation" / ("seat-" + std::to_string(seatId));
+}
+
+std::filesystem::path currentExecutableSibling(std::wstring_view fileName) {
+#ifdef _WIN32
+    if (fileName.empty()) return {};
+    std::vector<wchar_t> buffer(32768u, L'\0');
+    const DWORD length = GetModuleFileNameW(
+        nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0u || length >= buffer.size()) return {};
+    std::filesystem::path executable(std::wstring(buffer.data(), length));
+    return executable.parent_path() / std::filesystem::path(fileName);
+#else
+    (void)fileName;
+    return {};
+#endif
 }
 
 std::uint64_t hidHideResourceId(const ProductionActivationEpoch& epoch,
@@ -1529,6 +1506,29 @@ public:
 #endif
     }
 
+    bool inputMetricsSnapshot(
+        const ProductionGateCSessionRequest& request,
+        InputMetricsSnapshot& snapshot,
+        std::string& error) override {
+#ifdef _WIN32
+        std::lock_guard lock(mutex_);
+        const auto found = sessions_.find(request.epoch.seatId);
+        if (found == sessions_.end() || !sameRequest(found->second->request, request)) {
+            error = "production Gate-C exact Seat session is absent or stale for metrics snapshot";
+            return false;
+        }
+        ProductionGateCSessionStatus status;
+        if (!verifyLocked(*found->second, request, status, error)) return false;
+        snapshot = found->second->metrics.snapshot();
+        error.clear();
+        return true;
+#else
+        (void)request; (void)snapshot;
+        error = "production Gate-C runtime is Windows-only";
+        return false;
+#endif
+    }
+
     bool stop(const ProductionGateCSessionRequest& request,
               std::string& error) noexcept override {
 #ifdef _WIN32
@@ -1584,6 +1584,11 @@ public:
 
 private:
 #ifdef _WIN32
+    struct PendingInputMetric {
+        std::uint64_t correlationId{0u};
+        InputMetricEventClass eventClass{InputMetricEventClass::None};
+    };
+
     struct Session {
         ProductionGateCSessionRequest request;
         HANDLE process{nullptr};
@@ -1592,6 +1597,9 @@ private:
         gatec::PipeChannel channel;
         std::mutex channelMutex;
         std::uint64_t sequence{1u};
+        InputMetricsRecorder metrics{kDefaultInputMetricsCapacity,
+                                     InputMetricsPrivacyMode::Redacted};
+        std::map<std::uint64_t, PendingInputMetric> pendingInputMetrics;
         std::atomic<bool> transportHealthy{true};
         std::atomic<bool> devicesPresent{false};
         std::atomic<bool> stopRouterRequested{false};
@@ -1870,12 +1878,57 @@ private:
                 }
                 input.timestampMicros = event.monotonicTimestampMicros;
                 std::lock_guard channelLock(session.channelMutex);
+                const auto sequence = ++session.sequence;
+                const auto eventClass = classifyInputMetricEvent(event);
+                const auto correlationId =
+                    (static_cast<std::uint64_t>(session.request.epoch.seatId) << 56u) ^
+                    sequence;
+                const auto targetProcessId =
+                    session.request.process.authoritativeProcess.processId;
+                const auto recordStage = [&](InputMetricStage stage,
+                                             std::uint64_t timestamp) {
+                    if (eventClass == InputMetricEventClass::None) return;
+                    InputMetricSample sample;
+                    sample.correlationId = correlationId;
+                    sample.timestampMicros = timestamp == 0u
+                        ? monotonicInputMetricTimestampMicros() : timestamp;
+                    sample.stage = stage;
+                    sample.eventClass = eventClass;
+                    sample.expectedSeatId = session.request.epoch.seatId;
+                    sample.targetProcessId = targetProcessId;
+                    (void)session.metrics.tryRecord(sample);
+                };
+                const auto observedAt = input.timestampMicros == 0u
+                    ? monotonicInputMetricTimestampMicros() : input.timestampMicros;
+                recordStage(InputMetricStage::PhysicalObserved, observedAt);
+                const auto enqueuedAt = monotonicInputMetricTimestampMicros();
+                recordStage(InputMetricStage::RouteEnqueued, enqueuedAt);
+                recordStage(InputMetricStage::RouteDequeued, enqueuedAt);
+
                 std::string writeError;
                 if (!session.channel.valid() ||
                     !session.channel.writeFrame(
-                        gatec::encodeInputEvent(++session.sequence, input),
+                        gatec::encodeInputEvent(sequence, input),
                         ioTimeoutMilliseconds_, &writeError)) {
+                    if (eventClass != InputMetricEventClass::None) {
+                        InputMetricSample dropped;
+                        dropped.correlationId = correlationId;
+                        dropped.timestampMicros = monotonicInputMetricTimestampMicros();
+                        dropped.stage = InputMetricStage::RouteDropped;
+                        dropped.eventClass = eventClass;
+                        dropped.expectedSeatId = session.request.epoch.seatId;
+                        dropped.targetProcessId = targetProcessId;
+                        dropped.queueDroppedCount = 1u;
+                        (void)session.metrics.tryRecord(dropped);
+                    }
                     session.transportHealthy.store(false, std::memory_order_release);
+                    return;
+                }
+                recordStage(InputMetricStage::RouteWritten,
+                            monotonicInputMetricTimestampMicros());
+                if (eventClass != InputMetricEventClass::None) {
+                    session.pendingInputMetrics.emplace(
+                        sequence, PendingInputMetric{correlationId, eventClass});
                 }
             });
             router.setDeviceChangeCallback([&](const RawInputDeviceChange&) {
@@ -2249,6 +2302,9 @@ struct SeatBridgeState {
     mutable std::mutex mutex;
     std::optional<recovery::RecoveryProcessAttachmentRegistration> recoveryRegistration;
     std::vector<std::uint32_t> verifiedRolledBackActionIds;
+    // Exact live Gate-C observation authority. Populated only after Input activation
+    // and recovery commit succeed; cleared before/with rollback terminal state.
+    std::optional<ProductionGateCSessionRequest> activeGateRequest;
     bool inputExpected{false};
     bool inputAttempted{false};
     bool inputActive{false};
@@ -2729,6 +2785,7 @@ public:
         }
         {
             std::lock_guard lock(state_->mutex);
+            state_->activeGateRequest = *gateRequest_;
             state_->inputActive = true;
             state_->inputTerminal = false;
             state_->diagnostic.clear();
@@ -2870,6 +2927,14 @@ private:
     }
 
     bool rollbackLocked(std::string& error) noexcept {
+        {
+            std::lock_guard lock(state_->mutex);
+            // Stop exposing observation authority before any receiver/cloaking
+            // teardown starts. A snapshot racing with rollback must fail closed.
+            state_->activeGateRequest.reset();
+            state_->inputActive = false;
+            state_->inputTerminal = true;
+        }
         bool hidHideSafe = true;
         bool gateSafe = true;
         std::string firstError;
@@ -2996,6 +3061,7 @@ public:
     std::shared_ptr<SeatBridgeState> stateFor(
         const launch::SeatActivationPlan& plan,
         ProductionActivationContextHandle context,
+        bool requireInputProfile,
         std::string& error) {
         if (!context || plan.seatId == 0 || plan.seatId > kV1SeatLimit ||
             plan.fingerprint == 0 || config_.gateCProfiles.size() >
@@ -3009,26 +3075,27 @@ public:
             if (error.empty()) error = "production activation bridge creation requires PreProcess context";
             return {};
         }
-        const bool inputExpected = plan.target.requirements.keyboard ||
-                                   plan.target.requirements.mouse;
-        const ProductionGateCProfile* profile = nullptr;
-        if (inputExpected) {
-            if (!plan.target.requirements.recovery) {
-                error = "production physical Gate-C input requires the generic Recovery resource so exact watchdog cleanup outlives Input rollback";
-                return {};
-            }
-            profile = findProfile(config_, plan.target.gameId);
-            if (profile == nullptr || !validateGateCProfile(*profile, error)) {
-                if (error.empty()) error = "no trusted production Gate-C profile exists for this exact game";
-                return {};
-            }
-        }
+
         std::set<std::string> gameIds;
         for (const auto& candidate : config_.gateCProfiles) {
             if (!gameIds.insert(candidate.gameId).second) {
                 error = "production Gate-C profile table contains duplicate game authority";
                 return {};
             }
+            if (!validateGateCProfile(candidate, error)) return {};
+        }
+
+        const bool inputExpected = plan.target.requirements.keyboard ||
+                                   plan.target.requirements.mouse;
+        const ProductionGateCProfile* profile =
+            inputExpected ? findProfile(config_, plan.target.gameId) : nullptr;
+        if (inputExpected && !plan.target.requirements.recovery) {
+            error = "production physical Gate-C input requires the generic Recovery resource so exact watchdog cleanup outlives Input rollback";
+            return {};
+        }
+        if (requireInputProfile && inputExpected && profile == nullptr) {
+            error = "no trusted production Gate-C profile exists for this exact game";
+            return {};
         }
 
         const auto key = std::make_pair(plan.seatId, plan.fingerprint);
@@ -3063,6 +3130,104 @@ public:
         return state;
     }
 
+    bool inputMetricsSnapshot(const launch::SeatActivationPlan& plan,
+                              InputMetricsSnapshot& snapshot,
+                              std::string& error) {
+        snapshot = {};
+        if (plan.seatId == 0 || plan.seatId > kV1SeatLimit || plan.fingerprint == 0) {
+            error = "production input metrics observation requires an exact bounded Seat plan";
+            return false;
+        }
+
+        std::shared_ptr<SeatBridgeState> state;
+        {
+            std::lock_guard lock(mutex_);
+            const auto found = states_.find(std::make_pair(plan.seatId, plan.fingerprint));
+            if (found == states_.end()) {
+                error = "no live production activation state exists for this Seat/fingerprint";
+                return false;
+            }
+            state = found->second.lock();
+        }
+        if (!state) {
+            error = "production activation state expired before input metrics observation";
+            return false;
+        }
+
+        ProductionGateCSessionRequest request;
+        ProductionActivationContextHandle context;
+        std::shared_ptr<IProductionGateCSessionRuntime> runtime;
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->plan.seatId != plan.seatId ||
+                state->plan.fingerprint != plan.fingerprint ||
+                !state->inputActive || state->inputTerminal ||
+                !state->activeGateRequest ||
+                !state->dependencies.gateCSessionRuntime) {
+                error = "production input metrics observation requires one exact active Gate-C session";
+                return false;
+            }
+            request = *state->activeGateRequest;
+            context = state->context;
+            runtime = state->dependencies.gateCSessionRuntime;
+        }
+
+        ProductionProcessActivatedContext current;
+        if (!currentProcessContext(plan, context, current, error) ||
+            !current.authoritativeProcess.sameInstance(
+                request.process.authoritativeProcess) ||
+            current.handoffGeneration != request.process.handoffGeneration ||
+            current.epoch != request.epoch) {
+            if (error.empty()) {
+                error = "production input metrics process authority changed before observation";
+            }
+            return false;
+        }
+
+        ProductionGateCSessionStatus status;
+        if (!runtime->verify(request, status, error) || !status.active ||
+            !status.receiverVerified || !status.assignedDevicesPresent ||
+            !status.process.sameInstance(request.process.authoritativeProcess) ||
+            status.handoffGeneration != request.process.handoffGeneration) {
+            if (error.empty()) {
+                error = "production input metrics receiver verification failed";
+            }
+            return false;
+        }
+
+        InputMetricsSnapshot candidate;
+        if (!runtime->inputMetricsSnapshot(request, candidate, error)) {
+            snapshot = {};
+            return false;
+        }
+
+        ProductionProcessActivatedContext after;
+        if (!currentProcessContext(plan, context, after, error) ||
+            !after.authoritativeProcess.sameInstance(
+                request.process.authoritativeProcess) ||
+            after.handoffGeneration != request.process.handoffGeneration ||
+            after.epoch != request.epoch) {
+            snapshot = {};
+            if (error.empty()) {
+                error = "production input metrics process authority changed during observation";
+            }
+            return false;
+        }
+        {
+            std::lock_guard lock(state->mutex);
+            if (!state->inputActive || state->inputTerminal ||
+                !state->activeGateRequest ||
+                !sameGateRequestAuthority(*state->activeGateRequest, request)) {
+                snapshot = {};
+                error = "production input metrics session became stale during observation";
+                return false;
+            }
+        }
+        snapshot = std::move(candidate);
+        error.clear();
+        return true;
+    }
+
 private:
     ProductionActivationBridgeConfig config_;
     ProductionActivationBridgeDependencies dependencies_;
@@ -3084,7 +3249,7 @@ ProductionActivationResourceBridges::createRecoveryResource(
     const launch::SeatActivationPlan& plan,
     ProductionActivationContextHandle context,
     std::string& error) {
-    const auto state = impl_->stateFor(plan, std::move(context), error);
+    const auto state = impl_->stateFor(plan, std::move(context), false, error);
     if (!state) return {};
     error.clear();
     return std::make_unique<ProductionRecoveryResource>(state);
@@ -3095,7 +3260,7 @@ ProductionActivationResourceBridges::createInputResource(
     const launch::SeatActivationPlan& plan,
     ProductionActivationContextHandle context,
     std::string& error) {
-    const auto state = impl_->stateFor(plan, std::move(context), error);
+    const auto state = impl_->stateFor(plan, std::move(context), true, error);
     if (!state) return {};
     if (!state->inputExpected || !state->gateCProfile) {
         error = "production Input bridge was requested for a plan without keyboard/mouse Gate-C requirements";
@@ -3105,12 +3270,64 @@ ProductionActivationResourceBridges::createInputResource(
     return std::make_unique<ProductionInputResource>(state);
 }
 
+bool ProductionActivationResourceBridges::inputMetricsSnapshot(
+    const launch::SeatActivationPlan& plan,
+    InputMetricsSnapshot& snapshot,
+    std::string& error) {
+    return impl_->inputMetricsSnapshot(plan, snapshot, error);
+}
+
 std::shared_ptr<ProductionActivationResourceBridges>
 makeProductionActivationResourceBridges(
     ProductionActivationBridgeConfig config,
     ProductionActivationBridgeDependencies dependencies) {
     return std::make_shared<ProductionActivationResourceBridges>(
         std::move(config), std::move(dependencies));
+}
+
+std::shared_ptr<ProductionActivationResourceBridges>
+makeDefaultProductionActivationResourceBridges(std::string* error) {
+#ifdef _WIN32
+    std::uint32_t systemError = 0u;
+    const auto recoveryRoot = recovery::defaultCrashJournalDirectory(&systemError);
+    if (!recoveryRoot) {
+        if (error != nullptr) {
+            *error = "canonical production recovery root is unavailable";
+            if (systemError != 0u) {
+                *error += " (system error " + std::to_string(systemError) + ")";
+            }
+        }
+        return {};
+    }
+    const auto watchdog = currentExecutableSibling(L"hydra_watchdog.exe");
+    if (watchdog.empty()) {
+        if (error != nullptr) {
+            *error = "sibling hydra_watchdog.exe path could not be resolved";
+        }
+        return {};
+    }
+
+    ProductionActivationBridgeConfig config;
+    config.recoveryRoot = *recoveryRoot;
+    config.watchdogExecutablePath = watchdog;
+    // Physical P3-HW evidence is loaded only through the typed per-user selection
+    // source and is revalidated on every Host composition. Exact Game Gate-C
+    // profiles remain release-owned; while P3-E-02 has none, Input still rejects
+    // every keyboard/mouse activation rather than inferring authority from catalog.
+    auto inputAuthority = loadDefaultProductionInputAuthoritySnapshot();
+    config.gateCProfiles = std::move(inputAuthority.gateCProfiles);
+    config.inputEvidenceClass = inputAuthority.inputEvidenceClass;
+    config.physicalAcceptanceEvidence =
+        std::move(inputAuthority.physicalAcceptanceEvidence);
+    auto result = makeProductionActivationResourceBridges(std::move(config));
+    if (error != nullptr) error->clear();
+    return result;
+#else
+    if (error != nullptr) {
+        *error = "default production activation bridges are Windows-only";
+    }
+    return {};
+#endif
 }
 
 std::shared_ptr<IProductionRecoveryLeaseRuntime>

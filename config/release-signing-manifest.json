@@ -3,6 +3,13 @@
   "releaseScope": "HydraSeat v1 owned end-user release artifacts only; tests, probes, labs, third-party binaries, and drivers are excluded until separately reviewed.",
   "artifacts": [
     {
+      "id": "setup-bootstrap",
+      "kind": "cmake-executable",
+      "target": "HydraSeatSetup",
+      "fileName": "HydraSeatSetup.exe",
+      "architectures": ["x64"]
+    },
+    {
       "id": "main-ui",
       "kind": "cmake-executable",
       "target": "HydraSeat",

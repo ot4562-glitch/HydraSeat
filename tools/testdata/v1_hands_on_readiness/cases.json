@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "baseline": {
+    "signals": {
+      "mock_journey_source": true,
+      "mock_target_integrated": true,
+      "normal_path_clean": true,
+      "player_role_contract": true,
+      "durable_persistence_authority": true,
+      "launcher_persistence_wiring": true,
+      "localized_critical_geometry": true,
+      "display_human_identity": true,
+      "intentional_input_identification": true,
+      "steam_non_game_filtering": true,
+      "back_to_games_lifecycle": true,
+      "double_click_installer": true
+    },
+    "evidence": {
+      "Automated/Mock": "PASS",
+      "ComputerUse": "PENDING",
+      "Physical": "PENDING",
+      "RealGame": "PENDING",
+      "CleanMachine": "PENDING",
+      "Signing": "PENDING"
+    }
+  },
+  "regressions": [
+    {"id": "mock-source-missing", "signal": "mock_journey_source"},
+    {"id": "mock-cmake-orphan", "signal": "mock_target_integrated"},
+    {"id": "legacy-seat-or-diagnostics-normal-path", "signal": "normal_path_clean"},
+    {"id": "player1-not-required-or-player2-not-optional", "signal": "player_role_contract"},
+    {"id": "durable-player-storage-boundary-missing", "signal": "durable_persistence_authority"},
+    {"id": "launcher-uses-transient-ad-hoc-player-selection", "signal": "launcher_persistence_wiring"},
+    {"id": "localized-critical-text-fixed-clipping", "signal": "localized_critical_geometry"},
+    {"id": "indistinguishable-active-displays", "signal": "display_human_identity"},
+    {"id": "intentional-keyboard-mouse-identification-missing", "signal": "intentional_input_identification"},
+    {"id": "steam-runtime-tool-filter-regressed", "signal": "steam_non_game_filtering"},
+    {"id": "back-to-games-leaves-hardware-window", "signal": "back_to_games_lifecycle"},
+    {"id": "double-click-installer-missing", "signal": "double_click_installer"}
+  ],
+  "manualPromotionRegressions": [
+    {"id": "fabricated-computer-use-pass", "evidenceClass": "ComputerUse"},
+    {"id": "fabricated-physical-pass", "evidenceClass": "Physical"},
+    {"id": "fabricated-real-game-pass", "evidenceClass": "RealGame"},
+    {"id": "fabricated-clean-machine-pass", "evidenceClass": "CleanMachine"},
+    {"id": "fabricated-signing-pass", "evidenceClass": "Signing"}
+  ]
+}

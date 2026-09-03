@@ -5,19 +5,27 @@
 #include "hydra/compatibility_local_store.hpp"
 #include "hydra/compatibility_share_model.hpp"
 #include "hydra/custom_executable_provider.hpp"
+#include "hydra/local_compatibility_evidence.hpp"
+#include "hydra/local_compatibility_runner.hpp"
+#include "hydra/production_input_authority.hpp"
 #include "hydra/launcher_ui_model.hpp"
 #include "hydra/launcher_layout.hpp"
+#include "hydra/launcher_user_state.hpp"
+#include "hydra/runtime_requirement_authority.hpp"
 #include "hydra/steam_provider.hpp"
 #include "hydra/ui_localization.hpp"
 
 #include <commdlg.h>
 
 #include <algorithm>
+#include <charconv>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -30,29 +38,31 @@ constexpr int kRefresh = 2102;
 constexpr int kAddExe = 2103;
 constexpr int kPlayerName = 2104;
 constexpr int kAddPlayer = 2105;
-constexpr int kPlayerRoster = 2106;
-constexpr int kRenamePlayer = 2107;
-constexpr int kRemovePlayer = 2108;
+constexpr int kPrivacyRetention = 2131;
 constexpr int kSeat1Player = 2110;
 constexpr int kSeat1Status = 2111;
 constexpr int kSeat2Player = 2112;
 constexpr int kSeat2Status = 2113;
-constexpr int kCreateSetup = 2120;
 constexpr int kPlay = 2121;
-constexpr int kDiagnostics = 2122;
-constexpr int kPrivacySharing = 2130;
-constexpr int kPrivacyRetention = 2131;
-constexpr int kPrivacySave = 2132;
-constexpr int kLocalResults = 2140;
-constexpr int kExportLocalResult = 2141;
-constexpr int kDeleteLocalResult = 2142;
-constexpr int kClearLocalResults = 2143;
-constexpr int kSetupNavigation = 2150;
-constexpr int kBackToGames = 2151;
 constexpr int kConfigure = 2152;
-constexpr int kUseSelectedSeatOne = 2153;
-constexpr int kUseSelectedSeatTwo = 2154;
-constexpr int kUseSelectedBothSeats = 2155;
+
+bool activateFocusedButtonWithEnter(HWND root, const MSG& message) noexcept {
+    if (message.message != WM_KEYDOWN || message.wParam != VK_RETURN || root == nullptr) {
+        return false;
+    }
+    HWND focused = GetFocus();
+    if (focused == nullptr || (focused != root && IsChild(root, focused) == FALSE) ||
+        IsWindowEnabled(focused) == FALSE) {
+        return false;
+    }
+    wchar_t className[16]{};
+    if (GetClassNameW(focused, className, static_cast<int>(std::size(className))) == 0 ||
+        _wcsicmp(className, L"Button") != 0) {
+        return false;
+    }
+    SendMessageW(focused, BM_CLICK, 0, 0);
+    return true;
+}
 
 std::wstring widen(std::string_view value) {
     if (value.empty()) return {};
@@ -67,20 +77,63 @@ std::wstring widen(std::string_view value) {
     return output;
 }
 
+std::optional<std::string> narrowUtf8(std::wstring_view value) {
+    if (value.empty()) return std::string{};
+    const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+                                         static_cast<int>(value.size()), nullptr, 0,
+                                         nullptr, nullptr);
+    if (size <= 0) return std::nullopt;
+    std::string output(static_cast<std::size_t>(size), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+                            static_cast<int>(value.size()), output.data(), size,
+                            nullptr, nullptr) != size) {
+        return std::nullopt;
+    }
+    return output;
+}
+
+std::string hexValue(std::uint64_t value) {
+    char buffer[17]{};
+    const auto converted = std::to_chars(std::begin(buffer), std::end(buffer) - 1,
+                                         value, 16);
+    if (converted.ec != std::errc{}) return "0";
+    return std::string(buffer, converted.ptr);
+}
+
+void mixFingerprint(std::uint64_t& value, std::string_view text) noexcept {
+    constexpr std::uint64_t kPrime = 1099511628211ull;
+    for (const char raw : text) {
+        value ^= static_cast<std::uint64_t>(static_cast<unsigned char>(raw));
+        value *= kPrime;
+    }
+}
+
+std::uint64_t localCheckFingerprint(const catalog::LocalGameCatalogEntry& game,
+                                    std::wstring_view executablePath) {
+    std::uint64_t value = 1469598103934665603ull;
+    mixFingerprint(value, game.game.gameId);
+    mixFingerprint(value, game.game.providerId);
+    if (game.game.providerAppId) mixFingerprint(value, *game.game.providerAppId);
+    const auto path = narrowUtf8(executablePath);
+    if (path) mixFingerprint(value, *path);
+    return value == 0u ? 1u : value;
+}
+
+std::string localResultId(std::uint64_t fingerprint) {
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    ULARGE_INTEGER timestamp{};
+    timestamp.LowPart = now.dwLowDateTime;
+    timestamp.HighPart = now.dwHighDateTime;
+    return "local-" + hexValue(fingerprint) + "-" + hexValue(timestamp.QuadPart);
+}
+
 std::optional<std::filesystem::path> privacySettingsPath() {
     wchar_t localAppData[32768]{};
     const DWORD length = GetEnvironmentVariableW(
         L"LOCALAPPDATA", localAppData, static_cast<DWORD>(std::size(localAppData)));
     if (length == 0u || length >= static_cast<DWORD>(std::size(localAppData))) return std::nullopt;
     return std::filesystem::path(localAppData) / L"HydraSeat" / L"privacy-settings.json";
-}
-
-std::optional<std::filesystem::path> playerProfilesPath() {
-    wchar_t localAppData[32768]{};
-    const DWORD length = GetEnvironmentVariableW(
-        L"LOCALAPPDATA", localAppData, static_cast<DWORD>(std::size(localAppData)));
-    if (length == 0u || length >= static_cast<DWORD>(std::size(localAppData))) return std::nullopt;
-    return std::filesystem::path(localAppData) / L"HydraSeat" / L"players.json";
 }
 
 std::optional<std::filesystem::path> manualGamesPath() {
@@ -191,98 +244,29 @@ class WindowState final {
 public:
     WindowState(profile::SeatConfigDocument seatDocument,
                 std::vector<plan::GameRuntimeRequirement> requirementSnapshot,
-                LauncherActivate activationBoundary)
+                LauncherActivate activationBoundary,
+                std::optional<std::string> resumedGameId)
         : seats(std::move(seatDocument)),
           requirements(std::move(requirementSnapshot)),
           activate(std::move(activationBoundary)),
-          steam(provider::steam::makeNativeSteamMetadataSource()) {}
+          steam(provider::steam::makeNativeSteamMetadataSource()),
+          focusedGameId(std::move(resumedGameId)) {}
 
     bool loadPlayerProfilesFromDisk(profile::PlayerProfileDocument& output) {
-        output = {};
-        const auto path = playerProfilesPath();
-        if (!path) {
+        launcherUserStateRoot = launcher_state::defaultUserStateRoot();
+        if (!launcherUserStateRoot) {
+            output = {};
             playerProfilesWritable = false;
             return false;
         }
-
-        std::error_code error;
-        const bool exists = std::filesystem::exists(*path, error);
-        if (error) {
-            playerProfilesWritable = false;
-            return false;
-        }
-        if (!exists) {
-            playerProfilesWritable = true;
-            return true;
-        }
-
-        const auto byteCount = std::filesystem::file_size(*path, error);
-        if (error || byteCount == 0u || byteCount > profile::kMaximumSchemaDocumentBytes) {
-            playerProfilesWritable = false;
-            return false;
-        }
-        std::ifstream input(*path, std::ios::binary);
-        if (!input) {
-            playerProfilesWritable = false;
-            return false;
-        }
-        std::string json(static_cast<std::size_t>(byteCount), '\0');
-        input.read(json.data(), static_cast<std::streamsize>(json.size()));
-        if (!input || input.gcount() != static_cast<std::streamsize>(json.size())) {
-            playerProfilesWritable = false;
-            return false;
-        }
-        char trailing = '\0';
-        if (input.get(trailing)) {
-            playerProfilesWritable = false;
-            return false;
-        }
-
-        profile::PlayerProfileDocument candidate;
-        const auto decoded = profile::decodePlayerProfileDocument(json, candidate);
-        if (!decoded.succeeded()) {
-            playerProfilesWritable = false;
-            return false;
-        }
-        output = std::move(candidate);
-        playerProfilesWritable = true;
-        return true;
+        const auto loaded = launcher_state::loadPlayerProfiles(*launcherUserStateRoot, output);
+        playerProfilesWritable = loaded.succeeded();
+        return loaded.succeeded();
     }
 
     bool savePlayerProfilesToDisk(const profile::PlayerProfileDocument& document) {
-        if (!playerProfilesWritable) return false;
-        const auto path = playerProfilesPath();
-        if (!path) return false;
-
-        profile::SchemaDiagnostic diagnostic;
-        const std::string json = profile::encodePlayerProfileDocument(document, &diagnostic);
-        if (!diagnostic.succeeded() || json.empty() ||
-            json.size() > profile::kMaximumSchemaDocumentBytes) {
-            return false;
-        }
-
-        std::error_code error;
-        std::filesystem::create_directories(path->parent_path(), error);
-        if (error) return false;
-        auto staging = *path;
-        staging += L".tmp";
-        {
-            std::ofstream output(staging, std::ios::binary | std::ios::trunc);
-            if (!output) return false;
-            output.write(json.data(), static_cast<std::streamsize>(json.size()));
-            output.flush();
-            if (!output) {
-                output.close();
-                std::filesystem::remove(staging, error);
-                return false;
-            }
-        }
-        if (MoveFileExW(staging.c_str(), path->c_str(),
-                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE) {
-            std::filesystem::remove(staging, error);
-            return false;
-        }
-        return true;
+        if (!playerProfilesWritable || !launcherUserStateRoot) return false;
+        return launcher_state::savePlayerProfiles(*launcherUserStateRoot, document).succeeded();
     }
 
     bool loadManualGamesFromDisk() {
@@ -438,9 +422,29 @@ public:
             lastDiagnostic = t(hydra::ui::TextId::PlayerProfilesLoadFailed);
         }
         createControls();
-        loadPrivacySettingsFromDisk();
-        loadCompatibilityHistoryFromDisk();
         refreshControls();
+
+        if (launcherUserStateRoot) {
+            std::optional<launcher_state::LastPlayerSelection> storedSelection;
+            const auto loadedSelection = launcher_state::loadLastPlayerSelection(
+                *launcherUserStateRoot, storedSelection);
+            launcher_state::FilteredLastPlayerSelection filteredSelection;
+            if (loadedSelection.succeeded() &&
+                launcher_state::filterLastPlayerSelection(
+                    storedSelection, model.players(), filteredSelection).succeeded() &&
+                filteredSelection.selection) {
+                selectPlayerInCombo(seat1Player, filteredSelection.selection->player1Id);
+                if (filteredSelection.selection->player2Id) {
+                    selectPlayerInCombo(seat2Player, *filteredSelection.selection->player2Id);
+                }
+            }
+        }
+        // Existing users who created exactly one Player before selection persistence
+        // existed should not reopen into a misleading "Choose Player" state.
+        if (!selectedPlayerId(seat1Player) && model.players().players.size() == 1u) {
+            selectPlayerInCombo(seat1Player, model.players().players.front().playerId);
+        }
+        applyPrimarySelection();
         applyLayout();
         return true;
     }
@@ -464,12 +468,8 @@ public:
         for (HWND control : primaryControls) {
             SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
         }
-        for (HWND control : advancedControls) {
-            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-        }
         for (HWND control : {headerTitle, heroTitle, seatsLabel, seat1Label,
-                             seat2Label, libraryLabel, advancedHeading, privacyHeading,
-                             localResultsHeading}) {
+                             seat2Label, libraryLabel}) {
             if (control != nullptr) {
                 SendMessageW(control, WM_SETFONT,
                              reinterpret_cast<WPARAM>(headingFont), TRUE);
@@ -496,14 +496,12 @@ public:
             RECT headerRect{layout.header.x, layout.header.y,
                             layout.header.right(), layout.header.bottom()};
             FillRect(dc, &headerRect, raised);
-            if (!advancedPage) {
-                RECT heroRect{layout.hero.x, layout.hero.y,
-                              layout.hero.right(), layout.hero.bottom()};
-                RECT launchRect{layout.launchBar.x, layout.launchBar.y,
-                                layout.launchBar.right(), layout.launchBar.bottom()};
-                FillRect(dc, &heroRect, raised);
-                FillRect(dc, &launchRect, surface);
-            }
+            RECT heroRect{layout.hero.x, layout.hero.y,
+                          layout.hero.right(), layout.hero.bottom()};
+            RECT launchRect{layout.launchBar.x, layout.launchBar.y,
+                            layout.launchBar.right(), layout.launchBar.bottom()};
+            FillRect(dc, &heroRect, raised);
+            FillRect(dc, &launchRect, surface);
 
             const COLORREF structuralColor = highContrast
                 ? GetSysColor(COLOR_WINDOWTEXT) : nativeColor(palette.lineDefault);
@@ -513,25 +511,23 @@ public:
                 MoveToEx(dc, layout.header.x, layout.header.bottom() - 1, nullptr);
                 LineTo(dc, layout.header.right(), layout.header.bottom() - 1);
 
-                if (!advancedPage) {
-                    MoveToEx(dc, layout.hero.x, layout.hero.y, nullptr);
-                    LineTo(dc, layout.hero.right(), layout.hero.y);
-                    LineTo(dc, layout.hero.right(), layout.hero.bottom());
-                    LineTo(dc, layout.hero.x, layout.hero.bottom());
-                    LineTo(dc, layout.hero.x, layout.hero.y);
+                MoveToEx(dc, layout.hero.x, layout.hero.y, nullptr);
+                LineTo(dc, layout.hero.right(), layout.hero.y);
+                LineTo(dc, layout.hero.right(), layout.hero.bottom());
+                LineTo(dc, layout.hero.x, layout.hero.bottom());
+                LineTo(dc, layout.hero.x, layout.hero.y);
 
-                    MoveToEx(dc, layout.seat1Row.x, layout.seat1Row.bottom(), nullptr);
-                    LineTo(dc, layout.seat1Row.right(), layout.seat1Row.bottom());
-                    MoveToEx(dc, layout.seat2Row.x, layout.seat2Row.bottom(), nullptr);
-                    LineTo(dc, layout.seat2Row.right(), layout.seat2Row.bottom());
-                    MoveToEx(dc, layout.launchBar.x, layout.launchBar.y, nullptr);
-                    LineTo(dc, layout.launchBar.right(), layout.launchBar.y);
-                }
+                MoveToEx(dc, layout.seat1Row.x, layout.seat1Row.bottom(), nullptr);
+                LineTo(dc, layout.seat1Row.right(), layout.seat1Row.bottom());
+                MoveToEx(dc, layout.seat2Row.x, layout.seat2Row.bottom(), nullptr);
+                LineTo(dc, layout.seat2Row.right(), layout.seat2Row.bottom());
+                MoveToEx(dc, layout.launchBar.x, layout.launchBar.y, nullptr);
+                LineTo(dc, layout.launchBar.right(), layout.launchBar.y);
                 SelectObject(dc, oldPen);
                 DeleteObject(structuralPen);
             }
 
-            if (!advancedPage && !highContrast) {
+            if (!highContrast) {
                 HPEN bronzePen = CreatePen(PS_SOLID, 2, nativeColor(palette.bronze));
                 if (bronzePen != nullptr) {
                     HGDIOBJ oldPen = SelectObject(dc, bronzePen);
@@ -548,9 +544,9 @@ public:
 
     HBRUSH staticColor(HDC dc, HWND control) const {
         const bool onRaisedSurface = control == headerTitle || control == headerSubtitle ||
-            (!advancedPage && (control == heroEyebrow || control == heroTitle ||
-                               control == heroStatus));
-        const bool onControlSurface = !advancedPage && control == launchReason;
+                                     control == heroEyebrow || control == heroTitle ||
+                                     control == heroStatus;
+        const bool onControlSurface = control == launchReason;
         if (highContrastEnabled()) {
             const int background = (onRaisedSurface || onControlSurface)
                 ? COLOR_BTNFACE : COLOR_WINDOW;
@@ -569,9 +565,7 @@ public:
         if (control == heroEyebrow) {
             foreground = palette.bronze;
         } else if (control == headerTitle || control == heroTitle || control == seatsLabel ||
-                   control == seat1Label || control == seat2Label || control == libraryLabel ||
-                   control == advancedHeading || control == privacyHeading ||
-                   control == localResultsHeading) {
+                   control == seat1Label || control == seat2Label || control == libraryLabel) {
             foreground = palette.brandNavy;
         } else if (control == headerSubtitle || control == heroStatus) {
             foreground = palette.mutedInk;
@@ -603,19 +597,9 @@ public:
     }
 
     static hydra::ui::LauncherButtonRole buttonRole(HWND control) noexcept {
-        switch (GetDlgCtrlID(control)) {
-        case kPlay:
-            return hydra::ui::LauncherButtonRole::Primary;
-        case kSetupNavigation:
-        case kBackToGames:
-            return hydra::ui::LauncherButtonRole::Quiet;
-        case kRemovePlayer:
-        case kDeleteLocalResult:
-        case kClearLocalResults:
-            return hydra::ui::LauncherButtonRole::Danger;
-        default:
-            return hydra::ui::LauncherButtonRole::Secondary;
-        }
+        return GetDlgCtrlID(control) == kPlay
+            ? hydra::ui::LauncherButtonRole::Primary
+            : hydra::ui::LauncherButtonRole::Secondary;
     }
 
     static void drawStatusMarker(HDC dc, RECT rect,
@@ -1243,45 +1227,28 @@ public:
                              0, headingFont);
         headerSubtitle = create(L"STATIC", t(hydra::ui::TextId::LauncherSubtitle),
                                 SS_LEFT, 0, 0, 1, 1);
-        setupNavigation = createPrimary(
-            L"BUTTON", t(hydra::ui::TextId::SetupAndDiagnostics),
-            BS_OWNERDRAW | WS_TABSTOP, kSetupNavigation);
-
         heroEyebrow = createPrimary(L"STATIC", t(hydra::ui::TextId::SelectedGame),
                                     SS_LEFT | SS_NOPREFIX, 0, strongFont);
         heroTitle = createPrimary(L"STATIC", t(hydra::ui::TextId::NoGameSelected),
-                                  SS_LEFT | SS_NOPREFIX, 0, headingFont);
+                                  SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, 0, headingFont);
         heroStatus = createPrimary(L"STATIC", t(hydra::ui::TextId::ChooseSeatForSelectedGame),
                                    SS_LEFT | SS_NOPREFIX);
-        useSeatOneButton = createPrimary(
-            L"BUTTON", t(hydra::ui::TextId::UseSeatOne),
-            BS_OWNERDRAW | WS_TABSTOP, kUseSelectedSeatOne);
-        useSeatTwoButton = createPrimary(
-            L"BUTTON", t(hydra::ui::TextId::UseSeatTwo),
-            BS_OWNERDRAW | WS_TABSTOP, kUseSelectedSeatTwo);
-        useBothSeatsButton = createPrimary(
-            L"BUTTON", t(hydra::ui::TextId::UseBothSeats),
-            BS_OWNERDRAW | WS_TABSTOP, kUseSelectedBothSeats);
         configureButton = createPrimary(
             L"BUTTON", t(hydra::ui::TextId::SeatHardwareSetup),
             BS_OWNERDRAW | WS_TABSTOP, kConfigure);
 
         seatsLabel = createPrimary(L"STATIC", t(hydra::ui::TextId::SectionSeats),
                                    SS_LEFT, 0, headingFont);
-        const auto seatOne = hydra::ui::formatOne(hydra::ui::TextId::SeatLabel, locale, L"1");
-        const auto seatTwo = hydra::ui::formatOne(hydra::ui::TextId::SeatLabel, locale, L"2");
-        seat1Label = createPrimary(L"STATIC", seatOne.c_str(), SS_LEFT, 0, headingFont);
+        const auto seatOne = std::wstring(t(hydra::ui::TextId::Player)) + L" 1";
+        const auto seatTwo = std::wstring(t(hydra::ui::TextId::Player)) + L" 2";
+        seat1Label = createPrimary(L"STATIC", seatOne.c_str(), SS_LEFT | SS_NOPREFIX, 0, strongFont);
         seat1Player = createPrimary(L"COMBOBOX", L"",
             CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, kSeat1Player);
-        seat1Game = createPrimary(L"STATIC", t(hydra::ui::TextId::None),
-            SS_LEFT | SS_NOPREFIX);
         seat1Status = createPrimary(L"STATIC", t(hydra::ui::TextId::StatusNotSelected),
                                     SS_OWNERDRAW | SS_NOPREFIX, kSeat1Status);
-        seat2Label = createPrimary(L"STATIC", seatTwo.c_str(), SS_LEFT, 0, headingFont);
+        seat2Label = createPrimary(L"STATIC", seatTwo.c_str(), SS_LEFT | SS_NOPREFIX, 0, strongFont);
         seat2Player = createPrimary(L"COMBOBOX", L"",
             CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, kSeat2Player);
-        seat2Game = createPrimary(L"STATIC", t(hydra::ui::TextId::None),
-            SS_LEFT | SS_NOPREFIX);
         seat2Status = createPrimary(L"STATIC", t(hydra::ui::TextId::StatusNotSelected),
                                     SS_OWNERDRAW | SS_NOPREFIX, kSeat2Status);
 
@@ -1301,63 +1268,17 @@ public:
                                    BS_OWNERDRAW | WS_TABSTOP, kPlay);
         EnableWindow(playButton, FALSE);
 
-        advancedHeading = createAdvanced(
-            L"STATIC", t(hydra::ui::TextId::SetupAndDiagnostics), SS_LEFT, 0, headingFont);
-        backToGames = createAdvanced(L"BUTTON", t(hydra::ui::TextId::BackToGames),
-                                     BS_OWNERDRAW | WS_TABSTOP, kBackToGames);
-        playerNameLabel = createAdvanced(L"STATIC", t(hydra::ui::TextId::PlayerName), SS_LEFT);
-        playerName = createAdvanced(L"EDIT", L"",
+        playerNameLabel = createPrimary(L"STATIC", t(hydra::ui::TextId::PlayerName), SS_LEFT);
+        playerName = createPrimary(L"EDIT", L"",
             WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, kPlayerName);
-        addPlayerButton = createAdvanced(L"BUTTON", t(hydra::ui::TextId::AddPlayer),
+        addPlayerButton = createPrimary(L"BUTTON", t(hydra::ui::TextId::AddPlayer),
             BS_OWNERDRAW | WS_TABSTOP, kAddPlayer);
-        playerRoster = createAdvanced(L"COMBOBOX", L"",
-            CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, kPlayerRoster);
-        renamePlayerButton = createAdvanced(L"BUTTON", t(hydra::ui::TextId::Rename),
-            BS_OWNERDRAW | WS_TABSTOP, kRenamePlayer);
-        removePlayerButton = createAdvanced(L"BUTTON", t(hydra::ui::TextId::Remove),
-            BS_OWNERDRAW | WS_TABSTOP, kRemovePlayer);
-        setupButton = createAdvanced(L"BUTTON", t(hydra::ui::TextId::CreateTwoPlayerSetup),
-            BS_OWNERDRAW | WS_TABSTOP, kCreateSetup);
-        diagnostics = createAdvanced(L"LISTBOX", L"", WS_BORDER | WS_VSCROLL,
-                                     kDiagnostics);
-
-        privacyHeading = createAdvanced(L"STATIC", t(hydra::ui::TextId::PrivacyHeading),
-                                        SS_LEFT, 0, headingFont);
-        privacySharing = createAdvanced(L"BUTTON", t(hydra::ui::TextId::CommunitySharing),
-            BS_AUTOCHECKBOX | WS_TABSTOP, kPrivacySharing);
-        privacyRetentionLabel = createAdvanced(
-            L"STATIC", t(hydra::ui::TextId::RetainedResults), SS_LEFT);
-        privacyRetention = createAdvanced(L"EDIT", L"",
-            WS_BORDER | ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP, kPrivacyRetention);
-        privacySave = createAdvanced(L"BUTTON", t(hydra::ui::TextId::SavePrivacy),
-            BS_OWNERDRAW | WS_TABSTOP, kPrivacySave);
-        localResultsHeading = createAdvanced(
-            L"STATIC", t(hydra::ui::TextId::LocalResultsHeading), SS_LEFT, 0, headingFont);
-        localResults = createAdvanced(L"LISTBOX", L"",
-            LBS_NOTIFY | WS_VSCROLL | WS_BORDER | WS_TABSTOP, kLocalResults);
-        exportLocalResultButton = createAdvanced(
-            L"BUTTON", t(hydra::ui::TextId::ExportSelectedResult),
-            BS_OWNERDRAW | WS_TABSTOP, kExportLocalResult);
-        deleteLocalResultButton = createAdvanced(
-            L"BUTTON", t(hydra::ui::TextId::DeleteSelectedResult),
-            BS_OWNERDRAW | WS_TABSTOP, kDeleteLocalResult);
-        clearLocalResultsButton = createAdvanced(
-            L"BUTTON", t(hydra::ui::TextId::ClearLocalResults),
-            BS_OWNERDRAW | WS_TABSTOP, kClearLocalResults);
-        updatePageVisibility();
     }
 
     HWND createPrimary(const wchar_t* className, const wchar_t* label, DWORD style,
                        int id = 0, HFONT selectedFont = nullptr) {
         HWND control = create(className, label, style, 0, 0, 1, 1, id, selectedFont);
         primaryControls.push_back(control);
-        return control;
-    }
-
-    HWND createAdvanced(const wchar_t* className, const wchar_t* label, DWORD style,
-                        int id = 0, HFONT selectedFont = nullptr) {
-        HWND control = create(className, label, style, 0, 0, 1, 1, id, selectedFont);
-        advancedControls.push_back(control);
         return control;
     }
 
@@ -1380,14 +1301,50 @@ public:
         measured.heroStatusHeight = measuredWrappedTextHeight(
             dc, font, controlText(heroStatus),
             std::max(1, baseLayout.heroStatus.width), windowDpi);
-        measured.useSeatOneWidth = measuredTextWidth(
-            dc, strongFont, controlText(useSeatOneButton), windowDpi);
-        measured.useSeatTwoWidth = measuredTextWidth(
-            dc, strongFont, controlText(useSeatTwoButton), windowDpi);
-        measured.useBothSeatsWidth = measuredTextWidth(
-            dc, strongFont, controlText(useBothSeatsButton), windowDpi);
+        measured.sectionLabelHeight = std::max(
+            fontLineHeight(dc, headingFont, windowDpi),
+            std::max(
+                measuredWrappedTextHeight(dc, headingFont, controlText(seatsLabel),
+                                          std::max(1, baseLayout.seatsLabel.width), windowDpi),
+                measuredWrappedTextHeight(dc, headingFont, controlText(libraryLabel),
+                                          std::max(1, baseLayout.libraryLabel.width), windowDpi)));
+        measured.playerLabelWidth = std::max(
+            measuredTextWidth(dc, strongFont, controlText(seat1Label), windowDpi),
+            measuredTextWidth(dc, strongFont, controlText(seat2Label), windowDpi));
+        measured.playerLabelHeight = fontLineHeight(dc, strongFont, windowDpi);
+        measured.playerStatusWidth = std::max(
+            measuredTextWidth(dc, strongFont, controlText(seat1Status), windowDpi),
+            measuredTextWidth(dc, strongFont, controlText(seat2Status), windowDpi));
+        measured.playerStatusHeight = std::max(
+            measuredWrappedTextHeight(dc, strongFont, controlText(seat1Status),
+                                      std::max(1, baseLayout.seat1Status.width), windowDpi),
+            measuredWrappedTextHeight(dc, strongFont, controlText(seat2Status),
+                                      std::max(1, baseLayout.seat2Status.width), windowDpi));
         measured.configureWidth = measuredTextWidth(
             dc, strongFont, controlText(configureButton), windowDpi);
+        measured.configureHeight = measuredWrappedTextHeight(
+            dc, strongFont, controlText(configureButton),
+            std::max(1, baseLayout.configure.width), windowDpi);
+        measured.refreshWidth = measuredTextWidth(
+            dc, strongFont, controlText(refreshButton), windowDpi);
+        measured.refreshHeight = measuredWrappedTextHeight(
+            dc, strongFont, controlText(refreshButton),
+            std::max(1, baseLayout.refresh.width), windowDpi);
+        measured.addExecutableWidth = measuredTextWidth(
+            dc, strongFont, controlText(addExeButton), windowDpi);
+        measured.addExecutableHeight = measuredWrappedTextHeight(
+            dc, strongFont, controlText(addExeButton),
+            std::max(1, baseLayout.addExecutable.width), windowDpi);
+        measured.playWidth = measuredTextWidth(
+            dc, strongFont, controlText(playButton), windowDpi);
+        measured.playHeight = measuredWrappedTextHeight(
+            dc, strongFont, controlText(playButton),
+            std::max(1, baseLayout.play.width), windowDpi);
+        measured.addPlayerWidth = measuredTextWidth(
+            dc, strongFont, controlText(addPlayerButton), windowDpi);
+        measured.addPlayerHeight = measuredWrappedTextHeight(
+            dc, strongFont, controlText(addPlayerButton),
+            std::max(1, baseLayout.addPlayer.width), windowDpi);
 
         const auto reason = controlText(launchReason);
         measured.launchReasonHeight = measuredWrappedTextHeight(
@@ -1427,22 +1384,16 @@ public:
         if (!layout.valid) return;
         move(headerTitle, layout.headerTitle);
         move(headerSubtitle, layout.headerSubtitle);
-        move(setupNavigation, layout.setupNavigation);
         move(heroEyebrow, layout.heroEyebrow);
         move(heroTitle, layout.heroTitle);
         move(heroStatus, layout.heroStatus);
-        move(useSeatOneButton, layout.useSeatOne);
-        move(useSeatTwoButton, layout.useSeatTwo);
-        move(useBothSeatsButton, layout.useBothSeats);
         move(configureButton, layout.configure);
         move(seatsLabel, layout.seatsLabel);
         move(seat1Label, layout.seat1Label);
         move(seat1Player, layout.seat1Player);
-        move(seat1Game, layout.seat1Game);
         move(seat1Status, layout.seat1Status);
         move(seat2Label, layout.seat2Label);
         move(seat2Player, layout.seat2Player);
-        move(seat2Game, layout.seat2Game);
         move(seat2Status, layout.seat2Status);
         move(libraryLabel, layout.libraryLabel);
         move(gameList, layout.gameList);
@@ -1451,39 +1402,10 @@ public:
         move(addExeButton, layout.addExecutable);
         move(launchReason, layout.launchReason);
         move(playButton, layout.play);
-        move(advancedHeading, layout.advancedHeading);
-        move(backToGames, layout.backToGames);
         move(playerNameLabel, layout.playerNameLabel);
         move(playerName, layout.playerName);
         move(addPlayerButton, layout.addPlayer);
-        move(playerRoster, layout.playerRoster);
-        move(renamePlayerButton, layout.renamePlayer);
-        move(removePlayerButton, layout.removePlayer);
-        move(setupButton, layout.setupButton);
-        move(diagnostics, layout.diagnostics);
-        move(privacyHeading, layout.privacyHeading);
-        move(privacySharing, layout.privacySharing);
-        move(privacyRetentionLabel, layout.privacyRetentionLabel);
-        move(privacyRetention, layout.privacyRetention);
-        move(privacySave, layout.privacySave);
-        move(localResultsHeading, layout.localResultsHeading);
-        move(localResults, layout.localResults);
-        move(exportLocalResultButton, layout.exportLocalResult);
-        move(deleteLocalResultButton, layout.deleteLocalResult);
-        move(clearLocalResultsButton, layout.clearLocalResults);
-        updatePageVisibility();
         InvalidateRect(hwnd, nullptr, TRUE);
-    }
-
-    void updatePageVisibility() {
-        for (HWND control : primaryControls) {
-            ShowWindow(control, advancedPage ? SW_HIDE : SW_SHOW);
-        }
-        for (HWND control : advancedControls) {
-            ShowWindow(control, advancedPage ? SW_SHOW : SW_HIDE);
-        }
-        ShowWindow(headerTitle, SW_SHOW);
-        ShowWindow(headerSubtitle, SW_SHOW);
     }
 
     const wchar_t* t(hydra::ui::TextId id) const noexcept {
@@ -1506,8 +1428,11 @@ public:
 
     void fillPlayerCombo(HWND combo) {
         SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+        const auto* placeholder = combo == seat2Player
+            ? t(hydra::ui::TextId::None)
+            : t(hydra::ui::TextId::ChoosePlayer);
         SendMessageW(combo, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(t(hydra::ui::TextId::ChoosePlayer)));
+                     reinterpret_cast<LPARAM>(placeholder));
         for (const auto& player : model.players().players) {
             SendMessageW(combo, CB_ADDSTRING, 0,
                          reinterpret_cast<LPARAM>(player.displayName.c_str()));
@@ -1541,10 +1466,493 @@ public:
         return model.players().players[static_cast<std::size_t>(selected - 1)].playerId;
     }
 
+    bool persistPlayerSelection(const std::optional<std::string>& firstPlayer,
+                                const std::optional<std::string>& secondPlayer) {
+        if (!launcherUserStateRoot) return false;
+        if (!firstPlayer) {
+            return launcher_state::clearLastPlayerSelection(*launcherUserStateRoot).succeeded();
+        }
+        launcher_state::LastPlayerSelection selection;
+        selection.player1Id = *firstPlayer;
+        selection.player2Id = secondPlayer;
+        return launcher_state::saveLastPlayerSelection(
+            *launcherUserStateRoot, selection).succeeded();
+    }
+
+    void applyPrimarySelection() {
+        const auto* selectedGame = selectedLibraryGame();
+        const auto firstPlayer = selectedPlayerId(seat1Player);
+        auto secondPlayer = selectedPlayerId(seat2Player);
+
+        const auto apply = [&](const UiDiagnostic& diagnostic) {
+            if (!diagnostic.succeeded()) {
+                lastDiagnostic = widen(diagnostic.message);
+                return false;
+            }
+            return true;
+        };
+
+        // Player 1 is the required primary identity. Player 2 is optional and must
+        // never form a standalone Seat 2 plan or persist without Player 1.
+        if (!firstPlayer) {
+            if (!apply(model.clearSeat(1u))) return;
+            if (!apply(model.clearSeat(2u))) return;
+            if (secondPlayer) {
+                SendMessageW(seat2Player, CB_SETCURSEL, 0, 0);
+                secondPlayer.reset();
+            }
+            (void)persistPlayerSelection(std::nullopt, std::nullopt);
+            lastDiagnostic = t(hydra::ui::TextId::LaunchSelectionEmpty);
+            updatePreview();
+            return;
+        }
+
+        if (selectedGame == nullptr) {
+            if (!apply(model.clearSeat(1u))) return;
+            if (!apply(model.clearSeat(2u))) return;
+            lastDiagnostic.clear();
+            if (!persistPlayerSelection(firstPlayer, secondPlayer)) {
+                lastDiagnostic = t(hydra::ui::TextId::PlayerProfilesSaveFailed);
+            }
+            // Player choice is independent of game choice. Do not project the now-empty
+            // runtime binding back into the combo boxes or the user's selection vanishes.
+            updatePreview();
+            return;
+        }
+
+        if (secondPlayer) {
+            if (!apply(model.selectBoth(selectedGame->game.gameId,
+                                        *firstPlayer, *secondPlayer))) {
+                syncSeatPresentation();
+                updatePreview();
+                return;
+            }
+        } else {
+            if (!apply(model.selectGame(1u, *firstPlayer, selectedGame->game.gameId))) {
+                syncSeatPresentation();
+                updatePreview();
+                return;
+            }
+            if (!apply(model.clearSeat(2u))) return;
+        }
+
+        lastDiagnostic.clear();
+        syncSeatPresentation();
+        if (!persistPlayerSelection(firstPlayer, secondPlayer)) {
+            lastDiagnostic = t(hydra::ui::TextId::PlayerProfilesSaveFailed);
+        }
+        updatePreview();
+    }
+
     bool hasRuntimeRequirement(std::string_view gameId) const {
         return std::any_of(
             model.requirements().begin(), model.requirements().end(),
             [&](const auto& requirement) { return requirement.gameId == gameId; });
+    }
+
+    const plan::ProviderAdapterBinding* exactProviderBinding(
+        const requirement::RequirementResolveInputs& inputs,
+        const catalog::LocalGameCatalogEntry& game) const {
+        const plan::ProviderAdapterBinding* exact = nullptr;
+        const plan::ProviderAdapterBinding* providerWide = nullptr;
+        for (const auto& binding : inputs.providers) {
+            if (binding.adapter == nullptr || binding.providerId != game.game.providerId) continue;
+            if (binding.providerAppId) {
+                if (binding.providerAppId != game.game.providerAppId || exact != nullptr) {
+                    if (binding.providerAppId == game.game.providerAppId) return nullptr;
+                    continue;
+                }
+                exact = &binding;
+            } else {
+                if (providerWide != nullptr) return nullptr;
+                providerWide = &binding;
+            }
+        }
+        return exact != nullptr ? exact : providerWide;
+    }
+
+    std::optional<std::string> playerAccountReference(
+        std::string_view playerId, std::string_view providerId) const {
+        const auto player = std::find_if(
+            model.players().players.begin(), model.players().players.end(),
+            [&](const auto& candidate) { return candidate.playerId == playerId; });
+        if (player == model.players().players.end()) return std::nullopt;
+        const auto account = std::find_if(
+            player->providerAccounts.begin(), player->providerAccounts.end(),
+            [&](const auto& candidate) { return candidate.providerId == providerId; });
+        return account == player->providerAccounts.end()
+            ? std::nullopt
+            : std::optional<std::string>{account->accountRef};
+    }
+
+    const profile::PersistedSeatConfig* configuredSeat(SeatId seatId) const {
+        const auto found = std::find_if(
+            seats.seats.begin(), seats.seats.end(),
+            [&](const auto& seat) { return seat.seatId == seatId; });
+        return found == seats.seats.end() ? nullptr : &*found;
+    }
+
+    launch::Requirements proposedRequirements(std::string_view gameId) const {
+        launch::Requirements reviewed;
+        reviewed.display = true;
+        reviewed.windowOwnership = true;
+        reviewed.recovery = true;
+        reviewed.highRisk = false;
+
+        std::vector<const profile::PersistedSeatConfig*> selectedSeats;
+        for (const auto& binding : model.selection().bindings) {
+            if (binding.gameId != gameId) continue;
+            if (const auto* seat = configuredSeat(binding.seatId); seat != nullptr) {
+                selectedSeats.push_back(seat);
+            }
+        }
+        if (selectedSeats.empty()) return reviewed;
+
+        const auto everySeat = [&](const auto& predicate) {
+            return std::all_of(selectedSeats.begin(), selectedSeats.end(), predicate);
+        };
+        reviewed.keyboard = everySeat([](const auto* seat) {
+            return !seat->keyboardIds.empty();
+        });
+        reviewed.mouse = everySeat([](const auto* seat) {
+            return !seat->mouseIds.empty();
+        });
+        reviewed.controller = everySeat([](const auto* seat) {
+            return !seat->controllerIds.empty();
+        });
+        reviewed.audioOutput = everySeat([](const auto* seat) {
+            return seat->audioOutputEndpointId.has_value();
+        });
+        return reviewed;
+    }
+
+    std::wstring requirementSummary(const launch::Requirements& reviewed) const {
+        std::wstring summary;
+        const auto append = [&](bool required, std::wstring_view label) {
+            summary.append(required ? L"[x] " : L"[ ] ");
+            summary.append(label);
+            summary.push_back(L'\n');
+        };
+        append(reviewed.display, t(hydra::ui::TextId::DeviceDisplay));
+        append(reviewed.keyboard, t(hydra::ui::TextId::DeviceKeyboard));
+        append(reviewed.mouse, t(hydra::ui::TextId::DeviceMouse));
+        append(reviewed.controller, t(hydra::ui::TextId::DeviceController));
+        append(reviewed.audioOutput,
+               t(hydra::ui::TextId::CompatibilityRequirementAudioOutput));
+        append(reviewed.windowOwnership,
+               t(hydra::ui::TextId::CompatibilityRequirementWindowOwnership));
+        append(reviewed.recovery, t(hydra::ui::TextId::RecoveryAction));
+        return summary;
+    }
+
+    bool refreshTrustedRequirementProjection() {
+        auto source = requirement::makeDefaultProductionTrustedRequirementSource();
+        std::vector<plan::GameRuntimeRequirement> projection;
+        requirement::RequirementSnapshotDiagnostic resolved;
+        if (source) {
+            resolved = requirement::resolveCurrentRequirementProjection(*source, projection);
+        } else {
+            resolved.code = requirement::RequirementSnapshotCode::InputUnavailable;
+            resolved.message = "trusted runtime requirement source is unavailable";
+        }
+
+        requirements = projection;
+        const auto replaced = model.replaceRequirements(requirements);
+        if (!replaced.succeeded()) {
+            requirements.clear();
+            const auto cleared = model.replaceRequirements(requirements);
+            (void)cleared;
+            lastDiagnostic = widen(replaced.message);
+            refreshControls();
+            return false;
+        }
+        if (!resolved.succeeded()) lastDiagnostic = widen(resolved.message);
+        refreshControls();
+        return resolved.succeeded();
+    }
+
+    void showCompatibilityFailure(std::string_view message) {
+        lastDiagnostic = widen(message);
+        const std::wstring text = lastDiagnostic.empty()
+            ? t(hydra::ui::TextId::RuntimeLaunchUnavailable)
+            : lastDiagnostic;
+        MessageBoxW(hwnd, text.c_str(), t(hydra::ui::TextId::SectionCompatibility),
+                    MB_OK | MB_ICONWARNING);
+    }
+
+    void showLocalizedCompatibilityFailure(hydra::ui::TextId id) {
+        lastDiagnostic = t(id);
+        MessageBoxW(hwnd, lastDiagnostic.c_str(),
+                    t(hydra::ui::TextId::SectionCompatibility),
+                    MB_OK | MB_ICONWARNING);
+    }
+
+    local_compatibility::LocalCompatibilityTargetRisk reviewCompatibilityTargetRisk() {
+        const int reviewed = MessageBoxW(
+            hwnd, t(hydra::ui::TextId::CompatibilityRiskReviewPrompt),
+            t(hydra::ui::TextId::SectionCompatibility),
+            MB_YESNOCANCEL | MB_ICONWARNING | MB_DEFBUTTON3);
+        if (reviewed == IDNO) {
+            return local_compatibility::LocalCompatibilityTargetRisk::Standard;
+        }
+        if (reviewed == IDYES) {
+            return local_compatibility::LocalCompatibilityTargetRisk::ProtectedOrExperimental;
+        }
+        return local_compatibility::LocalCompatibilityTargetRisk::Unknown;
+    }
+
+    bool selectPhysicalEvidenceManifest(std::string_view gameId) {
+        wchar_t path[32768]{};
+        OPENFILENAMEW dialog{};
+        dialog.lStructSize = sizeof(dialog);
+        dialog.hwndOwner = hwnd;
+        dialog.lpstrFilter = L"P3-HW manifest (phase3-hardware-manifest.json)\0phase3-hardware-manifest.json\0JSON files (*.json)\0*.json\0\0";
+        dialog.lpstrFile = path;
+        dialog.nMaxFile = static_cast<DWORD>(std::size(path));
+        dialog.lpstrTitle = t(hydra::ui::TextId::PhysicalEvidenceDialogTitle);
+        dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (!GetOpenFileNameW(&dialog)) return false;
+
+        const auto saved = production::saveDefaultProductionPhysicalEvidenceSelection(
+            std::filesystem::path(path));
+        if (saved.code != production::PhysicalEvidenceSelectionCode::Success) {
+            const auto message = hydra::ui::formatOne(
+                hydra::ui::TextId::PhysicalEvidenceSelectionFailed, locale,
+                widen(saved.message));
+            MessageBoxW(hwnd, message.c_str(),
+                        t(hydra::ui::TextId::SectionCompatibility),
+                        MB_OK | MB_ICONWARNING);
+            return false;
+        }
+
+        const auto prerequisites =
+            production::checkDefaultProductionInputAuthorityPrerequisites(gameId);
+        const auto messageId = prerequisites.code ==
+                    production::ProductionInputAuthorityPrerequisiteCode::Ready
+            ? hydra::ui::TextId::PhysicalEvidencePrerequisitesReady
+            : hydra::ui::TextId::PhysicalEvidenceAcceptedNoProfile;
+        MessageBoxW(hwnd, t(messageId),
+                    t(hydra::ui::TextId::SectionCompatibility),
+                    MB_OK | MB_ICONINFORMATION);
+        return true;
+    }
+
+    void offerPhysicalEvidenceSelection(std::string_view gameId) {
+        const auto prerequisites =
+            production::checkDefaultProductionInputAuthorityPrerequisites(gameId);
+        switch (prerequisites.code) {
+        case production::ProductionInputAuthorityPrerequisiteCode::MissingPhysicalEvidence:
+            if (MessageBoxW(hwnd, t(hydra::ui::TextId::PhysicalEvidenceSelectPrompt),
+                            t(hydra::ui::TextId::SectionCompatibility),
+                            MB_YESNO | MB_ICONINFORMATION | MB_DEFBUTTON2) == IDYES) {
+                (void)selectPhysicalEvidenceManifest(gameId);
+            }
+            return;
+        case production::ProductionInputAuthorityPrerequisiteCode::InvalidPhysicalEvidence: {
+            const auto failure = hydra::ui::formatOne(
+                hydra::ui::TextId::PhysicalEvidenceSelectionFailed, locale,
+                widen(prerequisites.message));
+            MessageBoxW(hwnd, failure.c_str(),
+                        t(hydra::ui::TextId::SectionCompatibility),
+                        MB_OK | MB_ICONWARNING);
+            if (MessageBoxW(hwnd, t(hydra::ui::TextId::PhysicalEvidenceSelectPrompt),
+                            t(hydra::ui::TextId::SectionCompatibility),
+                            MB_YESNO | MB_ICONINFORMATION | MB_DEFBUTTON2) == IDYES) {
+                (void)selectPhysicalEvidenceManifest(gameId);
+            }
+            return;
+        }
+        case production::ProductionInputAuthorityPrerequisiteCode::MissingTrustedGameProfile:
+            MessageBoxW(hwnd, t(hydra::ui::TextId::PhysicalEvidenceAcceptedNoProfile),
+                        t(hydra::ui::TextId::SectionCompatibility),
+                        MB_OK | MB_ICONINFORMATION);
+            return;
+        case production::ProductionInputAuthorityPrerequisiteCode::Ready:
+            MessageBoxW(hwnd, t(hydra::ui::TextId::PhysicalEvidencePrerequisitesReady),
+                        t(hydra::ui::TextId::SectionCompatibility),
+                        MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+    }
+
+    void runSelectedCompatibilityCheck() {
+        applyPrimarySelection();
+        const auto* selectedUiGame = selectedLibraryGame();
+        const auto firstPlayer = selectedPlayerId(seat1Player);
+        if (selectedUiGame == nullptr || !firstPlayer) {
+            lastDiagnostic = t(hydra::ui::TextId::LaunchSelectionEmpty);
+            updatePreview();
+            return;
+        }
+
+        const auto targetRisk = reviewCompatibilityTargetRisk();
+        if (targetRisk ==
+            local_compatibility::LocalCompatibilityTargetRisk::ProtectedOrExperimental) {
+            showLocalizedCompatibilityFailure(
+                hydra::ui::TextId::CompatibilityRiskProtectedBlocked);
+            updatePreview();
+            return;
+        }
+        if (targetRisk == local_compatibility::LocalCompatibilityTargetRisk::Unknown) {
+            showLocalizedCompatibilityFailure(
+                hydra::ui::TextId::CompatibilityRiskUnknownBlocked);
+            updatePreview();
+            return;
+        }
+
+        SetWindowTextW(launchReason, t(hydra::ui::TextId::CompatibilityCheckRunning));
+        EnableWindow(playButton, FALSE);
+        UpdateWindow(hwnd);
+
+        auto inputSource = requirement::makeProductionRequirementResolveInputSource();
+        requirement::RequirementResolveInputs inputs;
+        std::string captureError;
+        if (!inputSource || !inputSource->capture(inputs, captureError)) {
+            showCompatibilityFailure(captureError.empty()
+                ? "current production compatibility inputs are unavailable"
+                : captureError);
+            (void)refreshTrustedRequirementProjection();
+            return;
+        }
+
+        const auto gameIt = std::find_if(
+            inputs.catalog.entries.begin(), inputs.catalog.entries.end(),
+            [&](const auto& entry) { return entry.game.gameId == selectedUiGame->game.gameId; });
+        if (gameIt == inputs.catalog.entries.end()) {
+            showCompatibilityFailure("the selected Game is no longer present in the current local catalog");
+            (void)refreshTrustedRequirementProjection();
+            return;
+        }
+        const auto* providerBinding = exactProviderBinding(inputs, *gameIt);
+        if (providerBinding == nullptr || providerBinding->adapter == nullptr) {
+            showCompatibilityFailure("the selected Game has no unique current provider binding");
+            (void)refreshTrustedRequirementProjection();
+            return;
+        }
+        const auto descriptor = providerBinding->adapter->descriptor();
+
+        provider::LaunchSelection selection;
+        selection.providerId = gameIt->game.providerId;
+        selection.gameId = gameIt->game.gameId;
+        selection.providerAppId = gameIt->game.providerAppId;
+        selection.accountRef = playerAccountReference(*firstPlayer, gameIt->game.providerId);
+        selection.expectedMetadataRevision = descriptor.metadataRevision;
+
+        provider::ProviderLaunchRequest launchRequest;
+        const auto launchBuilt = provider::buildLaunchRequest(
+            *providerBinding->adapter, selection, launchRequest);
+        if (!launchBuilt.succeeded()) {
+            showCompatibilityFailure(launchBuilt.message);
+            (void)refreshTrustedRequirementProjection();
+            return;
+        }
+        if (launchRequest.targetKind != provider::LaunchTargetKind::Executable) {
+            showCompatibilityFailure(
+                "local compatibility validation requires an exact native executable target; add the executable directly for this Game");
+            (void)refreshTrustedRequirementProjection();
+            return;
+        }
+
+        SeatId checkSeatId = 0u;
+        for (const auto& binding : model.selection().bindings) {
+            if (binding.gameId == gameIt->game.gameId) {
+                checkSeatId = binding.seatId;
+                break;
+            }
+        }
+        if (checkSeatId == 0u) {
+            showCompatibilityFailure("the selected Game is not bound to a Player Seat");
+            (void)refreshTrustedRequirementProjection();
+            return;
+        }
+
+        local_compatibility::LocalCompatibilityRequest check;
+        check.launch.seatId = checkSeatId;
+        check.launch.executablePath = launchRequest.target;
+        check.launch.arguments = launchRequest.arguments;
+        if (launchRequest.workingDirectory) {
+            check.launch.workingDirectory = *launchRequest.workingDirectory;
+        } else {
+            check.launch.workingDirectory = std::filesystem::path(launchRequest.target)
+                                                .parent_path().wstring();
+        }
+        check.launch.containment = process::ProcessContainmentPolicy::RequireJobObject;
+        check.launch.createNewConsole = false;
+        check.planFingerprint = localCheckFingerprint(*gameIt, launchRequest.target);
+        check.targetRisk = targetRisk;
+
+        const auto run = local_compatibility::runLocalCompatibilityCheck(check);
+        if (!run.diagnostic.succeeded() || !run.report) {
+            showCompatibilityFailure(run.diagnostic.message.empty()
+                ? "the bounded local compatibility check did not complete"
+                : run.diagnostic.message);
+            (void)refreshTrustedRequirementProjection();
+            return;
+        }
+
+        compat::LocalEvidenceContext evidenceContext;
+        evidenceContext.resultId = localResultId(check.planFingerprint);
+        evidenceContext.timestampClass = compat::TimestampClass::MonthBucket;
+        evidenceContext.timestampBucket = inputs.context.referenceMonth;
+        evidenceContext.gameId = gameIt->game.gameId;
+        evidenceContext.providerId = gameIt->game.providerId;
+        evidenceContext.providerAppId = gameIt->game.providerAppId;
+        if (gameIt->game.localVersion) {
+            const auto converted = narrowUtf8(*gameIt->game.localVersion);
+            if (!converted) {
+                showCompatibilityFailure("the selected Game version cannot be represented as UTF-8 evidence identity");
+                (void)refreshTrustedRequirementProjection();
+                return;
+            }
+            evidenceContext.gameVersion = *converted;
+        }
+        evidenceContext.hydraSeatVersion = inputs.context.hydraSeatVersion;
+        evidenceContext.hydraSeatBuild = inputs.context.hydraSeatBuild;
+        evidenceContext.windowsBuildClass = inputs.context.windowsBuildClass;
+        evidenceContext.architecture = inputs.context.architecture;
+        evidenceContext.scenario = model.selection().bindings.size() > 1u
+            ? compat::Scenario::SameGameTwoInstance
+            : compat::Scenario::DifferentGames;
+        evidenceContext.protectedExperimental = false;
+        evidenceContext.provenanceId = "hydraseat-guided-local-check";
+        evidenceContext.provenanceRevision = 1u;
+
+        const compat::LocalCompatibilityEvidenceWriteResult written =
+            compat::writeDefaultLocalCompatibilityEvidence(evidenceContext, *run.report);
+        if (!written.succeeded() || !written.result) {
+            showCompatibilityFailure(written.diagnostic.message.empty()
+                ? "the local compatibility result could not be persisted"
+                : written.diagnostic.message);
+            (void)refreshTrustedRequirementProjection();
+            return;
+        }
+        (void)loadCompatibilityHistoryFromDisk();
+
+        const auto reviewed = proposedRequirements(gameIt->game.gameId);
+        const auto prompt = hydra::ui::formatOne(
+            hydra::ui::TextId::CompatibilityReviewPrompt, locale,
+            requirementSummary(reviewed));
+        const int accepted = MessageBoxW(
+            hwnd, prompt.c_str(), t(hydra::ui::TextId::SectionCompatibility),
+            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
+        if (accepted == IDYES) {
+            requirement::RuntimeRequirementAuthorityReview review;
+            review.game = *gameIt;
+            review.provider = descriptor;
+            review.evidence = *written.result;
+            review.report = *run.report;
+            review.requirements = reviewed;
+            const auto published =
+                requirement::publishRuntimeRequirementAuthorityToDefaultStore(review);
+            if (!published.succeeded()) {
+                lastDiagnostic = widen(published.message);
+            }
+        }
+
+        (void)refreshTrustedRequirementProjection();
+        if (!hasRuntimeRequirement(gameIt->game.gameId)) {
+            offerPhysicalEvidenceSelection(gameIt->game.gameId);
+        }
     }
 
     static std::wstring gameRowMetadata(const catalog::LocalGameCatalogEntry& entry) {
@@ -1557,6 +1965,9 @@ public:
     }
 
     void refreshControls() {
+        const auto previousSeat1Player = selectedPlayerId(seat1Player);
+        const auto previousSeat2Player = selectedPlayerId(seat2Player);
+
         SendMessageW(gameList, LB_RESETCONTENT, 0, 0);
         gameRows.clear();
         gameRows.reserve(model.library().entries.size());
@@ -1571,21 +1982,18 @@ public:
                 focusedIndex = static_cast<int>(index);
             }
         }
-        if (!model.library().entries.empty()) {
-            if (focusedIndex < 0) {
-                focusedIndex = 0;
-                focusedGameId = model.library().entries.front().game.gameId;
-            }
+        if (focusedIndex >= 0) {
             SendMessageW(gameList, LB_SETCURSEL, focusedIndex, 0);
         } else {
             focusedGameId.reset();
+            SendMessageW(gameList, LB_SETCURSEL, static_cast<WPARAM>(-1), 0);
         }
+
         fillPlayerCombo(seat1Player);
         fillPlayerCombo(seat2Player);
-        fillPlayerCombo(playerRoster);
+        if (previousSeat1Player) selectPlayerInCombo(seat1Player, *previousSeat1Player);
+        if (previousSeat2Player) selectPlayerInCombo(seat2Player, *previousSeat2Player);
         syncSeatPresentation();
-        refreshPrivacyControls();
-        refreshLocalResultControls();
         updatePreview();
     }
 
@@ -1633,25 +2041,32 @@ public:
             }
         }
 
-        const BOOL canAssign = selectedGame != nullptr ? TRUE : FALSE;
-        EnableWindow(useSeatOneButton, canAssign);
-        EnableWindow(useSeatTwoButton, canAssign);
-        EnableWindow(useBothSeatsButton, canAssign);
-
         const bool canActivate = currentPreview.summary.canActivate &&
                                  currentPreview.compileResult.plan.has_value();
         const auto* first = bindingForSeat(1u);
         const auto* second = bindingForSeat(2u);
+        const auto firstPlayerChoice = selectedPlayerId(seat1Player);
+        const auto secondPlayerChoice = selectedPlayerId(seat2Player);
         SetWindowTextW(seat1Status,
-            first == nullptr ? t(hydra::ui::TextId::StatusNotSelected)
-                             : (seatReady(1u) ? t(hydra::ui::TextId::StatusReady)
-                                              : t(hydra::ui::TextId::StatusNeedsAttention)));
+            first == nullptr
+                ? (firstPlayerChoice ? t(hydra::ui::TextId::StatusNotSelected)
+                                     : t(hydra::ui::TextId::ChoosePlayer))
+                : (seatReady(1u) ? t(hydra::ui::TextId::StatusReady)
+                                  : t(hydra::ui::TextId::StatusNeedsAttention)));
         SetWindowTextW(seat2Status,
-            second == nullptr ? t(hydra::ui::TextId::StatusNotSelected)
-                              : (seatReady(2u) ? t(hydra::ui::TextId::StatusReady)
-                                               : t(hydra::ui::TextId::StatusNeedsAttention)));
+            second == nullptr
+                ? (secondPlayerChoice ? t(hydra::ui::TextId::StatusNotSelected)
+                                      : t(hydra::ui::TextId::None))
+                : (seatReady(2u) ? t(hydra::ui::TextId::StatusReady)
+                                  : t(hydra::ui::TextId::StatusNeedsAttention)));
 
-        if (model.selection().bindings.empty()) {
+        if (model.players().players.empty()) {
+            SetWindowTextW(launchReason, t(hydra::ui::TextId::AddPlayerToContinue));
+        } else if (!firstPlayerChoice) {
+            SetWindowTextW(launchReason, t(hydra::ui::TextId::ChoosePlayer));
+        } else if (selectedGame == nullptr) {
+            SetWindowTextW(launchReason, t(hydra::ui::TextId::NoGameSelected));
+        } else if (model.selection().bindings.empty()) {
             SetWindowTextW(launchReason, t(hydra::ui::TextId::LaunchSelectionEmpty));
         } else if (canActivate && !activate) {
             SetWindowTextW(launchReason, t(hydra::ui::TextId::RuntimeLaunchUnavailable));
@@ -1679,25 +2094,15 @@ public:
     }
 
     void syncSeatPresentation() {
-        SendMessageW(seat1Player, CB_SETCURSEL, 0, 0);
-        SendMessageW(seat2Player, CB_SETCURSEL, 0, 0);
-        SetWindowTextW(seat1Game, t(hydra::ui::TextId::None));
-        SetWindowTextW(seat2Game, t(hydra::ui::TextId::None));
         for (const auto& binding : model.selection().bindings) {
             HWND playerCombo = binding.seatId == 1u ? seat1Player : seat2Player;
-            HWND gameLabel = binding.seatId == 1u ? seat1Game : seat2Game;
+            if (selectedPlayerId(playerCombo)) continue;
             const auto player = std::find_if(
                 model.players().players.begin(), model.players().players.end(),
                 [&](const auto& value) { return value.playerId == binding.playerId; });
-            const auto game = std::find_if(
-                model.library().entries.begin(), model.library().entries.end(),
-                [&](const auto& value) { return value.game.gameId == binding.gameId; });
             if (player != model.players().players.end()) {
                 const auto offset = std::distance(model.players().players.begin(), player);
                 SendMessageW(playerCombo, CB_SETCURSEL, offset + 1, 0);
-            }
-            if (game != model.library().entries.end()) {
-                SetWindowTextW(gameLabel, game->game.title.c_str());
             }
         }
     }
@@ -1726,35 +2131,15 @@ public:
 
         SetWindowTextW(playerName, L"");
         refreshControls();
-        if (previousSeat1Player) selectPlayerInCombo(seat1Player, *previousSeat1Player);
+        if (previousSeat1Player) {
+            selectPlayerInCombo(seat1Player, *previousSeat1Player);
+        } else {
+            // A newly created Player should be immediately usable and visibly
+            // selected instead of appearing to vanish into a separate settings page.
+            selectPlayerInCombo(seat1Player, playerId);
+        }
         if (previousSeat2Player) selectPlayerInCombo(seat2Player, *previousSeat2Player);
-
-        if (pendingSeatAssignment) {
-            const SeatId seatId = *pendingSeatAssignment;
-            HWND combo = seatId == 1u ? seat1Player : seat2Player;
-            if (!selectedPlayerId(combo)) selectPlayerInCombo(combo, playerId);
-            advancedPage = false;
-            applyLayout();
-            assignSelectedGame(seatId, combo);
-            return;
-        }
-
-        if (pendingBothAssignment) {
-            if (!selectedPlayerId(seat1Player)) {
-                selectPlayerInCombo(seat1Player, playerId);
-            } else if (!selectedPlayerId(seat2Player)) {
-                selectPlayerInCombo(seat2Player, playerId);
-            }
-            advancedPage = false;
-            applyLayout();
-            if (selectedPlayerId(seat1Player) && selectedPlayerId(seat2Player)) {
-                assignSelectedGameToBoth();
-            } else {
-                lastDiagnostic = t(hydra::ui::TextId::ChooseSecondPlayerToContinue);
-                updatePreview();
-                SetFocus(!selectedPlayerId(seat1Player) ? seat1Player : seat2Player);
-            }
-        }
+        applyPrimarySelection();
     }
 
     void renamePlayer() {
@@ -1933,7 +2318,6 @@ public:
     }
 
     void showPlayerCreationForPendingAssignment() {
-        advancedPage = true;
         lastDiagnostic = t(hydra::ui::TextId::AddPlayerToContinue);
         applyLayout();
         updatePreview();
@@ -2083,22 +2467,17 @@ public:
     }
 
     void updatePreview() {
-        SendMessageW(diagnostics, LB_RESETCONTENT, 0, 0);
-        if (!lastDiagnostic.empty()) {
-            SendMessageW(diagnostics, LB_ADDSTRING, 0,
-                         reinterpret_cast<LPARAM>(lastDiagnostic.c_str()));
-        }
         currentPreview = model.preview();
-        for (const auto& message : currentPreview.summary.messages) {
-            const auto localized = hydra::ui::preflightText(message.code, locale);
-            const auto line = localized.empty() ? widen(message.userMessage)
-                                                : std::wstring(localized);
-            SendMessageW(diagnostics, LB_ADDSTRING, 0,
-                         reinterpret_cast<LPARAM>(line.c_str()));
-        }
         const bool canActivate = currentPreview.summary.canActivate &&
                                  currentPreview.compileResult.plan.has_value();
-        EnableWindow(playButton, canActivate && static_cast<bool>(activate) ? TRUE : FALSE);
+        const bool canCheck = selectedLibraryGame() != nullptr &&
+                              selectedPlayerId(seat1Player).has_value();
+        SetWindowTextW(playButton, canActivate
+            ? t(hydra::ui::TextId::Play)
+            : t(hydra::ui::TextId::CheckCompatibility));
+        EnableWindow(playButton,
+                     canActivate ? (static_cast<bool>(activate) ? TRUE : FALSE)
+                                 : (canCheck ? TRUE : FALSE));
         updateHero();
     }
 
@@ -2115,7 +2494,10 @@ public:
                 ? std::wstring(t(hydra::ui::TextId::RuntimeLaunchUnavailable))
                 : result.message;
             updatePreview();
-            MessageBoxW(hwnd, lastDiagnostic.c_str(),
+            const auto userMessage = t(hydra::ui::TextId::RuntimeLaunchUnavailable);
+            SetWindowTextW(launchReason, userMessage);
+            applyLayout();
+            MessageBoxW(hwnd, userMessage,
                         t(hydra::ui::TextId::PlayDialogTitle), MB_OK | MB_ICONERROR);
             return;
         }
@@ -2127,8 +2509,9 @@ public:
         }
         lastDiagnostic = result.message.empty()
             ? std::wstring(t(hydra::ui::TextId::StatusStartingGame)) : result.message;
-        SetWindowTextW(heroStatus, t(hydra::ui::TextId::StatusStartingGame));
-        SetWindowTextW(launchReason, lastDiagnostic.c_str());
+        const auto starting = t(hydra::ui::TextId::StatusStartingGame);
+        SetWindowTextW(heroStatus, starting);
+        SetWindowTextW(launchReason, starting);
         EnableWindow(playButton, FALSE);
     }
 
@@ -2142,63 +2525,33 @@ public:
             refreshControls();
         } else if (id == kGameList && notification == LBN_SELCHANGE) {
             clearPendingAssignment();
-            updateHero();
+            applyPrimarySelection();
         } else if (id == kAddExe && notification == BN_CLICKED) {
             addExecutable();
         } else if (id == kAddPlayer && notification == BN_CLICKED) {
             addPlayer();
-        } else if (id == kRenamePlayer && notification == BN_CLICKED) {
-            renamePlayer();
-        } else if (id == kRemovePlayer && notification == BN_CLICKED) {
-            removePlayer();
         } else if (id == kSeat1Player && notification == CBN_SELCHANGE) {
-            updatePlayerForAssignedSeat(1u, seat1Player);
+            applyPrimarySelection();
         } else if (id == kSeat2Player && notification == CBN_SELCHANGE) {
-            updatePlayerForAssignedSeat(2u, seat2Player);
-        } else if (id == kUseSelectedSeatOne && notification == BN_CLICKED) {
-            assignSelectedGame(1u, seat1Player);
-        } else if (id == kUseSelectedSeatTwo && notification == BN_CLICKED) {
-            assignSelectedGame(2u, seat2Player);
-        } else if (id == kUseSelectedBothSeats && notification == BN_CLICKED) {
-            assignSelectedGameToBoth();
-        } else if (id == kCreateSetup && notification == BN_CLICKED) {
-            createSetup();
-        } else if (id == kPrivacySave && notification == BN_CLICKED) {
-            savePrivacySettings();
-        } else if (id == kExportLocalResult && notification == BN_CLICKED) {
-            exportSelectedLocalResult();
-        } else if (id == kDeleteLocalResult && notification == BN_CLICKED) {
-            deleteSelectedLocalResult();
-        } else if (id == kClearLocalResults && notification == BN_CLICKED) {
-            clearLocalResults();
-        } else if (id == kSetupNavigation && notification == BN_CLICKED) {
-            advancedPage = true;
-            updatePageVisibility();
-            applyLayout();
-            SetFocus(backToGames);
-        } else if (id == kBackToGames && notification == BN_CLICKED) {
-            advancedPage = false;
-            updatePageVisibility();
-            applyLayout();
-            SetFocus(setupNavigation);
+            applyPrimarySelection();
         } else if (id == kConfigure && notification == BN_CLICKED) {
-            exitAction = LauncherExitAction::OpenSetupAndDiagnostics;
+            exitAction = LauncherExitAction::OpenHardwareSetup;
             DestroyWindow(hwnd);
         } else if (id == kPlay && notification == BN_CLICKED) {
-            play();
+            if (currentPreview.summary.canActivate && currentPreview.compileResult.plan) {
+                play();
+            } else {
+                runSelectedCompatibilityCheck();
+            }
         }
     }
 
     HWND hwnd{nullptr};
     HWND headerTitle{nullptr};
     HWND headerSubtitle{nullptr};
-    HWND setupNavigation{nullptr};
     HWND heroEyebrow{nullptr};
     HWND heroTitle{nullptr};
     HWND heroStatus{nullptr};
-    HWND useSeatOneButton{nullptr};
-    HWND useSeatTwoButton{nullptr};
-    HWND useBothSeatsButton{nullptr};
     HWND configureButton{nullptr};
     HWND seatsLabel{nullptr};
     HWND seat1Label{nullptr};
@@ -2207,12 +2560,7 @@ public:
     HWND seat2Status{nullptr};
     HWND libraryLabel{nullptr};
     HWND launchReason{nullptr};
-    HWND advancedHeading{nullptr};
-    HWND backToGames{nullptr};
     HWND playerNameLabel{nullptr};
-    HWND privacyHeading{nullptr};
-    HWND privacyRetentionLabel{nullptr};
-    HWND localResultsHeading{nullptr};
     HWND gameList{nullptr};
     HWND refreshButton{nullptr};
     HWND addExeButton{nullptr};
@@ -2222,11 +2570,7 @@ public:
     HWND renamePlayerButton{nullptr};
     HWND removePlayerButton{nullptr};
     HWND seat1Player{nullptr};
-    HWND seat1Game{nullptr};
     HWND seat2Player{nullptr};
-    HWND seat2Game{nullptr};
-    HWND setupButton{nullptr};
-    HWND diagnostics{nullptr};
     HWND privacySharing{nullptr};
     HWND privacyRetention{nullptr};
     HWND privacySave{nullptr};
@@ -2255,6 +2599,7 @@ public:
     std::vector<plan::ProviderAdapterBinding> providers;
     catalog::LocalGameCatalog library;
     LauncherUiModel model;
+    std::optional<std::filesystem::path> launcherUserStateRoot;
     bool playerProfilesWritable{true};
     community::CompatibilityShareModel privacyModel;
     std::unique_ptr<community::CompatibilityLocalStore> compatibilityStore;
@@ -2267,11 +2612,9 @@ public:
     bool pendingBothAssignment{false};
     std::wstring lastDiagnostic;
     std::uint64_t setupCounter{0u};
-    bool advancedPage{false};
     LauncherExitAction exitAction{LauncherExitAction::Closed};
     hydra::ui::LauncherLayout layout;
     std::vector<HWND> primaryControls;
-    std::vector<HWND> advancedControls;
 };
 
 LRESULT CALLBACK windowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -2285,7 +2628,9 @@ LRESULT CALLBACK windowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
         if (state->drawItem(reinterpret_cast<const DRAWITEMSTRUCT*>(lParam))) return TRUE;
     }
     if (message == DM_GETDEFID && state != nullptr) {
-        if (!state->advancedPage && state->playButton != nullptr &&
+        if (state->playButton != nullptr &&
+            state->currentPreview.summary.canActivate &&
+            state->currentPreview.compileResult.plan.has_value() &&
             IsWindowVisible(state->playButton) != FALSE &&
             IsWindowEnabled(state->playButton) != FALSE) {
             return MAKELRESULT(kPlay, DC_HASDEFID);
@@ -2350,7 +2695,8 @@ LauncherExitAction showLauncherWindow(
     HWND owner,
     profile::SeatConfigDocument seats,
     std::vector<plan::GameRuntimeRequirement> requirements,
-    LauncherActivate activate) {
+    LauncherActivate activate,
+    LauncherNavigationState* navigationState) {
     const auto instance = GetModuleHandleW(nullptr);
     const auto locale = hydra::ui::systemLocale();
     WNDCLASSEXW windowClass{sizeof(WNDCLASSEXW)};
@@ -2371,7 +2717,9 @@ LauncherExitAction showLauncherWindow(
                  static_cast<LONG>((720u * dpi + 95u) / 96u)};
     adjustWindowRectForDpiCompat(
         initial, WS_OVERLAPPEDWINDOW, WS_EX_DLGMODALFRAME, dpi);
-    WindowState state(std::move(seats), std::move(requirements), std::move(activate));
+    WindowState state(
+        std::move(seats), std::move(requirements), std::move(activate),
+        navigationState == nullptr ? std::nullopt : navigationState->selectedGameId);
     HWND window = CreateWindowExW(
         WS_EX_DLGMODALFRAME, kWindowClass,
         hydra::ui::text(hydra::ui::TextId::GamesWindowTitle, locale).data(),
@@ -2389,9 +2737,15 @@ LauncherExitAction showLauncherWindow(
     if (owner != nullptr) EnableWindow(owner, FALSE);
     ShowWindow(window, SW_SHOW);
     UpdateWindow(window);
-    if (state.gameList != nullptr && IsWindowVisible(state.gameList) != FALSE &&
-        IsWindowEnabled(state.gameList) != FALSE) {
-        SetFocus(state.gameList);
+    HWND initialFocus = state.gameList;
+    if (state.model.players().players.empty()) {
+        initialFocus = state.playerName;
+    } else if (!state.selectedPlayerId(state.seat1Player)) {
+        initialFocus = state.seat1Player;
+    }
+    if (initialFocus != nullptr && IsWindowVisible(initialFocus) != FALSE &&
+        IsWindowEnabled(initialFocus) != FALSE) {
+        SetFocus(initialFocus);
     }
     MSG message;
     bool quitRequested = false;
@@ -2401,6 +2755,7 @@ LauncherExitAction showLauncherWindow(
             quitRequested = result == 0;
             break;
         }
+        if (activateFocusedButtonWithEnter(window, message)) continue;
         if (!IsDialogMessageW(window, &message)) {
             TranslateMessage(&message);
             DispatchMessageW(&message);
@@ -2416,6 +2771,9 @@ LauncherExitAction showLauncherWindow(
     if (state.canvasBrush != nullptr) DeleteObject(state.canvasBrush);
     if (state.raisedBrush != nullptr) DeleteObject(state.raisedBrush);
     if (state.surfaceBrush != nullptr) DeleteObject(state.surfaceBrush);
+    if (navigationState != nullptr) {
+        navigationState->selectedGameId = state.focusedGameId;
+    }
     if (quitRequested) PostQuitMessage(static_cast<int>(message.wParam));
     return state.exitAction;
 }

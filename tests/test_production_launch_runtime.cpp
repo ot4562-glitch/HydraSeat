@@ -164,6 +164,7 @@ public:
             plan::GameRuntimeRequirement runtimeRequirement;
             runtimeRequirement.gameId = seat.gameId;
             runtimeRequirement.revision = seat.requirementRevision;
+            runtimeRequirement.validatedSeatCount = 2u;
             runtimeRequirement.requirements = seat.requirements;
             runtimeRequirement.capabilities = seat.capabilities;
             runtimeRequirement.highRiskApproved = false;

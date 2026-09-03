@@ -201,10 +201,20 @@ void testTwoSeatUiProcesses() {
                        L"--expect recovery --hold-ms 200" + reportArgument(recoveryReport),
                        recoveryUi),
           "isolated processes exercise playing and recovery presentation states");
-    check(waitExit(playingUi) == 0 && waitExit(recoveryUi) == 0 &&
-              readFile(playingReport).find("\"phase\":\"playing\"") != std::string::npos &&
-              readFile(recoveryReport).find("\"phase\":\"recovery\"") != std::string::npos,
-          "controlled playing and recovery states remain independent and bounded");
+    const auto playingExit = waitExit(playingUi);
+    const auto recoveryExit = waitExit(recoveryUi);
+    const auto playingJson = readFile(playingReport);
+    const auto recoveryJson = readFile(recoveryReport);
+    check(playingExit == 0 && recoveryExit == 0 &&
+              playingJson.find("\"phase\":\"playing\"") != std::string::npos &&
+              playingJson.find("\"compact_presentation\":true") != std::string::npos &&
+              playingJson.find("\"show_end_playing\":true") != std::string::npos &&
+              playingJson.find("\"show_reconnect\":false") != std::string::npos &&
+              recoveryJson.find("\"phase\":\"recovery\"") != std::string::npos &&
+              recoveryJson.find("\"compact_presentation\":false") != std::string::npos &&
+              recoveryJson.find("\"show_end_playing\":true") != std::string::npos &&
+              recoveryJson.find("\"show_reconnect\":true") != std::string::npos,
+          "controlled playing stays compact while recovery exposes only relevant actions");
 
     const auto exit = management.command(
         hydra::hostipc::MessageType::ExitHostWhenIdle, 2000u, &error);

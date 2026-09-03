@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,7 +16,7 @@ namespace hydra::launcher_ui {
 
 enum class LauncherExitAction {
     Closed,
-    OpenSetupAndDiagnostics,
+    OpenHardwareSetup,
 };
 
 enum class LauncherActivationStatus {
@@ -38,6 +39,13 @@ struct LauncherActivationResult {
     }
 };
 
+// Bounded in-process navigation state. This survives only while the management
+// app switches between Games and Hardware Setup; it is not runtime authority or
+// a durable game/profile record.
+struct LauncherNavigationState {
+    std::optional<std::string> selectedGameId;
+};
+
 using LauncherActivate = std::function<LauncherActivationResult(
     const plan::ProviderAwareLaunchPlan&)>;
 
@@ -48,7 +56,8 @@ LauncherExitAction showLauncherWindow(
     HWND owner,
     profile::SeatConfigDocument seats,
     std::vector<plan::GameRuntimeRequirement> requirements,
-    LauncherActivate activate = {});
+    LauncherActivate activate = {},
+    LauncherNavigationState* navigationState = nullptr);
 
 } // namespace hydra::launcher_ui
 

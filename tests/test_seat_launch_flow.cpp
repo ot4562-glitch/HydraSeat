@@ -99,6 +99,7 @@ plan::GameRuntimeRequirement requirement(std::string gameId) {
     plan::GameRuntimeRequirement value;
     value.gameId = std::move(gameId);
     value.revision = 12u;
+    value.validatedSeatCount = 2u;
     value.requirements.keyboard = true;
     value.requirements.mouse = true;
     value.compatibility = compatibility();

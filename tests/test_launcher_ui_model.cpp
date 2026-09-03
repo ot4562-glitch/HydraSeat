@@ -106,6 +106,7 @@ plan::GameRuntimeRequirement requirement(std::string gameId) {
     plan::GameRuntimeRequirement value;
     value.gameId = std::move(gameId);
     value.revision = 8u;
+    value.validatedSeatCount = 2u;
     value.requirements.keyboard = true;
     value.requirements.mouse = true;
     value.compatibility = compatibility();
@@ -177,6 +178,9 @@ void testTransactionalRefreshAndRequirementEvidence() {
     check(model.createPlayer(L"Player", "en-US", std::nullopt, player).succeeded() &&
               model.selectGame(1u, player, "game-one").succeeded(),
           "fixture selection succeeds");
+    check(model.clearSeat(2u).succeeded() && model.selection().bindings.size() == 1u &&
+              model.selection().bindings.front().seatId == 1u,
+          "clearing an already unused Seat is an idempotent UI action and preserves the other Seat");
 
     auto reduced = library();
     reduced.entries.erase(reduced.entries.begin());

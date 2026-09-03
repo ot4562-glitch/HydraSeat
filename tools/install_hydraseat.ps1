@@ -3,6 +3,8 @@
 param(
     [Parameter(Mandatory = $true)][ValidateSet("Install", "Repair", "Uninstall", "Validate")][string]$Mode,
     [string]$PackageRoot,
+    [string]$ExpectedReleaseVersion = "",
+    [UInt64]$ExpectedReleaseRevision = 0,
     [switch]$LaunchAfterInstall,
     [switch]$RemoveHydraSeatUserData
 )
@@ -31,7 +33,19 @@ $OwnedFiles = @(
     "hydraseat_community_validate.exe",
     "install_hydraseat.ps1"
 )
-$OwnedArtifactIds = @{
+$PackageFiles = @(
+    "HydraSeatSetup.exe",
+    "HydraSeat.exe",
+    "hydra_host.exe",
+    "hydra_seat_ui.exe",
+    "hydra_watchdog.exe",
+    "hydra_reset.exe",
+    "hydraseat_profilectl.exe",
+    "hydraseat_community_validate.exe",
+    "install_hydraseat.ps1"
+)
+$PackageArtifactIds = @{
+    "HydraSeatSetup.exe" = "setup-bootstrap"
     "HydraSeat.exe" = "main-ui"
     "hydra_host.exe" = "host"
     "hydra_seat_ui.exe" = "seat-ui"
@@ -186,8 +200,8 @@ function Get-ValidatedPackage {
     }
 
     $records = @($provenance.artifacts)
-    if ($records.Count -ne $OwnedFiles.Count) {
-        throw "Release package does not contain the exact owned file set for $Architecture"
+    if ($records.Count -ne $PackageFiles.Count) {
+        throw "Release package does not contain the exact reviewed package file set for $Architecture"
     }
     $expectedRecordFields = @(
         "id", "kind", "target", "architecture", "fileName", "unsignedSha256",
@@ -206,8 +220,8 @@ function Get-ValidatedPackage {
             }
         }
         $fileName = [string]$record.fileName
-        if ($OwnedFiles -notcontains $fileName -or $seen.ContainsKey($fileName)) {
-            throw "Unexpected or duplicate owned release file"
+        if ($PackageFiles -notcontains $fileName -or $seen.ContainsKey($fileName)) {
+            throw "Unexpected or duplicate reviewed release package file"
         }
         $seen[$fileName] = $true
         $expectedKind = if ($fileName.EndsWith(".ps1", [StringComparison]::OrdinalIgnoreCase)) {
@@ -215,7 +229,7 @@ function Get-ValidatedPackage {
         } else {
             "cmake-executable"
         }
-        if ([string]$record.id -ne [string]$OwnedArtifactIds[$fileName] -or
+        if ([string]$record.id -ne [string]$PackageArtifactIds[$fileName] -or
             [string]$record.kind -ne $expectedKind -or
             [string]$record.architecture -ne $Architecture) {
             throw "Release artifact identity/type/architecture does not match the fixed HydraSeat product contract"
@@ -241,17 +255,21 @@ function Get-ValidatedPackage {
         }
         $validated += [ordered]@{ fileName = $fileName; sourcePath = $filePath; sha256 = $hash }
     }
-    foreach ($fileName in $OwnedFiles) {
+    foreach ($fileName in $PackageFiles) {
         if (-not $seen.ContainsKey($fileName)) {
-            throw "Release package missing owned file: $fileName"
+            throw "Release package missing reviewed package file: $fileName"
         }
+    }
+    $installFiles = @($validated | Where-Object { $OwnedFiles -contains [string]$_.fileName })
+    if ($installFiles.Count -ne $OwnedFiles.Count) {
+        throw "Verified release package did not project the exact install-owned file set"
     }
     return [ordered]@{
         releaseVersion = [string]$provenance.releaseVersion
         releaseRevision = [UInt64]$provenance.releaseRevision
         commitSha = [string]$provenance.commitSha
         architecture = $Architecture
-        files = $validated
+        files = $installFiles
     }
 }
 
@@ -866,6 +884,19 @@ function Remove-EmptyMachineDataRoots {
 Assert-OwnedDirectoryNotReparsePoint -Path $InstallRoot -Label "HydraSeat install root"
 Assert-OwnedDirectoryNotReparsePoint -Path $DataRoot -Label "HydraSeat machine-data root"
 
+$hasExpectedReleaseVersion = -not [string]::IsNullOrWhiteSpace($ExpectedReleaseVersion)
+$hasExpectedReleaseRevision = $ExpectedReleaseRevision -ne 0
+if ($hasExpectedReleaseVersion -ne $hasExpectedReleaseRevision) {
+    throw "Expected release identity requires both version and revision"
+}
+if ($hasExpectedReleaseVersion) {
+    if ($ExpectedReleaseVersion -notmatch '^[A-Za-z0-9._+-]{1,64}\z') {
+        throw "Expected release version is invalid"
+    }
+    if ($Mode -notin @("Install", "Repair")) {
+        throw "Expected release identity is valid only for Install/Repair"
+    }
+}
 if ($Mode -eq "Validate") {
     Assert-NoPendingInstallerTransactions
     $OwnSigner = Get-OwnSignerThumbprint
@@ -954,6 +985,11 @@ if ($Mode -eq "Uninstall") {
 }
 
 $package = Get-ValidatedPackage -Root $PackageRoot -ExpectedSigner $OwnSigner
+if ($hasExpectedReleaseVersion -and
+    ([string]$package.releaseVersion -ne [string]$ExpectedReleaseVersion -or
+     [UInt64]$package.releaseRevision -ne [UInt64]$ExpectedReleaseRevision)) {
+    throw "Verified release package does not match the user-confirmed release identity"
+}
 $previous = Read-InstallState
 if ($Mode -eq "Install" -and $null -ne $previous) {
     throw "HydraSeat is already installed; use Repair or the approved update flow"

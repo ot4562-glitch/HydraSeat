@@ -91,6 +91,16 @@ SessionMetricsBuildInput complete(EvidenceOrigin origin) {
     return input;
 }
 
+SessionMetricsBuildInput completeSingleSeat(EvidenceOrigin origin) {
+    SessionMetricsBuildInput input;
+    input.planFingerprint = 0x23456789u;
+    input.origin = origin;
+    appendCompleteEvent(input.input, 1u, 1000u, 1u, 101u);
+    input.seats = {seat(1u, 1000u)};
+    input.finalState = SessionFinalState::Running;
+    return input;
+}
+
 void testControlledPassIsNotPhysicalValidation() {
     const auto input = complete(EvidenceOrigin::ControlledProcess);
     SessionMetricsReport report;
@@ -138,6 +148,20 @@ void testPhysicalPassIsExplicitlyEligible() {
               report.sessionVerdict == EvidenceVerdict::Pass &&
               report.physicalValidationEligible,
           "only complete physical evidence can become physical-validation eligible");
+}
+
+void testSingleSeatPhysicalPassIsExplicitlyEligible() {
+    auto input = completeSingleSeat(EvidenceOrigin::Physical);
+    input.finalState = SessionFinalState::ReturnedToWindows;
+    input.rollbackAttempted = true;
+    input.rollbackVerified = true;
+    SessionMetricsReport report;
+    check(buildSessionMetricsReport(input, report) == SessionMetricsResult::Success &&
+              report.seats.size() == 1u && report.seats.front().seatId == 1u &&
+              report.isolationVerdict == EvidenceVerdict::Pass &&
+              report.sessionVerdict == EvidenceVerdict::Pass &&
+              report.physicalValidationEligible,
+          "one complete physical Seat can produce eligible evidence without inventing a second Seat");
 }
 
 void testMissingReceiverEvidenceNeverBecomesZeroBleedPass() {
@@ -225,10 +249,16 @@ void testInputValidationFailsClosed() {
           "zero plan fingerprint is rejected");
 
     input = complete(EvidenceOrigin::Synthetic);
-    input.seats.resize(1);
+    input.seats.clear();
     check(buildSessionMetricsReport(input, report) ==
               SessionMetricsResult::InvalidSeatCount,
-          "integrated two-Seat report requires exactly two Seat metric records");
+          "session evidence requires at least one Seat metric record");
+
+    input = complete(EvidenceOrigin::Synthetic);
+    input.seats.push_back(seat(3u, 3000u));
+    check(buildSessionMetricsReport(input, report) ==
+              SessionMetricsResult::InvalidSeatCount,
+          "session evidence remains bounded to at most two Seat metric records");
 
     input = complete(EvidenceOrigin::Synthetic);
     input.seats[1].seatId = input.seats[0].seatId;
@@ -255,6 +285,7 @@ void testInputValidationFailsClosed() {
 int main() {
     testControlledPassIsNotPhysicalValidation();
     testPhysicalPassIsExplicitlyEligible();
+    testSingleSeatPhysicalPassIsExplicitlyEligible();
     testMissingReceiverEvidenceNeverBecomesZeroBleedPass();
     testVerifiedCrossSeatEvidenceFails();
     testLossAndIncompleteCapabilityAreInsufficient();

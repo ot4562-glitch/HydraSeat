@@ -370,6 +370,25 @@ public:
         return receiverVerified && devicesPresent;
     }
 
+    bool inputMetricsSnapshot(const ProductionGateCSessionRequest& request,
+                              InputMetricsSnapshot& snapshot,
+                              std::string& error) override {
+        std::lock_guard lock(mutex);
+        ++metricsCalls;
+        const auto found = active.find(request.epoch.seatId);
+        if (failMetrics || found == active.end() ||
+            !found->second.process.authoritativeProcess.sameInstance(
+                request.process.authoritativeProcess) ||
+            found->second.process.handoffGeneration != request.process.handoffGeneration) {
+            error = "fake Gate-C metrics snapshot rejected stale/missing exact session";
+            snapshot = {};
+            return false;
+        }
+        snapshot = metricsSnapshot;
+        error.clear();
+        return true;
+    }
+
     bool stop(const ProductionGateCSessionRequest& request,
               std::string& error) noexcept override {
         std::lock_guard lock(mutex);
@@ -403,13 +422,16 @@ public:
     std::map<SeatId, ProductionGateCSessionRequest> active;
     std::atomic<bool> failStart{false};
     std::atomic<bool> failVerify{false};
+    std::atomic<bool> failMetrics{false};
     std::atomic<bool> failStop{false};
     std::atomic<bool> receiverVerified{true};
     std::atomic<bool> devicesPresent{true};
     std::atomic<bool> transportPresent{true};
+    InputMetricsSnapshot metricsSnapshot;
     std::uint64_t sequence{0};
     std::uint32_t startCalls{0};
     std::uint32_t verifyCalls{0};
+    std::uint32_t metricsCalls{0};
     std::uint32_t stopCalls{0};
 };
 
@@ -554,6 +576,17 @@ void testContextOrderingAndExactAttachment() {
     check(input->activate(error), "Input activates after exact ProcessIdentity publication");
     check(input->verifyActive(error) && input->active(),
           "Input success requires current receiver-side Gate-C and recovery verification");
+    harness.gateRuntime->metricsSnapshot.acceptedSamples = 3u;
+    InputMetricsSnapshot liveMetrics;
+    check(harness.bridges->inputMetricsSnapshot(plan, liveMetrics, error) &&
+              liveMetrics.acceptedSamples == 3u && harness.gateRuntime->metricsCalls == 1u,
+          "read-only metrics observation succeeds only through the exact active Gate-C receiver session");
+    auto wrongFingerprintPlan = plan;
+    ++wrongFingerprintPlan.fingerprint;
+    InputMetricsSnapshot wrongFingerprintMetrics;
+    check(!harness.bridges->inputMetricsSnapshot(
+              wrongFingerprintPlan, wrongFingerprintMetrics, error),
+          "metrics observation rejects a different immutable Seat plan fingerprint");
     const auto registration = harness.recoveryRuntime->registration(1u);
     check(registration && registration->identity.seatId == 1u &&
               registration->identity.hostSessionId == context->snapshot().epoch.sessionId &&
@@ -573,6 +606,9 @@ void testContextOrderingAndExactAttachment() {
 
     check(input->rollback(error) && input->verifySafe(error),
           "Input rollback restores HidHide and verifies Gate-C receiver teardown");
+    InputMetricsSnapshot afterRollbackMetrics;
+    check(!harness.bridges->inputMetricsSnapshot(plan, afterRollbackMetrics, error),
+          "metrics observation fails closed as soon as Input rollback removes live receiver authority");
     context->invalidate();
     check(recovery->rollback(error) && recovery->verifySafe(error),
           "Recovery disarms only after exact Process context is invalidated/teardown-complete");
@@ -597,6 +633,25 @@ void testPhysicalEvidenceAndContextPolicy() {
         plan, noEvidenceContext, error);
     check(noEvidenceInput && !noEvidenceInput->prepare(plan, binding, error),
           "physical production Input rejects missing P3-HW evidence before mutation");
+
+    auto noProfileConfig = harness.config;
+    noProfileConfig.gateCProfiles.clear();
+    noProfileConfig.inputEvidenceClass = ProductionInputEvidenceClass::None;
+    noProfileConfig.physicalAcceptanceEvidence.reset();
+    auto noProfileBridge = makeProductionActivationResourceBridges(
+        noProfileConfig, harness.dependencies);
+    auto noProfileRecoveryContext = std::make_shared<TestActivationContext>(
+        epochFor(1u, plan.fingerprint));
+    auto noProfileRecovery = noProfileBridge->createRecoveryResource(
+        plan, noProfileRecoveryContext, error);
+    check(noProfileRecovery != nullptr,
+          "base Host composition can provide Recovery without inventing a Game Gate-C profile");
+    auto noProfileInputContext = std::make_shared<TestActivationContext>(
+        epochFor(1u, plan.fingerprint));
+    auto noProfileInput = noProfileBridge->createInputResource(
+        plan, noProfileInputContext, error);
+    check(!noProfileInput && error.find("no trusted production Gate-C profile") != std::string::npos,
+          "base Host composition keeps keyboard/mouse Input fail-closed without an exact reviewed Game profile");
 
     auto syntheticConfig = harness.config;
     syntheticConfig.inputEvidenceClass = ProductionInputEvidenceClass::Synthetic;

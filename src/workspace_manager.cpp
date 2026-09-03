@@ -560,7 +560,7 @@ void WorkspaceManager::removeUnusedShareableResources() {
     }
 }
 
-bool WorkspaceManager::saveToFile(const std::string& filePath) const {
+bool WorkspaceManager::saveToFile(const std::filesystem::path& filePath) const {
     m_lastError.clear();
     try {
         std::ostringstream out;
@@ -611,18 +611,18 @@ bool WorkspaceManager::saveToFile(const std::string& filePath) const {
         }
 
         const auto bytes = out.str();
-        return writeFileAtomically(std::filesystem::path(filePath), bytes, m_lastError);
+        return writeFileAtomically(filePath, bytes, m_lastError);
     } catch (const std::exception& e) {
         m_lastError = e.what();
         return false;
     }
 }
 
-bool WorkspaceManager::loadFromFile(const std::string& filePath) {
+bool WorkspaceManager::loadFromFile(const std::filesystem::path& filePath) {
     m_lastError.clear();
     try {
         std::string profileBytes;
-        if (!readBoundedFile(std::filesystem::path(filePath), profileBytes, m_lastError)) {
+        if (!readBoundedFile(filePath, profileBytes, m_lastError)) {
             return false;
         }
         const auto root = objectOf(parseJson(profileBytes));

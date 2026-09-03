@@ -234,11 +234,33 @@ struct ProductionLaunchServices {
     std::shared_ptr<audio::RouteBackend> audioRouteBackend;
 };
 
+// Narrow production composition seam shared by the Host and guided validation.
+// The mutable activation authority remains private to the implementation; callers
+// can bind only an immutable epoch/executable allowlist and receive a read-only
+// context snapshot for the exact Seat plan.
+class IProductionSeatActivationResourceFactory
+    : public launch::ISeatActivationResourceFactory {
+public:
+    ~IProductionSeatActivationResourceFactory() override = default;
+
+    virtual bool bindActivationEpoch(
+        const launch::SeatActivationPlan& plan,
+        const ProductionActivationEpoch& epoch,
+        std::string& error) = 0;
+    virtual bool bindTrustedHandoffExecutables(
+        const launch::SeatActivationPlan& plan,
+        std::vector<std::wstring> executablePaths,
+        std::string& error) = 0;
+    virtual ProductionActivationContextHandle activationContext(
+        const launch::SeatActivationPlan& plan,
+        std::string& error) = 0;
+};
+
 // Reuses the existing P5 transaction interface. The default implementation uses
 // real ProcessLauncher/WindowTracker/display inventory/controller inventory/Core
 // Audio observation and the injected Gate-C input bridge. Unsupported mutation
 // paths fail closed; they are never silently replaced with synthetic resources.
-std::shared_ptr<launch::ISeatActivationResourceFactory>
+std::shared_ptr<IProductionSeatActivationResourceFactory>
 makeProductionSeatActivationResourceFactory(
     ProductionLaunchServices services = {});
 

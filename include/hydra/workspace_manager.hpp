@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -88,9 +89,11 @@ public:
     const SeatConfig* getSeat(SeatId seatId) const;
     std::vector<SeatConfig> getAllSeats() const;
 
-    bool saveToFile(const std::string& filePath = "workspace_config.json") const;
+    bool saveToFile(
+        const std::filesystem::path& filePath = std::filesystem::path{"workspace_config.json"}) const;
     // Loading is transactional: any parse or validation failure leaves state intact.
-    bool loadFromFile(const std::string& filePath = "workspace_config.json");
+    bool loadFromFile(
+        const std::filesystem::path& filePath = std::filesystem::path{"workspace_config.json"});
     const std::string& lastError() const noexcept { return m_lastError; }
 
     // Compatibility wrappers for existing WorkspaceManager callers.

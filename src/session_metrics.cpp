@@ -79,7 +79,8 @@ SessionMetricsResult buildSessionMetricsReport(
     if (source.planFingerprint == 0) {
         return SessionMetricsResult::InvalidPlanFingerprint;
     }
-    if (source.seats.size() != kMaximumSessionMetricSeats) {
+    if (source.seats.size() < kMinimumSessionMetricSeats ||
+        source.seats.size() > kMaximumSessionMetricSeats) {
         return SessionMetricsResult::InvalidSeatCount;
     }
     if (source.rollbackVerified && !source.rollbackAttempted) {

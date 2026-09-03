@@ -155,11 +155,15 @@ bool writeReport(const Options& options, const SeatLauncherModel& model,
     std::ofstream stream(options.reportPath, std::ios::binary | std::ios::trunc);
     if (!stream) return false;
     const auto& state = model.state();
+    const auto presentation = hydra::seatui::seatLauncherPresentation(state);
     stream << "{\"schema_version\":1,\"source\":\"" << source
            << "\",\"seat_id\":" << state.seatId
            << ",\"phase\":\"" << hydra::seatui::seatLauncherPhaseName(state.phase)
            << "\",\"connected\":" << (state.connected ? "true" : "false")
            << ",\"can_end_playing\":" << (state.canEndPlaying ? "true" : "false")
+           << ",\"compact_presentation\":" << (presentation.compact ? "true" : "false")
+           << ",\"show_end_playing\":" << (presentation.showEndPlaying ? "true" : "false")
+           << ",\"show_reconnect\":" << (presentation.showReconnect ? "true" : "false")
            << ",\"authority_generation\":" << state.authorityGeneration
            << ",\"transition_sequence\":" << state.transitionSequence << "}";
     return stream.good();
@@ -232,21 +236,18 @@ std::string utf8(std::wstring_view value) {
     return result;
 }
 
-std::wstring joined(const std::vector<std::string>& values, hydra::ui::Locale locale) {
-    if (values.empty()) return std::wstring(hydra::ui::text(hydra::ui::TextId::None, locale));
-    std::wstring result;
-    for (const auto& value : values) {
-        if (!result.empty()) result += L", ";
-        result += wide(value);
-    }
-    return result;
-}
-
 class SeatWindow {
 public:
     SeatWindow(HINSTANCE instance, Options options)
         : instance_(instance), options_(std::move(options)),
           model_(options_.seatId), client_(options_.seatId) {}
+
+    ~SeatWindow() {
+        for (HFONT font : {headerFont_, statusFont_, bodyFont_, buttonFont_}) {
+            if (font != nullptr) DeleteObject(font);
+        }
+        if (backgroundBrush_ != nullptr) DeleteObject(backgroundBrush_);
+    }
 
     int run(int showCommand) {
         const wchar_t* className = L"HydraSeat.SeatLauncher.v1";
@@ -256,16 +257,16 @@ public:
         windowClass.hInstance = instance_;
         windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         windowClass.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-        windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
         windowClass.lpszClassName = className;
         if (RegisterClassExW(&windowClass) == 0 &&
             GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return 40;
 
         const auto title = hydra::ui::formatOne(
             hydra::ui::TextId::SeatLauncherTitle, locale_, std::to_wstring(options_.seatId));
-        hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, className, title.c_str(),
+        hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT,
+                                className, title.c_str(),
                                 WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                                CW_USEDEFAULT, CW_USEDEFAULT, 520, 430,
+                                CW_USEDEFAULT, CW_USEDEFAULT, 460, 260,
                                 nullptr, nullptr, instance_, this);
         if (hwnd_ == nullptr) return 41;
         showCommand_ = showCommand;
@@ -275,8 +276,10 @@ public:
 
         MSG message{};
         while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
+            if (!IsDialogMessageW(hwnd_, &message)) {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
         }
         return static_cast<int>(message.wParam);
     }
@@ -296,6 +299,13 @@ private:
                               reinterpret_cast<LONG_PTR>(self));
         }
         if (self == nullptr) return DefWindowProcW(hwnd, message, wParam, lParam);
+        if (message == WM_ERASEBKGND) {
+            return self->eraseBackground(reinterpret_cast<HDC>(wParam));
+        }
+        if (message == WM_CTLCOLORSTATIC) {
+            return self->staticControlColor(
+                reinterpret_cast<HDC>(wParam), reinterpret_cast<HWND>(lParam));
+        }
         if (message == WM_TIMER) {
             self->refreshFromHost();
             return 0;
@@ -321,13 +331,77 @@ private:
         return DefWindowProcW(hwnd, message, wParam, lParam);
     }
 
-    HWND label(int x, int y, int width, int height) {
-        return CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-                               x, y, width, height, hwnd_, nullptr, instance_, nullptr);
+    bool highContrastEnabled() const noexcept {
+        HIGHCONTRASTW value{};
+        value.cbSize = sizeof(value);
+        return SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(value), &value, 0) != FALSE &&
+               (value.dwFlags & HCF_HIGHCONTRASTON) != 0;
+    }
+
+    COLORREF backgroundColor() const noexcept {
+        return highContrast_ ? GetSysColor(COLOR_WINDOW) : RGB(250, 248, 242);
+    }
+
+    COLORREF primaryTextColor() const noexcept {
+        return highContrast_ ? GetSysColor(COLOR_WINDOWTEXT) : RGB(24, 40, 63);
+    }
+
+    COLORREF secondaryTextColor() const noexcept {
+        return highContrast_ ? GetSysColor(COLOR_WINDOWTEXT) : RGB(76, 84, 95);
+    }
+
+    COLORREF attentionTextColor() const noexcept {
+        return highContrast_ ? GetSysColor(COLOR_WINDOWTEXT) : RGB(132, 67, 40);
+    }
+
+    HFONT makeFont(int pointSize, int weight) const noexcept {
+        const UINT dpi = GetDpiForWindow(hwnd_);
+        return CreateFontW(-MulDiv(pointSize, static_cast<int>(dpi), 72), 0, 0, 0,
+                           weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                           DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    }
+
+    HWND label() {
+        return CreateWindowExW(0, L"STATIC", L"",
+                               WS_CHILD | SS_LEFT | SS_NOPREFIX,
+                               0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
+    }
+
+    LRESULT eraseBackground(HDC dc) const noexcept {
+        RECT client{};
+        GetClientRect(hwnd_, &client);
+        const HBRUSH brush = backgroundBrush_ != nullptr
+            ? backgroundBrush_
+            : GetSysColorBrush(COLOR_WINDOW);
+        FillRect(dc, &client, brush);
+        return 1;
+    }
+
+    LRESULT staticControlColor(HDC dc, HWND control) const noexcept {
+        SetBkMode(dc, TRANSPARENT);
+        if (control == warningLabel_) {
+            SetTextColor(dc, attentionTextColor());
+        } else if (control == playerLabel_ || control == gameLabel_) {
+            SetTextColor(dc, secondaryTextColor());
+        } else {
+            SetTextColor(dc, primaryTextColor());
+        }
+        return reinterpret_cast<LRESULT>(backgroundBrush_);
     }
 
     const wchar_t* t(hydra::ui::TextId id) const noexcept {
         return hydra::ui::text(id, locale_).data();
+    }
+
+    std::wstring labeledValue(hydra::ui::TextId labelId,
+                              const std::wstring& value) const {
+        std::wstring line(hydra::ui::text(labelId, locale_));
+        line += L": ";
+        line += value.empty()
+            ? std::wstring(hydra::ui::text(hydra::ui::TextId::None, locale_))
+            : value;
+        return line;
     }
 
     std::wstring_view phaseText() const noexcept {
@@ -353,26 +427,33 @@ private:
     }
 
     void createControls() {
-        seatLabel_ = label(24, 20, 460, 28);
-        statusLabel_ = label(24, 56, 460, 34);
-        playerLabel_ = label(24, 108, 460, 24);
-        gameLabel_ = label(24, 140, 460, 24);
-        recentLabel_ = label(24, 188, 460, 42);
-        availableLabel_ = label(24, 238, 460, 42);
-        warningLabel_ = label(24, 294, 460, 42);
+        highContrast_ = highContrastEnabled();
+        backgroundBrush_ = CreateSolidBrush(backgroundColor());
+        headerFont_ = makeFont(16, FW_SEMIBOLD);
+        statusFont_ = makeFont(11, FW_SEMIBOLD);
+        bodyFont_ = makeFont(10, FW_NORMAL);
+        buttonFont_ = makeFont(10, FW_SEMIBOLD);
+
+        seatLabel_ = label();
+        statusLabel_ = label();
+        playerLabel_ = label();
+        gameLabel_ = label();
+        warningLabel_ = label();
         endButton_ = CreateWindowExW(0, L"BUTTON", t(hydra::ui::TextId::EndPlaying),
-                                     WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                     24, 350, 150, 34, hwnd_,
+                                     WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
+                                     0, 0, 0, 0, hwnd_,
                                      reinterpret_cast<HMENU>(kEndPlaying), instance_, nullptr);
         reconnectButton_ = CreateWindowExW(0, L"BUTTON", t(hydra::ui::TextId::Reconnect),
-                                           WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                           190, 350, 130, 34, hwnd_,
+                                           WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
+                                           0, 0, 0, 0, hwnd_,
                                            reinterpret_cast<HMENU>(kReconnect), instance_, nullptr);
-        const auto font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-        for (HWND control : {seatLabel_, statusLabel_, playerLabel_, gameLabel_,
-                             recentLabel_, availableLabel_, warningLabel_,
-                             endButton_, reconnectButton_}) {
-            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        SendMessageW(seatLabel_, WM_SETFONT, reinterpret_cast<WPARAM>(headerFont_), TRUE);
+        SendMessageW(statusLabel_, WM_SETFONT, reinterpret_cast<WPARAM>(statusFont_), TRUE);
+        for (HWND control : {playerLabel_, gameLabel_, warningLabel_}) {
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(bodyFont_), TRUE);
+        }
+        for (HWND control : {endButton_, reconnectButton_}) {
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(buttonFont_), TRUE);
         }
     }
 
@@ -459,6 +540,21 @@ private:
         render(placeOnAssignedDisplay());
     }
 
+    int desiredWindowHeight(const hydra::seatui::SeatLauncherPresentation& presentation) const noexcept {
+        if (presentation.compact) return 112;
+        switch (model_.state().phase) {
+            case SeatLauncherPhase::Disconnected: return 210;
+            case SeatLauncherPhase::Idle: return 220;
+            case SeatLauncherPhase::Planning:
+            case SeatLauncherPhase::Starting:
+            case SeatLauncherPhase::Stopping: return 250;
+            case SeatLauncherPhase::Warning:
+            case SeatLauncherPhase::Recovery: return 300;
+            case SeatLauncherPhase::Playing: return 112;
+        }
+        return 220;
+    }
+
     bool placeOnAssignedDisplay() {
         const auto& state = model_.state();
         if (state.assignedDisplayIds.empty()) return false;
@@ -477,67 +573,121 @@ private:
         const auto layouts = hydra::display::buildSeatDisplayLayouts(topology, {request});
         if (!layouts.valid || layouts.groups.size() != 1u ||
             layouts.groups.front().seatId != state.seatId) return false;
+
+        const auto presentation = hydra::seatui::seatLauncherPresentation(state);
         const auto& bounds = layouts.groups.front().globalBounds;
-        const bool compact = state.nonIntrusiveWhilePlaying;
-        const int desiredWidth = compact ? 380 : 520;
-        const int desiredHeight = compact ? 112 : 430;
+        const int desiredWidth = presentation.compact ? 360 : 460;
+        const int desiredHeight = desiredWindowHeight(presentation);
         const int width = std::max(300, std::min(desiredWidth, bounds.width()));
-        const int height = std::max(90, std::min(desiredHeight, bounds.height()));
-        const int x = bounds.left + std::max(0, (bounds.width() - width) / 2);
-        const int y = compact ? bounds.top + 12 :
+        const int height = std::max(100, std::min(desiredHeight, bounds.height()));
+        const int x = presentation.compact
+            ? bounds.right - width - std::min(16, std::max(0, bounds.width() - width))
+            : bounds.left + std::max(0, (bounds.width() - width) / 2);
+        const int y = presentation.compact ? bounds.top + 16 :
             bounds.top + std::max(0, (bounds.height() - height) / 2);
-        SetWindowPos(hwnd_, compact ? HWND_TOPMOST : HWND_NOTOPMOST,
+        SetWindowPos(hwnd_, presentation.compact ? HWND_TOPMOST : HWND_NOTOPMOST,
                      x, y, width, height, SWP_NOACTIVATE);
-        compact_ = compact;
         return true;
+    }
+
+    void layoutControls(const hydra::seatui::SeatLauncherPresentation& presentation) {
+        RECT client{};
+        GetClientRect(hwnd_, &client);
+        const int clientWidth = std::max(0L, client.right - client.left);
+        const int clientHeight = std::max(0L, client.bottom - client.top);
+
+        if (presentation.compact) {
+            const int actionWidth = 142;
+            const int actionX = std::max(16, clientWidth - actionWidth - 16);
+            const int textWidth = std::max(100, actionX - 28);
+            SetWindowPos(seatLabel_, nullptr, 16, 8, textWidth, 26, SWP_NOZORDER);
+            SetWindowPos(statusLabel_, nullptr, 16, 36, textWidth, 22, SWP_NOZORDER);
+            SetWindowPos(endButton_, nullptr, actionX,
+                         std::max(10, (clientHeight - 32) / 2), actionWidth, 32,
+                         SWP_NOZORDER);
+            return;
+        }
+
+        const int margin = 24;
+        const int contentWidth = std::max(160, clientWidth - margin * 2);
+        SetWindowPos(seatLabel_, nullptr, margin, 16, contentWidth, 30, SWP_NOZORDER);
+        SetWindowPos(statusLabel_, nullptr, margin, 52, contentWidth, 24, SWP_NOZORDER);
+        int y = 94;
+        if (presentation.showPlayer) {
+            SetWindowPos(playerLabel_, nullptr, margin, y, contentWidth, 24, SWP_NOZORDER);
+            y += 30;
+        }
+        if (presentation.showGame) {
+            SetWindowPos(gameLabel_, nullptr, margin, y, contentWidth, 24, SWP_NOZORDER);
+            y += 32;
+        }
+        if (presentation.showNotification) {
+            SetWindowPos(warningLabel_, nullptr, margin, y, contentWidth, 48, SWP_NOZORDER);
+        }
+
+        const int buttonY = std::max(y + 8, clientHeight - 48);
+        if (presentation.showEndPlaying && presentation.showReconnect) {
+            SetWindowPos(endButton_, nullptr, margin, buttonY, 150, 34, SWP_NOZORDER);
+            SetWindowPos(reconnectButton_, nullptr, margin + 164, buttonY, 130, 34,
+                         SWP_NOZORDER);
+        } else if (presentation.showEndPlaying) {
+            SetWindowPos(endButton_, nullptr, margin, buttonY, 150, 34, SWP_NOZORDER);
+        } else if (presentation.showReconnect) {
+            SetWindowPos(reconnectButton_, nullptr, margin, buttonY, 140, 34,
+                         SWP_NOZORDER);
+        }
     }
 
     void render(bool placementValid) {
         const auto& state = model_.state();
+        const auto presentation = hydra::seatui::seatLauncherPresentation(state);
         std::string notificationError;
         (void)notifications_.apply(state, nullptr, &notificationError);
         const auto& notificationState = notifications_.state();
         const auto binding = state.currentBinding;
-        SetWindowTextW(seatLabel_,
-            (L"Seat " + std::to_wstring(state.seatId) + L"  " + state.seatName).c_str());
+
+        auto seatTitle = hydra::ui::formatOne(
+            hydra::ui::TextId::SeatLabel, locale_, std::to_wstring(state.seatId));
+        if (!state.seatName.empty()) {
+            seatTitle += L"  ";
+            seatTitle += state.seatName;
+        }
+        SetWindowTextW(seatLabel_, seatTitle.c_str());
         SetWindowTextW(statusLabel_, phaseText().data());
+
         const auto player = binding ? wide(binding->playerId) :
             wide(state.choices.selectedPlayerId);
         const auto game = binding ? wide(binding->gameId) :
             wide(state.choices.selectedGameId);
-        const auto none = std::wstring(hydra::ui::text(hydra::ui::TextId::None, locale_));
-        const auto playerLine = hydra::ui::formatOne(
-            hydra::ui::TextId::CurrentSelectedPlayer, locale_, player.empty() ? none : player);
-        const auto gameLine = hydra::ui::formatOne(
-            hydra::ui::TextId::CurrentSelectedGame, locale_, game.empty() ? none : game);
-        const auto recentLine = hydra::ui::formatOne(
-            hydra::ui::TextId::RecentGames, locale_, joined(state.choices.recentGameIds, locale_));
-        const auto availableLine = hydra::ui::formatOne(
-            hydra::ui::TextId::AvailableGames, locale_, joined(state.choices.availableGameIds, locale_));
+        const auto playerLine = labeledValue(hydra::ui::TextId::Player, player);
+        const auto gameLine = labeledValue(hydra::ui::TextId::Game, game);
         SetWindowTextW(playerLabel_, playerLine.c_str());
         SetWindowTextW(gameLabel_, gameLine.c_str());
-        SetWindowTextW(recentLabel_, recentLine.c_str());
-        SetWindowTextW(availableLabel_, availableLine.c_str());
+
         const auto notificationText = notificationState.notifications.empty()
             ? std::wstring{}
             : std::wstring(hydra::ui::notificationText(
                   notificationState.notifications.front().messageId, locale_));
         SetWindowTextW(warningLabel_, notificationText.c_str());
+
         EnableWindow(endButton_, state.canEndPlaying ? TRUE : FALSE);
         EnableWindow(reconnectButton_, state.canReconnect ? TRUE : FALSE);
+        ShowWindow(playerLabel_, presentation.showPlayer ? SW_SHOW : SW_HIDE);
+        ShowWindow(gameLabel_, presentation.showGame ? SW_SHOW : SW_HIDE);
+        ShowWindow(warningLabel_, presentation.showNotification ? SW_SHOW : SW_HIDE);
+        ShowWindow(endButton_, presentation.showEndPlaying ? SW_SHOW : SW_HIDE);
+        ShowWindow(reconnectButton_, presentation.showReconnect ? SW_SHOW : SW_HIDE);
+        ShowWindow(seatLabel_, SW_SHOW);
+        ShowWindow(statusLabel_, SW_SHOW);
+        layoutControls(presentation);
+        InvalidateRect(hwnd_, nullptr, TRUE);
 
-        const int showDetail = compact_ ? SW_HIDE : SW_SHOW;
-        for (HWND detail : {playerLabel_, gameLabel_, recentLabel_, availableLabel_,
-                            warningLabel_, reconnectButton_}) {
-            ShowWindow(detail, showDetail);
-        }
-        if (compact_) {
-            SetWindowPos(endButton_, nullptr, 214, 44, 140, 32, SWP_NOZORDER);
-        } else {
-            SetWindowPos(endButton_, nullptr, 24, 350, 150, 34, SWP_NOZORDER);
-        }
         if (placementValid) {
-            ShowWindow(hwnd_, showCommand_ == SW_HIDE ? SW_SHOWNOACTIVATE : showCommand_);
+            if (presentation.compact || showCommand_ == SW_HIDE) {
+                ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+            } else {
+                ShowWindow(hwnd_, showCommand_);
+            }
         } else {
             ShowWindow(hwnd_, SW_HIDE);
         }
@@ -555,13 +705,16 @@ private:
     HWND statusLabel_{nullptr};
     HWND playerLabel_{nullptr};
     HWND gameLabel_{nullptr};
-    HWND recentLabel_{nullptr};
-    HWND availableLabel_{nullptr};
     HWND warningLabel_{nullptr};
     HWND endButton_{nullptr};
     HWND reconnectButton_{nullptr};
+    HBRUSH backgroundBrush_{nullptr};
+    HFONT headerFont_{nullptr};
+    HFONT statusFont_{nullptr};
+    HFONT bodyFont_{nullptr};
+    HFONT buttonFont_{nullptr};
     int showCommand_{SW_SHOWNORMAL};
-    bool compact_{false};
+    bool highContrast_{false};
 };
 
 #endif

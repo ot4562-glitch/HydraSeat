@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <map>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -108,6 +109,61 @@ std::wstring inputName(DeviceType type, bool special, std::size_t ordinal) {
     }
 }
 
+struct PhysicalInputAggregate {
+    DeviceInfo device;
+    bool special{false};
+};
+
+using PhysicalInputMap = std::map<std::wstring, PhysicalInputAggregate>;
+
+std::wstring_view optionalView(const std::optional<std::wstring>& value) {
+    return value ? std::wstring_view(*value) : std::wstring_view{};
+}
+
+bool isRemoteOrSynthetic(const win32::DeviceInterfaceIdentity& identity) {
+    return hardware::isObviousRemoteOrSyntheticInputIdentity(
+               identity.interfacePath,
+               optionalView(identity.deviceInstanceId),
+               optionalView(identity.parentDeviceInstanceId)) ||
+           hardware::isObviousRemoteOrSyntheticInputPath(
+               optionalView(identity.physicalAncestorInstanceId));
+}
+
+bool preferRepresentative(std::wstring_view candidatePath,
+                          uintptr_t candidateHandle,
+                          const DeviceInfo& current) {
+    const auto candidate = hardware::normalizeDevicePath(candidatePath);
+    const auto existing = hardware::normalizeDevicePath(current.devicePath);
+    if (candidate != existing) {
+        return hardware::isPreferredRepresentativePath(candidatePath, current.devicePath);
+    }
+    return candidateHandle < current.nativeHandle;
+}
+
+void addPhysicalInputCandidate(PhysicalInputMap& aggregate,
+                               std::wstring stableId,
+                               std::wstring_view path,
+                               uintptr_t nativeHandle,
+                               DeviceType type,
+                               bool special) {
+    auto [position, inserted] = aggregate.try_emplace(stableId);
+    auto& entry = position->second;
+    if (inserted) {
+        entry.device.id = std::move(stableId);
+        entry.device.devicePath = path;
+        entry.device.type = type;
+        entry.device.nativeHandle = nativeHandle;
+        entry.special = special;
+        return;
+    }
+
+    entry.special = entry.special || special;
+    if (preferRepresentative(path, nativeHandle, entry.device)) {
+        entry.device.devicePath = path;
+        entry.device.nativeHandle = nativeHandle;
+    }
+}
+
 void sortByIdentity(std::vector<DeviceInfo>& devices) {
     std::sort(devices.begin(), devices.end(), [](const DeviceInfo& left, const DeviceInfo& right) {
         return left.id < right.id;
@@ -146,36 +202,40 @@ std::vector<DeviceInfo> HardwareDetector::detectKeyboards() {
         return result;
     }
 
-    std::unordered_set<std::wstring> seen;
+    PhysicalInputMap aggregate;
     for (const auto& device : rawDevices.devices) {
         if (device.dwType != RIM_TYPEKEYBOARD) {
             continue;
         }
         const auto path = win32::rawInputDeviceName(device.hDevice);
-        if (!path || hardware::isObviousRemoteOrSyntheticInputPath(*path)) {
+        if (!path) {
             continue;
         }
-        const auto stableId = win32::makeStableRawInputDeviceId(L"Keyboard", *path);
-        if (stableId.empty() || !seen.insert(stableId).second) {
+        const auto identity = win32::resolveDeviceInterfaceIdentity(*path);
+        if (isRemoteOrSynthetic(identity)) {
+            continue;
+        }
+        auto stableId = win32::makeStableRawInputDeviceId(L"Keyboard", identity);
+        if (stableId.empty()) {
             continue;
         }
 
-        DeviceInfo info;
-        info.id = stableId;
-        info.devicePath = *path;
-        info.type = DeviceType::Keyboard;
-        info.nativeHandle = reinterpret_cast<uintptr_t>(device.hDevice);
-        info.name = hardware::isLikelyInternalKeyboardPath(*path)
-                        ? L"Laptop Internal Keyboard"
-                        : L"Keyboard";
-        result.push_back(std::move(info));
+        const bool internal = hardware::isLikelyInternalKeyboardPath(*path) ||
+                              hardware::isLikelyInternalKeyboardPath(
+                                  optionalView(identity.deviceInstanceId)) ||
+                              hardware::isLikelyInternalKeyboardPath(
+                                  optionalView(identity.parentDeviceInstanceId));
+        addPhysicalInputCandidate(
+            aggregate, std::move(stableId), *path,
+            reinterpret_cast<uintptr_t>(device.hDevice), DeviceType::Keyboard, internal);
     }
 
-    sortByIdentity(result);
     std::size_t externalOrdinal = 0;
-    for (auto& device : result) {
-        const bool internal = hardware::isLikelyInternalKeyboardPath(device.devicePath);
-        device.name = inputName(DeviceType::Keyboard, internal, internal ? 0 : ++externalOrdinal);
+    for (auto& [stableId, entry] : aggregate) {
+        (void)stableId;
+        entry.device.name = inputName(
+            DeviceType::Keyboard, entry.special, entry.special ? 0 : ++externalOrdinal);
+        result.push_back(std::move(entry.device));
     }
 #endif
 
@@ -193,7 +253,7 @@ std::vector<DeviceInfo> HardwareDetector::detectMice() {
         return result;
     }
 
-    std::unordered_set<std::wstring> seen;
+    PhysicalInputMap aggregate;
     for (const auto& device : rawDevices.devices) {
         bool isMouse = device.dwType == RIM_TYPEMOUSE;
         bool isTouchpad = false;
@@ -214,49 +274,37 @@ std::vector<DeviceInfo> HardwareDetector::detectMice() {
         }
 
         const auto path = win32::rawInputDeviceName(device.hDevice);
-        if (!path || hardware::isObviousRemoteOrSyntheticInputPath(*path)) {
+        if (!path) {
+            continue;
+        }
+        const auto identity = win32::resolveDeviceInterfaceIdentity(*path);
+        if (isRemoteOrSynthetic(identity)) {
             continue;
         }
         if (!hasUsage) {
-            isTouchpad = hardware::isLikelyTouchpadPath(*path);
+            isTouchpad = hardware::isLikelyTouchpadPath(*path) ||
+                         hardware::isLikelyTouchpadPath(optionalView(identity.deviceInstanceId)) ||
+                         hardware::isLikelyTouchpadPath(optionalView(identity.parentDeviceInstanceId));
         }
 
-        const auto stableId = win32::makeStableRawInputDeviceId(L"Mouse", *path);
+        auto stableId = win32::makeStableRawInputDeviceId(L"Mouse", identity);
         if (stableId.empty()) {
             continue;
         }
 
-        if (!seen.insert(stableId).second) {
-            if (isTouchpad) {
-                const auto existing = std::find_if(
-                    result.begin(), result.end(), [&](const DeviceInfo& candidate) {
-                        return candidate.id == stableId;
-                    });
-                if (existing != result.end()) {
-                    existing->name = L"Touchpad";
-                    existing->devicePath = *path;
-                    existing->nativeHandle = reinterpret_cast<uintptr_t>(device.hDevice);
-                }
-            }
-            continue;
-        }
-
-        DeviceInfo info;
-        info.id = stableId;
-        info.devicePath = *path;
-        info.type = DeviceType::Mouse;
-        info.nativeHandle = reinterpret_cast<uintptr_t>(device.hDevice);
-        info.name = isTouchpad ? L"Touchpad" : L"Mouse";
-        result.push_back(std::move(info));
+        addPhysicalInputCandidate(
+            aggregate, std::move(stableId), *path,
+            reinterpret_cast<uintptr_t>(device.hDevice), DeviceType::Mouse, isTouchpad);
     }
 
-    sortByIdentity(result);
     std::size_t mouseOrdinal = 0;
     std::size_t touchpadOrdinal = 0;
-    for (auto& device : result) {
-        const bool touchpad = device.name == L"Touchpad";
-        device.name = inputName(
-            DeviceType::Mouse, touchpad, touchpad ? ++touchpadOrdinal : ++mouseOrdinal);
+    for (auto& [stableId, entry] : aggregate) {
+        (void)stableId;
+        entry.device.name = inputName(
+            DeviceType::Mouse, entry.special,
+            entry.special ? ++touchpadOrdinal : ++mouseOrdinal);
+        result.push_back(std::move(entry.device));
     }
 #endif
 

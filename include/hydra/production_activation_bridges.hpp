@@ -2,6 +2,7 @@
 
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/hidhide_session_backend.hpp"
+#include "hydra/input_metrics.hpp"
 #include "hydra/production_launch_runtime.hpp"
 #include "hydra/recovery_process_attachment.hpp"
 
@@ -143,6 +144,13 @@ public:
     virtual bool verify(const ProductionGateCSessionRequest& request,
                         ProductionGateCSessionStatus& status,
                         std::string& error) = 0;
+    // Read-only, bounded trace of real Raw Input delivery through this exact
+    // receiver session. Implementations must not synthesize missing receiver
+    // stages or treat mere device presence as applied input evidence.
+    virtual bool inputMetricsSnapshot(
+        const ProductionGateCSessionRequest& request,
+        InputMetricsSnapshot& snapshot,
+        std::string& error) = 0;
     virtual bool stop(const ProductionGateCSessionRequest& request,
                       std::string& error) noexcept = 0;
 };
@@ -181,6 +189,15 @@ public:
         ProductionActivationContextHandle context,
         std::string& error) override;
 
+    // Read-only observation seam for guided Physical validation. This returns
+    // receiver-aware metrics only for the exact currently active Seat/fingerprint
+    // session already owned by this bridge. It never creates a resource, starts a
+    // process/session, or synthesizes missing receiver evidence.
+    bool inputMetricsSnapshot(
+        const launch::SeatActivationPlan& plan,
+        InputMetricsSnapshot& snapshot,
+        std::string& error);
+
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
@@ -190,6 +207,14 @@ std::shared_ptr<ProductionActivationResourceBridges>
 makeProductionActivationResourceBridges(
     ProductionActivationBridgeConfig config,
     ProductionActivationBridgeDependencies dependencies = {});
+
+// Base Host composition. It resolves the canonical per-user recovery root and
+// sibling watchdog, then freshly reloads any user-selected P3-HW manifest through
+// the typed production-input-authority source. Exact Game Gate-C profiles remain
+// release-owned; without a reviewed exact profile, Input still fails closed even
+// when accepted Physical hardware evidence is present.
+std::shared_ptr<ProductionActivationResourceBridges>
+makeDefaultProductionActivationResourceBridges(std::string* error = nullptr);
 
 std::shared_ptr<IProductionRecoveryLeaseRuntime>
 makeNativeProductionRecoveryLeaseRuntime(

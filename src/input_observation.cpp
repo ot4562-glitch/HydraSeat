@@ -123,7 +123,204 @@ bool looksLikeKeyboardEvent(const RawInputEvent& event) noexcept {
     return event.keyTransition != RawKeyTransition::None || event.vkey != 0;
 }
 
+bool hasMouseButtonDownTransition(std::uint16_t flags) noexcept {
+    return std::any_of(
+        kMouseDownTransitions.begin(), kMouseDownTransitions.end(),
+        [flags](const auto& transition) {
+            return (flags & transition.first) != 0;
+        });
+}
+
 } // namespace
+
+std::wstring InputIdentificationCapture::normalizeDeviceId(
+    std::wstring_view value) {
+    std::wstring result(value);
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](wchar_t character) {
+                       return static_cast<wchar_t>(
+                           std::towlower(static_cast<wint_t>(character)));
+                   });
+    return result;
+}
+
+const InputIdentificationSnapshot& InputIdentificationCapture::begin(
+    const InputIdentificationRequest& request) {
+    m_request = request;
+    m_snapshot = {};
+    m_snapshot.state = InputIdentificationState::Waiting;
+    m_deadlineMicros = 0;
+    m_lastSequence = request.minimumSequenceExclusive;
+    m_lastTimestampMicros = request.startedAtMicros;
+    m_removedDeviceIds.clear();
+
+    if (request.timeoutMicros == 0 ||
+        request.startedAtMicros >
+            std::numeric_limits<std::uint64_t>::max() - request.timeoutMicros) {
+        reject(InputIdentificationFailure::InvalidRequest);
+        return m_snapshot;
+    }
+
+    m_deadlineMicros = request.startedAtMicros + request.timeoutMicros;
+    return m_snapshot;
+}
+
+void InputIdentificationCapture::cancel() noexcept {
+    if (m_snapshot.state != InputIdentificationState::Waiting) {
+        return;
+    }
+    m_snapshot.state = InputIdentificationState::Cancelled;
+    m_snapshot.failure = InputIdentificationFailure::None;
+    m_snapshot.candidate.reset();
+}
+
+void InputIdentificationCapture::reset() noexcept {
+    m_request = {};
+    m_snapshot = {};
+    m_deadlineMicros = 0;
+    m_lastSequence = 0;
+    m_lastTimestampMicros = 0;
+    m_removedDeviceIds.clear();
+}
+
+void InputIdentificationCapture::advanceTime(std::uint64_t nowMicros) noexcept {
+    if (m_snapshot.state == InputIdentificationState::Waiting &&
+        nowMicros >= m_deadlineMicros) {
+        m_snapshot.state = InputIdentificationState::TimedOut;
+        m_snapshot.failure = InputIdentificationFailure::None;
+        m_snapshot.candidate.reset();
+    }
+}
+
+bool InputIdentificationCapture::consumeObservation(
+    std::uint64_t sequence, std::uint64_t timestampMicros) {
+    if (m_snapshot.state != InputIdentificationState::Waiting) {
+        return false;
+    }
+    if (timestampMicros >= m_deadlineMicros) {
+        advanceTime(timestampMicros);
+        return false;
+    }
+    if (sequence <= m_request.minimumSequenceExclusive ||
+        sequence <= m_lastSequence) {
+        reject(InputIdentificationFailure::StaleSequence);
+        return false;
+    }
+    if (timestampMicros < m_request.startedAtMicros ||
+        timestampMicros < m_lastTimestampMicros) {
+        reject(InputIdentificationFailure::StaleTimestamp);
+        return false;
+    }
+
+    m_lastSequence = sequence;
+    m_lastTimestampMicros = timestampMicros;
+    return true;
+}
+
+bool InputIdentificationCapture::isIntentionalTargetEvent(
+    const RawInputEvent& event) const noexcept {
+    switch (m_request.kind) {
+    case InputIdentificationKind::Keyboard:
+        return event.rawDevType == 1u &&
+               event.keyTransition == RawKeyTransition::Down;
+    case InputIdentificationKind::Mouse:
+        return event.rawDevType == 0u &&
+               hasMouseButtonDownTransition(event.mouseButtonFlags);
+    }
+    return false;
+}
+
+void InputIdentificationCapture::reject(
+    InputIdentificationFailure failure) noexcept {
+    m_snapshot.state = InputIdentificationState::Rejected;
+    m_snapshot.failure = failure;
+    m_snapshot.candidate.reset();
+}
+
+void InputIdentificationCapture::observeInput(
+    const RawInputEvent& event,
+    InputIdentificationDeviceStatus deviceStatus) {
+    if (m_snapshot.state != InputIdentificationState::Waiting) {
+        return;
+    }
+    if (event.monotonicTimestampMicros >= m_deadlineMicros) {
+        advanceTime(event.monotonicTimestampMicros);
+        return;
+    }
+    // Key-up, pointer motion, wheel and button-release traffic is ordinary noise
+    // while the user is deciding which physical device to identify. It must not
+    // consume ordering authority or turn a harmless queued event into a stale
+    // identification failure.
+    if (!isIntentionalTargetEvent(event)) {
+        return;
+    }
+    if (!consumeObservation(event.sequence, event.monotonicTimestampMicros)) {
+        return;
+    }
+
+    if (event.deviceId.empty()) {
+        reject(InputIdentificationFailure::MissingStableDeviceId);
+        return;
+    }
+    const auto normalizedDeviceId = normalizeDeviceId(event.deviceId);
+    if (m_removedDeviceIds.contains(normalizedDeviceId)) {
+        reject(InputIdentificationFailure::DeviceRemoved);
+        return;
+    }
+    if (deviceStatus == InputIdentificationDeviceStatus::Unavailable) {
+        reject(InputIdentificationFailure::DeviceUnavailable);
+        return;
+    }
+    if (deviceStatus == InputIdentificationDeviceStatus::AmbiguousShared) {
+        reject(InputIdentificationFailure::AmbiguousSharedDevice);
+        return;
+    }
+
+    InputIdentificationCandidate candidate;
+    candidate.kind = m_request.kind;
+    candidate.deviceId = event.deviceId;
+    candidate.sequence = event.sequence;
+    m_snapshot.state = InputIdentificationState::Identified;
+    m_snapshot.failure = InputIdentificationFailure::None;
+    m_snapshot.candidate = std::move(candidate);
+}
+
+void InputIdentificationCapture::observeDeviceChange(
+    const RawInputDeviceChange& change) {
+    if (m_snapshot.state != InputIdentificationState::Waiting) {
+        return;
+    }
+
+    const bool targetDeviceType =
+        (m_request.kind == InputIdentificationKind::Keyboard &&
+         change.device.rawDevType == 1u) ||
+        (m_request.kind == InputIdentificationKind::Mouse &&
+         change.device.rawDevType == 0u);
+    if (!targetDeviceType) {
+        return;
+    }
+    if (!consumeObservation(change.sequence,
+                            change.monotonicTimestampMicros)) {
+        return;
+    }
+    if (change.device.deviceId.empty()) {
+        if (change.kind == RawInputDeviceChangeKind::Removal) {
+            reject(InputIdentificationFailure::MissingStableDeviceId);
+        }
+        return;
+    }
+
+    const auto normalizedDeviceId = normalizeDeviceId(change.device.deviceId);
+    if (change.kind == RawInputDeviceChangeKind::Removal) {
+        m_removedDeviceIds.insert(normalizedDeviceId);
+        // The hardware list changed while the user was identifying a device. Do
+        // not keep waiting against a stale tile/handle map or guess which device
+        // disappeared; force a fresh intentional retry after refresh.
+        reject(InputIdentificationFailure::DeviceRemoved);
+    } else {
+        m_removedDeviceIds.erase(normalizedDeviceId);
+    }
+}
 
 std::wstring InputObservationLedger::normalize(std::wstring_view value) {
     std::wstring result(value);

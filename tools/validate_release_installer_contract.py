@@ -10,12 +10,21 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "config" / "release-signing-manifest.json"
+PREFLIGHT = ROOT / "config" / "release-artifact-preflight.json"
 SIGNER = ROOT / "tools" / "sign_release_artifacts.ps1"
 INSTALLER = ROOT / "tools" / "install_hydraseat.ps1"
+PACKAGE_BUILDER = ROOT / "tools" / "build_installer_package.ps1"
+BOOTSTRAP_HEADER = ROOT / "include" / "hydra" / "installer_bootstrap.hpp"
+BOOTSTRAP_SOURCE = ROOT / "src" / "installer_bootstrap.cpp"
+BOOTSTRAP_MAIN = ROOT / "src" / "installer_bootstrap_main.cpp"
+PACKAGE_CONTRACT_FIXTURE = ROOT / "tools" / "testdata" / "release_artifacts" / "installer_package_contract.json"
+BOOTSTRAP_RESULT_FIXTURE = ROOT / "tools" / "testdata" / "installer_recovery" / "bootstrapper_result_mapping.json"
 CONTROLLED_HARNESS = ROOT / "tools" / "run_installer_recovery_harness.py"
 
 OWNED_FILES_START = "$OwnedFiles = @("
-OWNED_FILES_END = "$OwnedArtifactIds"
+OWNED_FILES_END = "$PackageFiles = @("
+PACKAGE_FILES_START = "$PackageFiles = @("
+PACKAGE_FILES_END = "$PackageArtifactIds = @{"
 QUOTED_RE = re.compile(r"^\s*\"(?P<value>[A-Za-z0-9._-]+)\"\s*,?\s*$", re.MULTILINE)
 
 
@@ -29,27 +38,41 @@ def require_once(text: str, needle: str, context: str) -> None:
         fail(f"{context} must contain exactly one reviewed occurrence of {needle!r}; found {count}")
 
 
-def extract_owned_files(installer_text: str) -> list[str]:
-    start = installer_text.find(OWNED_FILES_START)
+def extract_literal_file_array(text: str, start_marker: str, end_marker: str,
+                               label: str) -> list[str]:
+    start = text.find(start_marker)
     if start < 0:
-        fail("installer OwnedFiles allowlist could not be located")
-    start += len(OWNED_FILES_START)
-    end = installer_text.find(OWNED_FILES_END, start)
+        fail(f"installer {label} allowlist could not be located")
+    start += len(start_marker)
+    end = text.find(end_marker, start)
     if end < 0:
-        fail("installer OwnedFiles allowlist end marker could not be located")
-    body = installer_text[start:end].strip()
+        fail(f"installer {label} allowlist end marker could not be located")
+    body = text[start:end].strip()
     if not body.endswith(")"):
-        fail("installer OwnedFiles allowlist closing token is missing")
+        fail(f"installer {label} allowlist closing token is missing")
     body = body[:-1]
     files = [item.group("value") for item in QUOTED_RE.finditer(body)]
     residual = QUOTED_RE.sub("", body).strip().replace(",", "").strip()
     if residual:
-        fail("installer OwnedFiles contains non-literal or unparsed content")
+        fail(f"installer {label} contains non-literal or unparsed content")
     if not files:
-        fail("installer OwnedFiles cannot be empty")
-    if len(files) != len(set(files)):
-        fail("installer OwnedFiles contains duplicates")
+        fail(f"installer {label} cannot be empty")
+    lowered = [item.lower() for item in files]
+    if len(lowered) != len(set(lowered)):
+        fail(f"installer {label} contains duplicates")
     return files
+
+
+def extract_owned_files(installer_text: str) -> list[str]:
+    return extract_literal_file_array(
+        installer_text, OWNED_FILES_START, OWNED_FILES_END, "OwnedFiles"
+    )
+
+
+def extract_package_files(installer_text: str) -> list[str]:
+    return extract_literal_file_array(
+        installer_text, PACKAGE_FILES_START, PACKAGE_FILES_END, "PackageFiles"
+    )
 
 
 def validate_contract(manifest_data: object, signer_text: str, installer_text: str) -> None:
@@ -99,19 +122,42 @@ def validate_contract(manifest_data: object, signer_text: str, installer_text: s
     if not executable_entries:
         fail("release package must contain reviewed executable artifacts")
 
-    owned_files = extract_owned_files(installer_text)
-    if owned_files != manifest_files:
+    setup_entries = [
+        artifact for artifact in executable_entries
+        if artifact.get("id") == "setup-bootstrap"
+    ]
+    if len(setup_entries) != 1:
+        fail("release package must contain exactly one reviewed setup bootstrapper")
+    setup_artifact = setup_entries[0]
+    if (setup_artifact.get("target") != "HydraSeatSetup" or
+            setup_artifact.get("fileName") != "HydraSeatSetup.exe"):
+        fail("setup bootstrapper signing identity must be HydraSeatSetup/HydraSeatSetup.exe")
+
+    package_files = extract_package_files(installer_text)
+    if package_files != manifest_files:
         fail(
-            "installer OwnedFiles must exactly match signing-manifest artifact order; "
-            f"manifest={manifest_files}, installer={owned_files}"
+            "installer PackageFiles must exactly match signing-manifest artifact order; "
+            f"manifest={manifest_files}, installer={package_files}"
         )
+    owned_files = extract_owned_files(installer_text)
+    expected_owned_files = [
+        file_name for file_name in manifest_files if file_name != "HydraSeatSetup.exe"
+    ]
+    if owned_files != expected_owned_files:
+        fail(
+            "installer OwnedFiles must exactly match installed-owned artifacts while excluding "
+            f"the package-only bootstrapper; expected={expected_owned_files}, installer={owned_files}"
+        )
+    if "HydraSeatSetup.exe" in owned_files:
+        fail("HydraSeatSetup.exe must remain package-only and cannot enter Program Files ownership")
     for file_name in manifest_files:
         mapping = f'    "{file_name}" = "{manifest_ids[file_name]}"'
-        require_once(installer_text, mapping, "installer exact artifact identity map")
+        require_once(installer_text, mapping, "installer exact package artifact identity map")
 
     # Signer invariants: executable and script artifacts take distinct reviewed paths,
     # then converge on the same Authenticode publisher/hash provenance checks.
     for needle in (
+        '"setup-bootstrap" = @{ kind = "cmake-executable"; target = "HydraSeatSetup"; fileName = "HydraSeatSetup.exe" }',
         '$kind -eq "cmake-executable"',
         '$kind -eq "powershell-script"',
         'Set-AuthenticodeSignature -LiteralPath $destination',
@@ -150,8 +196,13 @@ def validate_contract(manifest_data: object, signer_text: str, installer_text: s
     # individually hash/signature verified, and per-user deletion is separated from
     # the ProgramData rollback transaction.
     for needle in (
-        '$records.Count -ne $OwnedFiles.Count',
+        '$records.Count -ne $PackageFiles.Count',
+        '$PackageFiles -notcontains $fileName',
         '$seen.ContainsKey($fileName)',
+        '[string]$ExpectedReleaseVersion = ""',
+        '[UInt64]$ExpectedReleaseRevision = 0',
+        'Expected release identity requires both version and revision',
+        'Verified release package does not match the user-confirmed release identity',
         '$seenOwnedFiles.ContainsKey($fileName)',
         'Release file hash mismatch: $fileName',
         'Release file publisher/signature mismatch: $fileName',
@@ -162,7 +213,9 @@ def validate_contract(manifest_data: object, signer_text: str, installer_text: s
         'Release signing provenance contains unknown or missing fields',
         'Release artifact provenance contains unknown or missing fields',
         '$records = @($provenance.artifacts)',
-        '$record.id -ne [string]$OwnedArtifactIds[$fileName]',
+        '$record.id -ne [string]$PackageArtifactIds[$fileName]',
+        '$installFiles = @($validated | Where-Object { $OwnedFiles -contains [string]$_.fileName })',
+        'Verified release package did not project the exact install-owned file set',
         '$record.kind -ne $expectedKind',
         '$record.architecture -ne $Architecture',
         'Release artifact identity/type/architecture does not match the fixed HydraSeat product contract',
@@ -338,12 +391,173 @@ def validate_controlled_harness(installer_text: str, harness_text: str) -> None:
             fail(f"controlled installer recovery harness crosses a forbidden production boundary: {forbidden}")
 
 
+def validate_bootstrap_sources(header_text: str, source_text: str, main_text: str) -> None:
+    for needle in (
+        "enum class BootstrapOperation",
+        "BootstrapPowerShellInvocation",
+        "makeBootstrapPowerShellInvocation(",
+        "assessBootstrapPackageFacts(",
+    ):
+        if needle not in header_text:
+            fail(f"installer bootstrap header is missing required typed contract: {needle}")
+
+    for needle in (
+        'L"HydraSeatSetup.exe"',
+        'case BootstrapOperation::Install: return L"Install";',
+        'case BootstrapOperation::Repair: return L"Repair";',
+        'case BootstrapOperation::Uninstall: return L"Uninstall";',
+        'case BootstrapOperation::Validate: return L"Validate";',
+        'L"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy AllSigned -File "',
+        'invocation.requestElevation = operation != BootstrapOperation::Validate;',
+        'operation == BootstrapOperation::Install ||',
+        'L" -ExpectedReleaseVersion ";',
+        'L" -ExpectedReleaseRevision ";',
+        'info.lpVerb = L"runas";',
+        "ShellExecuteExW(&info)",
+        "CreateProcessW(",
+        "FILE_ATTRIBUTE_REPARSE_POINT",
+        "WinVerifyTrust(nullptr, &policy, &trustData)",
+        "WTD_CACHE_ONLY_URL_RETRIEVAL",
+        "CERT_SHA1_HASH_PROP_ID",
+        "bootstrapSigner == installerSigner",
+        'path /= L"WindowsPowerShell";',
+        'path /= L"powershell.exe";',
+        "BootstrapProcessResult::Cancelled",
+    ):
+        if needle not in source_text:
+            fail(f"installer bootstrap implementation is missing required safety fragment: {needle}")
+
+    for forbidden in (
+        'L"cmd.exe"',
+        'L"/c"',
+        'L"-Command"',
+        "WinExec(",
+        "std::system(",
+    ):
+        if forbidden in source_text or forbidden in main_text:
+            fail(f"installer bootstrap exposes a forbidden general-command path: {forbidden}")
+
+    for needle in (
+        "validatePackageWithoutElevation(state)",
+        "BootstrapOperation::Validate",
+        'L"Install"',
+        'L"Repair"',
+        'L"Uninstall"',
+        "confirmOperation(state.window, operation)",
+        "runBootstrapPowerShell(",
+        "launchInstalledHydraSeatNormally(",
+        "supportedNativeArchitecture()",
+        "currentProcessIsElevated()",
+        "HydraSeat Setup must start without administrator rights.",
+        "Requires: 64-bit Windows. Reboot: not requested by this installer.",
+    ):
+        if needle not in main_text:
+            fail(f"installer bootstrap UI is missing required user-flow fragment: {needle}")
+
+    confirm = main_text.find("confirmOperation(state.window, operation)")
+    invocation = main_text.find("makeBootstrapPowerShellInvocation(", confirm)
+    run = main_text.find("runBootstrapPowerShell(", invocation)
+    if confirm < 0 or invocation < 0 or run < 0 or not (confirm < invocation < run):
+        fail("mutating bootstrap path must confirm before constructing/running elevated installer invocation")
+
+
+def validate_package_builder(builder_text: str) -> None:
+    for needle in (
+        '[switch]$SelfTest',
+        'id = "setup-bootstrap"; kind = "cmake-executable"; target = "HydraSeatSetup"; fileName = "HydraSeatSetup.exe"',
+        '$releaseDirectory = Resolve-UnderRoot -Root $BuildRoot -Child "Release"',
+        "Assert-X64PortableExecutable",
+        'throw "Installer package output directory must be empty; refusing to delete or merge unrelated files"',
+        "Assert-ExactReviewedManifest -Manifest $manifest",
+        "Copy-Item -LiteralPath $source -Destination $destination",
+        "Assert-ExactEntrySet -Directory $architectureOutput",
+        'Write-Host "No signatures or signing provenance were manufactured by this builder."',
+        "Self-test failed to reject a missing reviewed package artifact",
+        "Self-test failed to reject an unexpected package artifact",
+    ):
+        if needle not in builder_text:
+            fail(f"installer package builder is missing required deterministic contract: {needle}")
+    for forbidden in (
+        "Copy-Item -Recurse",
+        "Get-ChildItem -Recurse",
+        "Set-AuthenticodeSignature",
+        "signtool",
+        "Start-BitsTransfer",
+        "Invoke-WebRequest",
+    ):
+        if forbidden in builder_text:
+            fail(f"installer package builder crosses a forbidden packaging/signing boundary: {forbidden}")
+
+
+def validate_preflight(preflight_data: object, manifest_data: dict) -> None:
+    if not isinstance(preflight_data, dict) or preflight_data.get("schemaVersion") != 1:
+        fail("release artifact preflight schemaVersion must be 1")
+    if preflight_data.get("architecture") != "x64":
+        fail("release artifact preflight must remain x64")
+    manifest_artifacts = manifest_data.get("artifacts")
+    preflight_artifacts = preflight_data.get("artifacts")
+    if not isinstance(manifest_artifacts, list) or not isinstance(preflight_artifacts, list):
+        fail("release signing/preflight artifacts must be lists")
+    expected = [
+        (artifact.get("id"), f"x64/{artifact.get('fileName')}")
+        for artifact in manifest_artifacts
+    ]
+    actual = [
+        (artifact.get("id"), artifact.get("packagePath"))
+        for artifact in preflight_artifacts
+        if isinstance(artifact, dict)
+    ]
+    if actual != expected:
+        fail(f"release artifact preflight must exactly mirror signing package order: expected={expected}, actual={actual}")
+    setup = [artifact for artifact in preflight_artifacts if artifact.get("id") == "setup-bootstrap"]
+    if len(setup) != 1 or setup[0].get("componentRole") != "InstallerBootstrapper":
+        fail("release artifact preflight must classify HydraSeatSetup.exe as InstallerBootstrapper")
+
+
+def validate_installer_fixtures(package_fixture: object, result_fixture: object,
+                                manifest_data: dict, installer_text: str) -> None:
+    if not isinstance(package_fixture, dict) or package_fixture.get("schemaVersion") != 1:
+        fail("installer package contract fixture schemaVersion must be 1")
+    manifest_files = [artifact.get("fileName") for artifact in manifest_data.get("artifacts", [])]
+    if package_fixture.get("packageFiles") != manifest_files:
+        fail("installer package fixture must exactly mirror release signing file order")
+    if package_fixture.get("installedOwnedFiles") != extract_owned_files(installer_text):
+        fail("installer package fixture must exactly mirror installed-owned files")
+    if package_fixture.get("packageRootEntries") != [
+        "x64", "signing-provenance.json", "signing-provenance.json.p7s"
+    ]:
+        fail("installer package fixture root layout drifted")
+
+    if not isinstance(result_fixture, dict) or result_fixture.get("schemaVersion") != 1:
+        fail("bootstrap result fixture schemaVersion must be 1")
+    expected_results = [
+        {"exitCode": 0, "result": "Success"},
+        {"exitCode": 1223, "result": "Cancelled"},
+        {"exitCode": 1602, "result": "Cancelled"},
+        {"exitCode": 1, "result": "Failed"},
+        {"exitCode": 5, "result": "Failed"},
+    ]
+    if result_fixture.get("cases") != expected_results:
+        fail("bootstrap result fixture no longer matches the reviewed success/cancel/failure contract")
+
+
 def validate_live() -> None:
     manifest_data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    preflight_data = json.loads(PREFLIGHT.read_text(encoding="utf-8"))
     signer_text = SIGNER.read_text(encoding="utf-8")
     installer_text = INSTALLER.read_text(encoding="utf-8")
+    builder_text = PACKAGE_BUILDER.read_text(encoding="utf-8")
+    bootstrap_header = BOOTSTRAP_HEADER.read_text(encoding="utf-8")
+    bootstrap_source = BOOTSTRAP_SOURCE.read_text(encoding="utf-8")
+    bootstrap_main = BOOTSTRAP_MAIN.read_text(encoding="utf-8")
+    package_fixture = json.loads(PACKAGE_CONTRACT_FIXTURE.read_text(encoding="utf-8"))
+    result_fixture = json.loads(BOOTSTRAP_RESULT_FIXTURE.read_text(encoding="utf-8"))
     harness_text = CONTROLLED_HARNESS.read_text(encoding="utf-8")
     validate_contract(manifest_data, signer_text, installer_text)
+    validate_preflight(preflight_data, manifest_data)
+    validate_bootstrap_sources(bootstrap_header, bootstrap_source, bootstrap_main)
+    validate_package_builder(builder_text)
+    validate_installer_fixtures(package_fixture, result_fixture, manifest_data, installer_text)
     validate_controlled_harness(installer_text, harness_text)
 
 
@@ -373,11 +587,78 @@ def expect_controlled_harness_rejected(
 
 def self_test() -> None:
     manifest_data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    preflight_data = json.loads(PREFLIGHT.read_text(encoding="utf-8"))
     signer_text = SIGNER.read_text(encoding="utf-8")
+    setup_signer_allowlist = (
+        '        "setup-bootstrap" = @{ kind = "cmake-executable"; target = "HydraSeatSetup"; '
+        'fileName = "HydraSeatSetup.exe" }'
+    )
+    if setup_signer_allowlist not in signer_text:
+        main_ui_allowlist = (
+            '        "main-ui" = @{ kind = "cmake-executable"; target = "HydraSeat"; '
+            'fileName = "HydraSeat.exe" }'
+        )
+        signer_text = signer_text.replace(
+            main_ui_allowlist, setup_signer_allowlist + "\n" + main_ui_allowlist, 1
+        )
     installer_text = INSTALLER.read_text(encoding="utf-8")
+    builder_text = PACKAGE_BUILDER.read_text(encoding="utf-8")
+    bootstrap_header = BOOTSTRAP_HEADER.read_text(encoding="utf-8")
+    bootstrap_source = BOOTSTRAP_SOURCE.read_text(encoding="utf-8")
+    bootstrap_main = BOOTSTRAP_MAIN.read_text(encoding="utf-8")
+    package_fixture = json.loads(PACKAGE_CONTRACT_FIXTURE.read_text(encoding="utf-8"))
+    result_fixture = json.loads(BOOTSTRAP_RESULT_FIXTURE.read_text(encoding="utf-8"))
     harness_text = CONTROLLED_HARNESS.read_text(encoding="utf-8")
     validate_contract(manifest_data, signer_text, installer_text)
+    validate_preflight(preflight_data, manifest_data)
+    validate_bootstrap_sources(bootstrap_header, bootstrap_source, bootstrap_main)
+    validate_package_builder(builder_text)
+    validate_installer_fixtures(package_fixture, result_fixture, manifest_data, installer_text)
     validate_controlled_harness(installer_text, harness_text)
+
+    weakened_bootstrap = bootstrap_source.replace('info.lpVerb = L"runas";', 'info.lpVerb = nullptr;', 1)
+    try:
+        validate_bootstrap_sources(bootstrap_header, weakened_bootstrap, bootstrap_main)
+    except ValueError:
+        pass
+    else:
+        fail("self-test failed to reject bootstrapper without explicit runas elevation")
+
+    general_command_bootstrap = bootstrap_source + '\nconst wchar_t* forbidden = L"-Command";\n'
+    try:
+        validate_bootstrap_sources(bootstrap_header, general_command_bootstrap, bootstrap_main)
+    except ValueError:
+        pass
+    else:
+        fail("self-test failed to reject a bootstrapper general-command path")
+
+    recursive_builder = builder_text + '\n# Copy-Item -Recurse forbidden-fixture\n'
+    try:
+        validate_package_builder(recursive_builder)
+    except ValueError:
+        pass
+    else:
+        fail("self-test failed to reject recursive installer package copying")
+
+    drifted_preflight = json.loads(json.dumps(preflight_data))
+    drifted_preflight["artifacts"][0]["packagePath"] = "x64/OtherSetup.exe"
+    try:
+        validate_preflight(drifted_preflight, manifest_data)
+    except ValueError:
+        pass
+    else:
+        fail("self-test failed to reject setup bootstrapper preflight drift")
+
+    drifted_result_fixture = json.loads(json.dumps(result_fixture))
+    drifted_result_fixture["cases"][1]["result"] = "Success"
+    try:
+        validate_installer_fixtures(
+            package_fixture, drifted_result_fixture, manifest_data, installer_text
+        )
+    except ValueError:
+        pass
+    else:
+        fail("self-test failed to reject UAC cancellation result drift")
 
     def drop_installer_artifact(data, signer, installer):
         data["artifacts"] = [a for a in data["artifacts"] if a.get("id") != "installer-script"]
@@ -421,7 +702,7 @@ def self_test() -> None:
 
     def weaken_exact_artifact_identity(data, signer, installer):
         installer = installer.replace(
-            "$record.id -ne [string]$OwnedArtifactIds[$fileName]",
+            "$record.id -ne [string]$PackageArtifactIds[$fileName]",
             "$false",
             1,
         )

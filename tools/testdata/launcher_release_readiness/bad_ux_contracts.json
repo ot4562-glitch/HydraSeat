@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "critical-actions-may-ellipsis",
+      "field": "criticalActionText",
+      "replacement": "ellipsis-allowed"
+    },
+    {
+      "id": "advanced-first-action-order",
+      "field": "primaryActionOrder",
+      "replacement": ["Setup", "Diagnostics", "GameLibrary", "Play"]
+    },
+    {
+      "id": "drag-only-hardware-assignment",
+      "field": "hardwareAssignment",
+      "replacement": "drag-only-assignment"
+    },
+    {
+      "id": "general-shell-seat-surface",
+      "field": "seatSurface",
+      "replacement": "general-desktop-shell"
+    },
+    {
+      "id": "diagnostics-on-happy-path",
+      "field": "advancedDetails",
+      "replacement": "ordinary-page-inline-diagnostics"
+    },
+    {
+      "id": "first-window-not-bounded",
+      "field": "firstWindow",
+      "replacement": "process-alive-only"
+    }
+  ]
+}

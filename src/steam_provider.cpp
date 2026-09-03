@@ -321,6 +321,59 @@ std::wstring lowerPath(std::wstring value) {
     return value;
 }
 
+std::string normalizedSteamAppType(std::string_view value) {
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (const char raw : value) {
+        auto ch = static_cast<unsigned char>(raw);
+        if (ch >= static_cast<unsigned char>('A') &&
+            ch <= static_cast<unsigned char>('Z')) {
+            ch = static_cast<unsigned char>(ch - static_cast<unsigned char>('A') +
+                                            static_cast<unsigned char>('a'));
+        }
+        if ((ch >= static_cast<unsigned char>('a') &&
+             ch <= static_cast<unsigned char>('z')) ||
+            (ch >= static_cast<unsigned char>('0') &&
+             ch <= static_cast<unsigned char>('9'))) {
+            normalized.push_back(static_cast<char>(ch));
+            continue;
+        }
+        if (ch == static_cast<unsigned char>(' ') ||
+            ch == static_cast<unsigned char>('\t') ||
+            ch == static_cast<unsigned char>('-') ||
+            ch == static_cast<unsigned char>('_')) {
+            continue;
+        }
+        return {};
+    }
+    return normalized;
+}
+
+bool manifestIsClearlyNonPlayable(std::span<const KeyValueEntry> appState,
+                                  std::wstring_view installDirectory,
+                                  std::string_view appId) {
+    // Valve's Steamworks Common Redistributables package has a stable provider
+    // app id. Do not rely on its friendly title or install directory because
+    // both have varied across Steam installations/locales.
+    if (appId == "228980") return true;
+
+    // Steam's shared redistributable package is identified by its provider-owned
+    // install directory, not by the localized/friendly title shown to the user.
+    if (lowerPath(std::wstring(installDirectory)) == L"_commonredist") return true;
+
+    const auto* type = findEntry(appState, "type");
+    if (!type || !type->value) return false;
+    const auto normalized = normalizedSteamAppType(*type->value);
+    if (normalized.empty()) return false;
+
+    static constexpr std::array<std::string_view, 9u> nonPlayableTypes{
+        "tool", "server", "dedicatedserver", "runtime", "redistributable",
+        "redistributables", "support", "supportpackage", "config",
+    };
+    return std::find(nonPlayableTypes.begin(), nonPlayableTypes.end(), normalized) !=
+           nonPlayableTypes.end();
+}
+
 std::uint64_t hashBytes(std::uint64_t current, std::string_view bytes) noexcept {
     for (const char raw : bytes) {
         current ^= static_cast<unsigned char>(raw);
@@ -395,6 +448,7 @@ bool parseManifest(std::string_view bytes,
                    std::wstring& title,
                    std::wstring& installRoot,
                    std::optional<std::wstring>& buildId,
+                   bool& visibleInGameCatalog,
                    std::string& error) {
     std::vector<KeyValueEntry> document;
     if (!parseDocument(bytes, document, error)) return false;
@@ -434,6 +488,8 @@ bool parseManifest(std::string_view bytes,
         error = "Steam app install path exceeds the bound";
         return false;
     }
+    visibleInGameCatalog =
+        !manifestIsClearlyNonPlayable(state->children, installDirectory, *id->value);
     buildId.reset();
     if (const auto* build = findEntry(state->children, "buildid")) {
         if (!build->value || !digitsOnly(*build->value)) {
@@ -793,13 +849,15 @@ ProviderDiagnostic SteamProviderAdapter::refresh() noexcept {
             }
             const auto libraryRoot = parent.parent_path().wstring();
             AppSnapshot app;
+            bool visibleInGameCatalog = true;
             if (!parseManifest(bytes, manifestPath, libraryRoot, app.appId, app.title,
-                               app.installRoot, app.buildId, error)) {
+                               app.installRoot, app.buildId, visibleInGameCatalog, error)) {
                 throw std::runtime_error(error);
             }
             if (!appIds.insert(app.appId).second) {
                 throw std::runtime_error("duplicate Steam appid across local manifests");
             }
+            if (!visibleInGameCatalog) continue;
             if (!source_->listExecutableHints(app.installRoot, app.executableHints, error)) {
                 throw std::runtime_error(error);
             }

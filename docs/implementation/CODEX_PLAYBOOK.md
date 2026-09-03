@@ -4,30 +4,27 @@
 
 This playbook turns the roadmap into reviewable implementation batches. Codex may implement one or more actionable packets in a task, following declared dependency order and leaving separate truthful evidence for every packet whose state changes.
 
-## 2. Mandatory read order
+## 2. Context selection order
 
-Before editing code, read:
+Do not preload the documentation graph. Before editing code:
 
-1. `.agents/AGENTS.md`;
-2. [`../PRODUCT_V1.md`](../PRODUCT_V1.md);
-3. [DECISIONS.md](DECISIONS.md);
-4. [README.md](README.md);
-5. [STATUS.md](STATUS.md);
-6. the packet's phase document;
-7. every source/header/test file explicitly named by the packet;
-8. architecture or specialized design documents linked by the packet.
+1. use root `AGENTS.md` as the standing policy;
+2. identify the exact packet/task and owning source/test symbols;
+3. search `PRODUCT_V1.md`, `DECISIONS.md`, and `STATUS.md` only for concepts/IDs that the task actually touches, then read the smallest supporting sections;
+4. read only the selected packet section in its phase document;
+5. inspect only the source/header/test files needed for the implementation;
+6. follow a linked architecture/design document only when a concrete unresolved decision depends on it;
+7. load `.agents/AGENTS.md` only for explicit worker/chunk execution.
 
-Do not scan unrelated third-party reference repositories during an implementation packet unless the packet explicitly classifies the task as research. Clean-room boundaries still apply.
+Do not scan unrelated repository areas or third-party reference repositories unless the task explicitly requires research. Clean-room boundaries still apply.
 
-## 3. Multi-packet execution rule
+## 3. Packet execution rule
 
-A task may start from one packet ID, the current default packet, or an ordered set selected from the READY/actionable frontier, for example:
+Default to one coherent packet/task per Codex turn. An ordered multi-packet batch is appropriate only when the user explicitly requests a batch or the packets are tiny, tightly coupled, and share the same bounded context.
 
-```text
-Start with P3-API-02, then continue through additional actionable packets in dependency order.
-```
+Do not automatically consume the entire READY frontier after finishing one packet. Return a concise handoff and let the control tower choose the next packet when continuing would require loading a new subsystem, large new documents, or a broad regression matrix.
 
-After a packet reaches its truthful automated completion state, Codex may proceed immediately to another actionable packet without waiting for a new user turn. For every selected packet:
+For every selected packet:
 
 - verify declared prerequisites before editing work that depends on them;
 - keep packet-specific tests/evidence/status distinguishable even when changes share a branch or PR;
@@ -54,13 +51,13 @@ Start with packet <PACKET-ID> as specified in
 <PHASE-DOCUMENT>.
 After it is complete, continue through additional actionable packets in declared dependency order when useful.
 
-Read and obey:
-- .agents/AGENTS.md
-- docs/PRODUCT_V1.md
-- docs/implementation/DECISIONS.md
-- docs/implementation/CODEX_PLAYBOOK.md
-- docs/implementation/STATUS.md
-- the selected packet sections and all linked design documents
+Context loading:
+- root AGENTS.md is the default policy;
+- use .agents/AGENTS.md only for explicit worker/chunk execution;
+- search PRODUCT_V1.md and DECISIONS.md for the concepts touched by this packet, then read only the matching sections;
+- search STATUS.md for this packet/component and read only the relevant evidence/status area;
+- read only the selected packet section in the phase document;
+- follow linked design documents only when a concrete implementation decision depends on them; do not preload the full documentation graph.
 
 Scope rules:
 - additional actionable packets may be implemented in the same task without a new user turn;
@@ -73,15 +70,16 @@ Scope rules:
 - no push unless explicitly authorized.
 
 Required workflow:
-1. inspect the existing implementation and tests for the selected packet(s);
+1. inspect the existing implementation and tests for the selected packet(s) with targeted search/bounded reads;
 2. verify each packet's prerequisites and invariants before dependent edits;
-3. implement each selected packet in dependency order, continuing directly to the next actionable packet;
+3. implement each selected packet in dependency order, continuing only while the task remains coherent and context remains bounded;
 4. add normal, boundary, malformed, failure, teardown, and rollback tests as applicable to each packet;
-5. run focused checks for every changed packet plus the applicable regression suite;
-6. fix every warning/error caused by the batch;
-7. update STATUS.md and relevant documentation with truthful per-packet evidence;
-8. run git diff --check;
-9. summarize changed files, tests, packet states, limitations, and unperformed manual gates.
+5. run focused checks for every changed packet. Do not run the full dual-arch/release matrix inside an ordinary implementation turn unless the user explicitly requested integration/release validation;
+6. retry the same failing command at most once, then diagnose instead of cycling variants;
+7. fix every warning/error caused by the batch;
+8. update only the relevant STATUS/document sections with truthful per-packet evidence;
+9. run git diff --check;
+10. summarize changed files, focused tests, packet states, limitations, and unperformed manual gates so the control tower/CI can run broad regression separately.
 ```
 
 ## 5. Planning before editing

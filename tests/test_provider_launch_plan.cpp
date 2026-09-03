@@ -125,6 +125,7 @@ GameRuntimeRequirement requirement(std::string gameId) {
     GameRuntimeRequirement value;
     value.gameId = std::move(gameId);
     value.revision = 11u;
+    value.validatedSeatCount = 2u;
     value.requirements.display = true;
     value.requirements.keyboard = true;
     value.requirements.mouse = true;
@@ -225,6 +226,61 @@ void testSameGameRequiresAndPinsSetup() {
               compiled.plan->seats[1].instanceRecipe->arguments ==
               std::vector<std::wstring>{L"--seat=2"},
           "instance recipes are pinned per Seat");
+}
+
+void testValidationSeatScopeIsPerGame() {
+    FakeProvider fake;
+    const std::vector<ProviderAdapterBinding> providers{{"fake", &fake}};
+    const auto seatDocument = seats();
+    const auto playerDocument = players();
+    const auto gameDocument = games();
+    const profile::TwoPlayerSetupDocument noSetups;
+
+    auto independentlyValidated = requirements();
+    independentlyValidated[0].validatedSeatCount = 1u;
+    independentlyValidated[1].validatedSeatCount = 1u;
+    const auto differentGames = compileProviderAwareLaunchPlan(
+        seatDocument, playerDocument, gameDocument, noSetups,
+        twoDifferentGames(), providers, independentlyValidated);
+    check(differentGames.succeeded(),
+          "two different Games may each use independent one-Seat physical validation authority");
+
+    auto singleGameDocument = gameDocument;
+    singleGameDocument.games.resize(1u);
+    auto singleGameRequirement = requirements();
+    singleGameRequirement.resize(1u);
+    singleGameRequirement.front().validatedSeatCount = 1u;
+
+    profile::TwoPlayerSetup setup;
+    setup.setupId = "setup-scope";
+    setup.gameId = "game:a";
+    setup.displayName = L"Two players";
+    setup.compatibility = compatibility();
+    setup.instances = {
+        {{L"--seat=1"}, L"C:\\Games\\A1", L"C:\\Data\\A1"},
+        {{L"--seat=2"}, L"C:\\Games\\A2", L"C:\\Data\\A2"},
+    };
+    profile::TwoPlayerSetupDocument setupDocument;
+    setupDocument.setups = {setup};
+    profile::RuntimeSessionSelection sameGame;
+    sameGame.bindings = {
+        {1u, "player-1", "game:a", "setup-scope", 0u},
+        {2u, "player-2", "game:a", "setup-scope", 1u},
+    };
+
+    const auto rejected = compileProviderAwareLaunchPlan(
+        seatDocument, playerDocument, singleGameDocument, setupDocument,
+        sameGame, providers, singleGameRequirement);
+    check(!rejected.succeeded() && !rejected.issues.empty() &&
+              rejected.issues.front().code == PlanIssueCode::ValidationSeatScopeExceeded,
+          "one-Seat validation authority cannot compile a two-Seat same-Game plan");
+
+    singleGameRequirement.front().validatedSeatCount = 2u;
+    const auto accepted = compileProviderAwareLaunchPlan(
+        seatDocument, playerDocument, singleGameDocument, setupDocument,
+        sameGame, providers, singleGameRequirement);
+    check(accepted.succeeded(),
+          "two-Seat validation authority permits the same-Game two-Seat plan when all other checks pass");
 }
 
 void testMaterialStalenessAndHardwareBlockPlan() {
@@ -380,6 +436,7 @@ GameRuntimeRequirement materialRequirement() {
     GameRuntimeRequirement value;
     value.gameId = "game:material";
     value.revision = 21u;
+    value.validatedSeatCount = 2u;
     value.compatibility = materialCompatibility();
     return value;
 }
@@ -791,6 +848,7 @@ void testPhaseFailureReversesEarlierWorkAndRuntimeCannotJumpAhead() {
 int main() {
     testDeterministicDifferentGamePlan();
     testSameGameRequiresAndPinsSetup();
+    testValidationSeatScopeIsPerGame();
     testMaterialStalenessAndHardwareBlockPlan();
     testProviderAndAccountAmbiguityFailClosed();
     testApplicationScopedProviderBindings();

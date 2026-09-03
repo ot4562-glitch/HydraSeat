@@ -76,6 +76,40 @@ void testDisconnectedUnknownAndValidatedAssignments() {
           "unknown host state disables optimistic global mutations");
 }
 
+void testIncompleteSeatHardwareRemainsValidConfiguration() {
+    ControlSurfaceModel model;
+    auto incomplete = config();
+    for (auto& seat : incomplete) {
+        seat.displayIds.clear();
+        seat.primaryDisplayId.reset();
+        seat.keyboardIds.clear();
+        seat.mouseIds.clear();
+        seat.controllerIds.clear();
+        seat.audioOutputEndpointId.reset();
+        seat.audioInputEndpointId.reset();
+    }
+
+    std::string error;
+    check(model.setValidatedConfiguration(
+              1u, incomplete, StartupMode::Manual, &error),
+          "validated configuration accepts Seats with device categories set later");
+    model.setControlContext(1u, true, true);
+    model.markHostDisconnected("host unavailable while editing later");
+    check(model.state().assignmentSource ==
+              AssignmentSource::ValidatedInactiveConfiguration &&
+              model.state().seats.size() == 2u &&
+              model.state().seats[0].config.displayIds.empty() &&
+              model.state().seats[0].config.keyboardIds.empty() &&
+              model.state().seats[1].config.mouseIds.empty(),
+          "incomplete Seat hardware remains representable without invented defaults");
+
+    auto idle = hostSnapshot(SeatSessionPhase::Idle, 1u, incomplete);
+    model.observeHostSnapshot(idle);
+    check(model.state().runtimeMode == RuntimeDisplayMode::BackgroundIdle &&
+              model.state().actions.start && model.state().actions.reconfigure,
+          "control surface does not make complete hardware a prerequisite for a saved Idle profile");
+}
+
 void testV1SeatLimitFailsClosedBeforeHostMutation() {
     ControlSurfaceModel model;
     auto three = config();
@@ -215,6 +249,7 @@ void testTransitionRecoveryAndHostExitPresentation() {
 
 int main() {
     testDisconnectedUnknownAndValidatedAssignments();
+    testIncompleteSeatHardwareRemainsValidConfiguration();
     testV1SeatLimitFailsClosedBeforeHostMutation();
     testAuthoritativeActiveSnapshotOverridesInactiveMemory();
     testSeatGameFaultAndReturnPolicyProjection();

@@ -1,0 +1,207 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "clean-modified-source",
+      "gitignore": [],
+      "files": [
+        {
+          "path": "src/clean.cpp",
+          "state": "modified",
+          "content": "int value = 2;\n",
+          "contentKind": null,
+          "baseline": "int value = 1;\n"
+        }
+      ],
+      "expectedBlockers": [],
+      "expectedInfo": []
+    },
+    {
+      "name": "generated-root-object",
+      "gitignore": [],
+      "files": [
+        {
+          "path": "orphan.obj",
+          "state": "untracked",
+          "content": "fixture object placeholder\n",
+          "contentKind": null,
+          "baseline": null
+        }
+      ],
+      "expectedBlockers": ["ROOT_BUILD_ARTIFACT"],
+      "expectedInfo": []
+    },
+    {
+      "name": "generated-project-outside-ignored-build",
+      "gitignore": [],
+      "files": [
+        {
+          "path": "scratch/HydraSeat.vcxproj",
+          "state": "untracked",
+          "content": "fixture project placeholder\n",
+          "contentKind": null,
+          "baseline": null
+        }
+      ],
+      "expectedBlockers": ["THROWAWAY_OUTPUT", "UNIGNORED_GENERATED_OUTPUT"],
+      "expectedInfo": []
+    },
+    {
+      "name": "ignored-build-state-is-informational",
+      "gitignore": ["build-local/"],
+      "files": [
+        {
+          "path": "build-local/cache.obj",
+          "state": "ignored",
+          "content": "ignored build placeholder\n",
+          "contentKind": null,
+          "baseline": null
+        }
+      ],
+      "expectedBlockers": [],
+      "expectedInfo": ["IGNORED_GENERATED_STATE"]
+    },
+    {
+      "name": "personal-path-in-modified-line",
+      "gitignore": [],
+      "files": [
+        {
+          "path": "src/local_path.cpp",
+          "state": "modified",
+          "content": null,
+          "contentKind": "personal-windows",
+          "baseline": "cache = relative/cache\n"
+        }
+      ],
+      "expectedBlockers": ["PERSONAL_ABSOLUTE_PATH"],
+      "expectedInfo": []
+    },
+    {
+      "name": "personal-path-in-untracked-text",
+      "gitignore": [],
+      "files": [
+        {
+          "path": "notes/local.txt",
+          "state": "untracked",
+          "content": null,
+          "contentKind": "personal-unix",
+          "baseline": null
+        }
+      ],
+      "expectedBlockers": ["PERSONAL_ABSOLUTE_PATH"],
+      "expectedInfo": []
+    },
+    {
+      "name": "ai-bridge-unignored-is-blocker",
+      "gitignore": [],
+      "files": [
+        {
+          "path": ".ai-bridge/current-plan.md",
+          "state": "untracked",
+          "content": "coordination scratch\n",
+          "contentKind": null,
+          "baseline": null
+        }
+      ],
+      "expectedBlockers": ["AI_BRIDGE_PUBLICATION_CANDIDATE"],
+      "expectedInfo": []
+    },
+    {
+      "name": "ai-bridge-ignored-is-informational",
+      "gitignore": [".ai-bridge/"],
+      "files": [
+        {
+          "path": ".ai-bridge/current-plan.md",
+          "state": "ignored",
+          "content": "coordination scratch\n",
+          "contentKind": null,
+          "baseline": null
+        }
+      ],
+      "expectedBlockers": [],
+      "expectedInfo": ["IGNORED_AI_BRIDGE_STATE"]
+    },
+    {
+      "name": "intentional-agents-coordination-is-informational",
+      "gitignore": [],
+      "files": [
+        {
+          "path": ".agents/batch/agent-10.md",
+          "state": "untracked",
+          "content": "internal worker coordination\n",
+          "contentKind": null,
+          "baseline": null
+        }
+      ],
+      "expectedBlockers": [],
+      "expectedInfo": ["INTERNAL_AGENTS_COORDINATION"]
+    },
+    {
+      "name": "duplicate-throwaway-output",
+      "gitignore": [],
+      "files": [
+        {
+          "path": "scratch/test-output-a.txt",
+          "state": "untracked",
+          "content": "same throwaway output\n",
+          "contentKind": null,
+          "baseline": null
+        },
+        {
+          "path": "scratch/test-output-b.txt",
+          "state": "untracked",
+          "content": "same throwaway output\n",
+          "contentKind": null,
+          "baseline": null
+        }
+      ],
+      "expectedBlockers": ["DUPLICATE_THROWAWAY_OUTPUT", "THROWAWAY_OUTPUT"],
+      "expectedInfo": []
+    },
+    {
+      "name": "unexpected-release-payload",
+      "gitignore": [],
+      "files": [
+        {
+          "path": "dist/HydraSeat.zip",
+          "state": "untracked",
+          "content": "release payload placeholder\n",
+          "contentKind": null,
+          "baseline": null
+        }
+      ],
+      "expectedBlockers": ["UNTRACKED_RELEASE_PAYLOAD"],
+      "expectedInfo": []
+    },
+    {
+      "name": "evidence-output-trace-is-throwaway",
+      "gitignore": [],
+      "files": [
+        {
+          "path": "evidence-output/session.trace",
+          "state": "untracked",
+          "content": "temporary evidence trace\n",
+          "contentKind": null,
+          "baseline": null
+        }
+      ],
+      "expectedBlockers": ["THROWAWAY_OUTPUT"],
+      "expectedInfo": []
+    },
+    {
+      "name": "secret-like-path-is-metadata-only-blocker",
+      "gitignore": [],
+      "files": [
+        {
+          "path": ".env.local",
+          "state": "untracked",
+          "content": "fixture-not-a-real-secret\n",
+          "contentKind": null,
+          "baseline": null
+        }
+      ],
+      "expectedBlockers": ["SENSITIVE_PATH_CANDIDATE"],
+      "expectedInfo": []
+    }
+  ]
+}

@@ -61,6 +61,8 @@ AUTOMATED_VALIDATORS: tuple[ValidatorSpec, ...] = (
     ValidatorSpec("release-scope", "tools/validate_release_scope.py"),
     ValidatorSpec("release-signing-manifest-structure", "tools/validate_release_signing_manifest.py"),
     ValidatorSpec("release-installer-contract", "tools/validate_release_installer_contract.py"),
+    ValidatorSpec("v1-play-authority", "tools/validate_v1_play_authority.py"),
+    ValidatorSpec("worktree-hygiene", "tools/validate_worktree_hygiene.py"),
 )
 
 MANUAL_GATE_NAMES: tuple[str, ...] = (
@@ -257,6 +259,20 @@ def _assert(condition: bool, message: str) -> None:
 
 
 def self_test() -> None:
+    _assert(
+        any(
+            spec.name == "worktree-hygiene" and spec.script == "tools/validate_worktree_hygiene.py"
+            for spec in AUTOMATED_VALIDATORS
+        ),
+        "worktree hygiene validator is wired into the automated pre-merge allowlist",
+    )
+    _assert(
+        any(
+            spec.name == "v1-play-authority" and spec.script == "tools/validate_v1_play_authority.py"
+            for spec in AUTOMATED_VALIDATORS
+        ),
+        "V1 Play authority validator is wired into the automated pre-merge allowlist",
+    )
     pass_spec = ValidatorSpec("fixture-pass", "tools/testdata/premerge_gate/pass_validator.py")
     fail_spec = ValidatorSpec("fixture-fail", "tools/testdata/premerge_gate/fail_validator.py")
     missing_spec = ValidatorSpec("fixture-missing", "tools/testdata/premerge_gate/missing_validator.py")

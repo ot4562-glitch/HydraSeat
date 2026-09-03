@@ -1,9 +1,17 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "surface": "native-win32-launcher",
   "locales": ["en-US", "ko-KR", "zh-CN"],
   "dpi": [96, 120, 144, 192],
   "windowProfiles": ["standard-980x720", "narrow-640x640"],
+  "uxContracts": {
+    "criticalActionText": "measured-wrap-no-critical-ellipsis",
+    "primaryActionOrder": ["GameLibrary", "SeatSelection", "PlayerSelection", "Play"],
+    "hardwareAssignment": "non-drag-assignment-required",
+    "seatSurface": "minimal-seat-local-actions",
+    "advancedDetails": "separate-advanced-page",
+    "firstWindow": "bounded-real-process-responsive"
+  },
   "automatedEvidence": [
     {
       "id": "localization-contract",
@@ -28,6 +36,55 @@
       ]
     },
     {
+      "id": "critical-action-text-contract",
+      "test": "UiAccessibilityTests",
+      "proves": [
+        "critical-actions-measured-from-localized-text",
+        "critical-buttons-fit-standard-and-narrow",
+        "blocking-reasons-wrap-without-ellipsis"
+      ]
+    },
+    {
+      "id": "game-first-normal-flow-contract",
+      "test": "UiAccessibilityTests",
+      "proves": [
+        "game-list-first-focus-order",
+        "seat-selection-and-play-remain-primary"
+      ]
+    },
+    {
+      "id": "hardware-assignment-contract",
+      "test": "ControlSurfaceModelTests",
+      "proves": [
+        "non-drag-assignment-controls-source-wired",
+        "incomplete-hardware-remains-valid"
+      ]
+    },
+    {
+      "id": "seat-minimality-contract",
+      "test": "UiAccessibilityTests",
+      "proves": [
+        "normal-seat-compact-surface-has-single-end-playing-action",
+        "critical-recovery-expands-only-when-required"
+      ]
+    },
+    {
+      "id": "advanced-detail-separation-contract",
+      "test": "UiAccessibilityTests",
+      "proves": [
+        "diagnostics-and-compatibility-detail-live-on-advanced-page",
+        "ordinary-happy-path-keeps-primary-controls-separate"
+      ]
+    },
+    {
+      "id": "first-window-responsiveness-contract",
+      "test": "HydraStartupWindowProbe",
+      "proves": [
+        "real-process-first-window-bounded",
+        "real-window-ui-thread-responsiveness-bounded"
+      ]
+    },
+    {
       "id": "disabled-readiness-contract",
       "test": "LauncherUiModelTests",
       "proves": [
@@ -40,17 +97,17 @@
     {
       "id": "real-first-window",
       "state": "PENDING",
-      "required": "Fresh tracked Release HydraSeat.exe shows its first management window promptly or exits with a bounded actionable failure after startup integration lands."
+      "required": "Run the final tracked Release HydraSeat.exe on the intended release environment and record first-window timing or bounded actionable startup failure; developer-machine regression coverage is not release-artifact acceptance."
     },
     {
       "id": "real-screenshots-standard-and-narrow",
       "state": "PENDING",
-      "required": "Capture and review real launcher screenshots for normal, selected, blocked, standard 980x720, and narrow layouts in all shipped locales."
+      "required": "Capture and review real launcher screenshots for normal, selected, blocked, standard 980x720, and narrow layouts in all shipped locales; visual taste remains human-reviewed."
     },
     {
       "id": "real-keyboard-only-navigation",
       "state": "PENDING",
-      "required": "Navigate the real launcher with keyboard only and verify visible focus, reachable game-first actions, and disabled-reason discoverability."
+      "required": "Navigate the real launcher with keyboard only and verify visible focus, game-first reachability, and disabled-reason discoverability."
     },
     {
       "id": "real-high-contrast-visual",
@@ -66,6 +123,21 @@
       "id": "real-mixed-dpi",
       "state": "PENDING",
       "required": "Exercise real mixed-DPI monitor movement/text scaling and confirm no clipping, hidden critical action, or stale geometry."
+    },
+    {
+      "id": "real-hardware-assignment-without-drag",
+      "state": "PENDING",
+      "required": "With real keyboards and mice attached, assign and reassign Seat hardware using the click/keyboard non-drag path and verify the intended physical device identity before saving."
+    },
+    {
+      "id": "real-seat-ui-visual-minimality",
+      "state": "PENDING",
+      "required": "Inspect the real per-Seat surface in Idle/Playing/recovery states and confirm it remains a minimal game surface rather than a general shell or telemetry form."
+    },
+    {
+      "id": "real-game-happy-path",
+      "state": "PENDING",
+      "required": "Run the real game-first flow with supported provider/game evidence: choose game, Seat, Player, Play, then stop or change one Seat without treating synthetic UI tests as game compatibility evidence."
     }
   ],
   "defectLedger": [
@@ -91,7 +163,7 @@
     },
     {
       "id": "windowless-startup",
-      "automatedRegression": "EXTERNAL-STARTUP-CHUNK",
+      "automatedRegression": "COVERED",
       "visualRecheck": "PENDING"
     }
   ]

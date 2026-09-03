@@ -284,6 +284,7 @@ hydra::requirement::TrustedRequirementSnapshot trustedRuntimeRequirements() {
     hydra::plan::GameRuntimeRequirement requirement;
     requirement.gameId = "game:a";
     requirement.revision = 13u;
+    requirement.validatedSeatCount = 1u;
     requirement.requirements.display = false;
     requirement.requirements.keyboard = false;
     requirement.requirements.mouse = false;

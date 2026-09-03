@@ -2,7 +2,7 @@
 
 [한국어](README.ko.md) · [简体中文](README.zh-CN.md)
 
-HydraSeat is a Windows 10/11 x64 project for running **two local gaming Seats on one PC**. A Seat is a physical station (display, input, controller and audio choices), not another Windows desktop or user session. The normal flow is game-first: choose a game, choose Seat 1, Seat 2 or Both, choose players, then launch.
+HydraSeat is a Windows 10/11 x64 project for running **two local gaming Seats on one PC**. A Seat is a physical station (display, input, controller and audio choices), not another Windows desktop or user session. The normal flow is player/game-first: choose or create Player 1, optionally choose Player 2, choose a game, configure Display/Input Setup when needed, then launch.
 
 This repository is an advanced implementation and test platform, **not a finished public release**. Runtime, IPC, launch, rollback, recovery, provider, compatibility and release foundations are implemented and heavily covered by controlled tests. Physical two-keyboard/two-mouse evidence, real-game campaigns, clean-machine installer/UAC/reboot evidence and protected production signing remain release gates.
 
@@ -10,7 +10,8 @@ This repository is an advanced implementation and test platform, **not a finishe
 
 | Component | Built target | Current responsibility |
 | --- | --- | --- |
-| Management UI | `HydraSeat.exe` | Native Win32 game-first UI, Seat/profile/setup selection, host control and diagnostics |
+| Management UI | `HydraSeat.exe` | Native Win32 game-first UI, Player/game/setup selection and host control |
+| Setup | `HydraSeatSetup.exe` | Native x64 double-click Install/Repair/Uninstall bootstrapper over the signed transactional installer contract |
 | Runtime authority | `hydra_host.exe` | Session authority, bounded/versioned IPC, immutable launch plans, process trees and Seat lifecycle |
 | Seat UI | `hydra_seat_ui.exe` | Minimal per-Seat launcher/status surface; not a second desktop shell |
 | Recovery | `hydra_watchdog.exe`, `hydra_reset.exe` | Crash-journal recovery, owned-state rollback and emergency reset |
@@ -61,7 +62,7 @@ cmake --build C:\HydraSeat\build-x86 --config Release --parallel
 ctest --test-dir C:\HydraSeat\build-x86 -C Release --output-on-failure
 ```
 
-On 2026-08-30, fresh x64 and Win32 trees each built without warnings and passed **133/133** CTest tests. The focused production-launch/IPC regression set also passed. That automated result does not replace pending physical and real-game gates.
+On 2026-08-31, the current x64 and Win32 trees both completed full Release builds and passed **139/139** CTest tests. The V1 hands-on mock/readiness gate, production-launch/IPC regression set and bounded real-executable first-window probe also pass. MSBuild still emits the known `MSB8029` intermediate/output-directory warning in these developer build trees; the automated result does not replace pending Computer Use, physical, real-game, clean-machine or signing gates.
 
 ```powershell
 python tools/validate_implementation_roadmap.py
@@ -73,9 +74,9 @@ git diff --check
 
 ## Installation and release state
 
-`tools/install_hydraseat.ps1` implements x64 package validation, install/repair/uninstall transactions, owned-path checks and rollback. The release contract contains `HydraSeat.exe`, `hydra_host.exe`, `hydra_seat_ui.exe`, `hydra_watchdog.exe` and `hydra_reset.exe`.
+`HydraSeatSetup.exe` is the native x64 double-click bootstrapper for Install/Repair/Uninstall. It performs the user-facing setup flow and delegates privileged mutations to the existing signed `tools/install_hydraseat.ps1` transaction engine, which owns exact package validation, owned-path checks and rollback. `tools/build_installer_package.ps1` stages the reviewed offline x64 payload; the signing/release allowlist includes both the setup bootstrapper and installer script rather than recursively packaging developer build output.
 
-Do not treat the installer as production-validated yet. Clean Windows machines, UAC, reboot/interruption recovery, uninstall postconditions, a protected signing environment, a production certificate/timestamp provider and a signed release-candidate run are still required.
+Do not treat the installer as production-validated yet. The bootstrapper/package contracts and automated installer validators pass, but clean Windows machines, real UAC accept/cancel behavior, reboot/interruption recovery, uninstall postconditions, a protected signing environment, a production certificate/timestamp provider and a signed release-candidate run are still required.
 
 ## Documentation map
 

@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-HydraSeat는 **한 대의 Windows 10/11 x64 PC에서 두 개의 로컬 게임 Seat를 실행**하기 위한 프로젝트다. Seat는 디스플레이·입력·컨트롤러·오디오로 이루어진 물리적 좌석이며 별도 Windows 데스크톱이나 사용자 세션이 아니다. 기본 흐름은 게임 → Seat 1/Seat 2/Both → Player → 실행이다.
+HydraSeat는 **한 대의 Windows 10/11 x64 PC에서 두 개의 로컬 게임 Seat를 실행**하기 위한 프로젝트다. Seat는 디스플레이·입력·컨트롤러·오디오로 이루어진 물리적 좌석이며 별도 Windows 데스크톱이나 사용자 세션이 아니다. 기본 흐름은 Player 1 생성/선택 → 필요하면 Player 2 선택 → 게임 선택 → 필요할 때 디스플레이/입력 설정 → 실행이다.
 
 현재 저장소는 구현과 테스트가 상당히 진행됐지만 **완성된 공개 제품은 아니다**. 런타임, IPC, 실행, 롤백, 복구, provider, 호환성, 배포 기반은 구현되어 있고 controlled test가 폭넓게 존재한다. 두 키보드·두 마우스 물리 증거, 실제 게임 campaign, clean-machine installer/UAC/reboot 증거, 보호된 production signing은 아직 release gate다.
 
@@ -10,7 +10,8 @@ HydraSeat는 **한 대의 Windows 10/11 x64 PC에서 두 개의 로컬 게임 Se
 
 | 구성 요소 | 빌드 target | 현재 책임 |
 | --- | --- | --- |
-| Management UI | `HydraSeat.exe` | Native Win32 game-first UI, Seat/profile/setup 선택, host 제어와 진단 |
+| Management UI | `HydraSeat.exe` | Native Win32 game-first UI, Player/game/setup 선택과 host 제어 |
+| Setup | `HydraSeatSetup.exe` | 서명된 transactional installer 계약을 사용하는 x64 더블클릭 Install/Repair/Uninstall bootstrapper |
 | Runtime authority | `hydra_host.exe` | 세션 권위, bounded/versioned IPC, immutable launch plan, process tree와 Seat lifecycle |
 | Seat UI | `hydra_seat_ui.exe` | Seat별 최소 launcher/status UI. 두 번째 desktop shell이 아님 |
 | Recovery | `hydra_watchdog.exe`, `hydra_reset.exe` | crash journal 복구, 소유 상태 rollback, emergency reset |
@@ -61,13 +62,13 @@ cmake --build C:\HydraSeat\build-x86 --config Release --parallel
 ctest --test-dir C:\HydraSeat\build-x86 -C Release --output-on-failure
 ```
 
-2026-08-30 기준 새 x64와 Win32 tree는 warning 없이 빌드되었고 각각 **133/133** CTest를 통과했다. Production-launch/IPC focused regression도 통과했다. 이 자동 결과는 남은 물리·실게임 gate를 대신하지 않는다.
+2026-08-31 기준 현재 x64와 Win32 tree는 모두 전체 Release 빌드를 완료했고 각각 **139/139** CTest를 통과했다. V1 hands-on mock/readiness gate, production-launch/IPC regression, 제한된 실제 실행 파일 첫 창 probe도 통과한다. 개발용 build tree에서는 기존 MSBuild `MSB8029` intermediate/output-directory 경고가 계속 출력된다. 이 자동 결과는 Computer Use·물리·실게임·clean-machine·signing gate를 대신하지 않는다.
 
 ## 설치와 release 상태
 
-`tools/install_hydraseat.ps1`에는 x64 package 검증, install/repair/uninstall transaction, owned-path 검사와 rollback이 구현되어 있다. Release binary는 `HydraSeat.exe`, `hydra_host.exe`, `hydra_seat_ui.exe`, `hydra_watchdog.exe`, `hydra_reset.exe`다.
+`HydraSeatSetup.exe`는 Install/Repair/Uninstall용 native x64 더블클릭 bootstrapper다. 사용자-facing 설치 흐름을 제공하고, 관리자 권한이 필요한 실제 변경은 기존 서명된 `tools/install_hydraseat.ps1` transaction engine에 위임한다. 이 스크립트가 정확한 package 검증, owned-path 검사와 rollback을 담당한다. `tools/build_installer_package.ps1`는 검토된 offline x64 payload만 staging하며, signing/release allowlist에는 setup bootstrapper와 installer script가 모두 명시적으로 포함된다.
 
-아직 production installer 검증 완료로 간주하면 안 된다. Clean Windows machine, UAC, reboot/interruption recovery, uninstall postcondition, 보호된 signer, production certificate/timestamp provider, signed release-candidate 실행이 필요하다.
+아직 production installer 검증 완료로 간주하면 안 된다. Bootstrapper/package 계약과 자동 installer validator는 통과하지만 Clean Windows machine, 실제 UAC 승인/취소, reboot/interruption recovery, uninstall postcondition, 보호된 signer, production certificate/timestamp provider, signed release-candidate 실행이 필요하다.
 
 ## 문서 지도
 

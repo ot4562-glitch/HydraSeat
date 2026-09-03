@@ -52,6 +52,7 @@ function Assert-ReviewedSigningManifest {
     param($Manifest)
 
     $expected = @{
+        "setup-bootstrap" = @{ kind = "cmake-executable"; target = "HydraSeatSetup"; fileName = "HydraSeatSetup.exe" }
         "main-ui" = @{ kind = "cmake-executable"; target = "HydraSeat"; fileName = "HydraSeat.exe" }
         "host" = @{ kind = "cmake-executable"; target = "hydra_host"; fileName = "hydra_host.exe" }
         "seat-ui" = @{ kind = "cmake-executable"; target = "hydra_seat_ui"; fileName = "hydra_seat_ui.exe" }

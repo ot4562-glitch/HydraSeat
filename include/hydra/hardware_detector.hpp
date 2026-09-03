@@ -15,8 +15,11 @@ enum class DeviceType {
 };
 
 struct DeviceInfo {
+    // Stable physical identity used by configuration/persistence. It must not
+    // depend on current Raw Input handles or enumeration order.
     std::wstring id;
     std::wstring name;
+    // Deterministic representative interface for the current process only.
     std::wstring devicePath;
     DeviceType type;
     uintptr_t nativeHandle{0};

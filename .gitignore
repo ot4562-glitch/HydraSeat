@@ -48,6 +48,7 @@ ui_*.h
 # Local configuration & secrets
 .env
 .env.local
+workspace_config.json
 *.log
 *.tmp
 *.bak

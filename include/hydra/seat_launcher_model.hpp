@@ -53,6 +53,21 @@ struct SeatLauncherState {
     bool nonIntrusiveWhilePlaying{false};
 };
 
+// Normal Seat UI intentionally exposes only product-relevant identity, state,
+// notification and actions. Runtime authority fields remain in SeatLauncherState
+// for command validation but are never part of this normal presentation policy.
+struct SeatLauncherPresentation {
+    bool compact{false};
+    bool showPlayer{false};
+    bool showGame{false};
+    bool showNotification{false};
+    bool showEndPlaying{false};
+    bool showReconnect{false};
+};
+
+SeatLauncherPresentation seatLauncherPresentation(
+    const SeatLauncherState& state) noexcept;
+
 // Pure presentation/policy model for exactly one configured Seat. It consumes
 // complete host snapshots and can only construct Seat-local game commands.
 class SeatLauncherModel {

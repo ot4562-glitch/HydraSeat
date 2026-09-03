@@ -512,6 +512,21 @@ def real_components() -> tuple[ProductionComponent, ...]:
             ),
         ),
         ProductionComponent(
+            name="production-input-authority",
+            implementation_sources=("src/production_input_authority.cpp",),
+            required_by_targets=("HydraSeat", "hydra_host"),
+            allowed_owner_targets=("hydra_production_input_authority",),
+            required_owner_dependencies=("hydra_hidhide_session",),
+            activate_if_paths_exist=(
+                "include/hydra/production_input_authority.hpp",
+                "src/production_input_authority.cpp",
+            ),
+            suggested_owner="hydra_production_input_authority",
+            suggested_insertion=(
+                "keep typed P3-HW selection in hydra_production_input_authority and make both HydraSeat and hydra_host reach it"
+            ),
+        ),
+        ProductionComponent(
             name="recovery-process-attachment-authority",
             implementation_sources=("src/watchdog_protocol.cpp",),
             required_by_targets=("hydra_watchdog", "hydra_reset", "hydra_gate_c_recovery"),

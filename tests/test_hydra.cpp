@@ -159,6 +159,22 @@ void testHidUsageClassification() {
 
 void testHardwareDetector() {
     hydra::HardwareDetector detector;
+    const auto checkStableInputInventory = [](const std::vector<hydra::DeviceInfo>& devices,
+                                              hydra::DeviceType expectedType,
+                                              std::string_view category) {
+        for (std::size_t index = 0; index < devices.size(); ++index) {
+            check(devices[index].type == expectedType,
+                  std::string(category) + " inventory preserves the requested device category");
+            check(!devices[index].id.empty(),
+                  std::string(category) + " inventory never exposes an empty stable identity");
+            check(!devices[index].devicePath.empty(),
+                  std::string(category) + " inventory keeps one representative runtime interface");
+            if (index > 0) {
+                check(devices[index - 1].id < devices[index].id,
+                      std::string(category) + " inventory is uniquely sorted by stable physical identity");
+            }
+        }
+    };
 
     const auto displays = detector.detectDisplays();
     checkDetectorQuery(detector, "displays");
@@ -166,6 +182,7 @@ void testHardwareDetector() {
 
     const auto keyboards = detector.detectKeyboards();
     checkDetectorQuery(detector, "keyboards");
+    checkStableInputInventory(keyboards, hydra::DeviceType::Keyboard, "keyboard");
     std::cout << "[Test] Keyboards detected: " << keyboards.size() << std::endl;
     for (std::size_t i = 0; i < keyboards.size(); ++i) {
         std::wcout << L"  KBD [" << i << L"]: handle=0x" << std::hex << keyboards[i].nativeHandle
@@ -176,6 +193,7 @@ void testHardwareDetector() {
 
     const auto mice = detector.detectMice();
     checkDetectorQuery(detector, "mice/touchpads");
+    checkStableInputInventory(mice, hydra::DeviceType::Mouse, "mouse/touchpad");
     std::cout << "[Test] Mice/touchpads detected: " << mice.size() << std::endl;
     for (std::size_t i = 0; i < mice.size(); ++i) {
         std::wcout << L"  MOU [" << i << L"]: handle=0x" << std::hex << mice[i].nativeHandle

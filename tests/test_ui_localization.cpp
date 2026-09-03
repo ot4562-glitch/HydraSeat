@@ -21,12 +21,14 @@ void check(bool condition, const char* message) {
 void testCompleteThreeLocaleCatalog() {
     for (std::uint16_t raw = 0; raw < static_cast<std::uint16_t>(TextId::Count); ++raw) {
         const auto id = static_cast<TextId>(raw);
-        check(!text(id, Locale::EnglishUnitedStates).empty(),
-              "every UI string has canonical English text");
-        check(!text(id, Locale::KoreanKorea).empty(),
-              "every UI string has Korean text or safe English fallback");
-        check(!text(id, Locale::ChineseSimplified).empty(),
-              "every UI string has Simplified Chinese text or safe English fallback");
+        check(localizationEntryComplete(id),
+              "every shipping UI string has explicit en-US/ko-KR/zh-CN catalog text");
+        check(localizationPlaceholdersValid(id),
+              "every shipping UI string preserves placeholder parity across locales");
+        check(!text(id, Locale::EnglishUnitedStates).empty() &&
+                  !text(id, Locale::KoreanKorea).empty() &&
+                  !text(id, Locale::ChineseSimplified).empty(),
+              "every shipping UI string resolves in all declared locales");
     }
 }
 
@@ -50,12 +52,23 @@ void testFormattingAndSafetyActionsStayVisible() {
     const auto koSeat = formatOne(TextId::SeatLauncherTitle, Locale::KoreanKorea, L"2");
     const auto zhPlayer = formatOne(TextId::CurrentSelectedPlayer,
                                     Locale::ChineseSimplified, L"Mario");
+    const auto koHardware = formatOne(TextId::SeatHardwareLabel, Locale::KoreanKorea, L"2");
+    const auto zhAssign = formatOne(TextId::AssignToSeat, Locale::ChineseSimplified, L"1");
+    const auto koConnected = formatOne(
+        TextId::ConnectedHardwareCount, Locale::KoreanKorea, L"4");
     check(koSeat.find(L"2") != std::wstring::npos &&
               koSeat.find(L"{0}") == std::wstring::npos,
           "localized Seat title substitutes bounded runtime value");
     check(zhPlayer.find(L"Mario") != std::wstring::npos &&
               zhPlayer.find(L"{0}") == std::wstring::npos,
           "localized dynamic labels substitute selected identity");
+    check(koHardware.find(L"2") != std::wstring::npos &&
+              koHardware.find(L"{0}") == std::wstring::npos &&
+              zhAssign.find(L"1") != std::wstring::npos &&
+              zhAssign.find(L"{0}") == std::wstring::npos &&
+              koConnected.find(L"4") != std::wstring::npos &&
+              koConnected.find(L"{0}") == std::wstring::npos,
+          "hardware setup labels preserve and substitute Seat placeholders");
     for (const auto locale : {Locale::EnglishUnitedStates, Locale::KoreanKorea,
                               Locale::ChineseSimplified}) {
         check(!text(TextId::EndPlaying, locale).empty() &&
@@ -91,6 +104,38 @@ void testLongLocalizedSafetyCopyDoesNotCollapseToEmpty() {
         const auto protectedCopy = text(TextId::ProtectedExperimentConfirmation, locale);
         check(optionalSetup.size() >= 8u && protectedCopy.size() >= 8u,
               "long safety/setup copy remains renderable in every declared locale");
+    }
+}
+
+void testCriticalActionCopyStaysConcise() {
+    constexpr std::size_t kMaxCriticalActionCharacters = 40u;
+    constexpr TextId kCriticalActions[] = {
+        TextId::Play,
+        TextId::EndPlaying,
+        TextId::Reconnect,
+        TextId::RecoveryAction,
+        TextId::SeatHardwareSetup,
+        TextId::UseSeatOne,
+        TextId::UseSeatTwo,
+        TextId::UseBothSeats,
+        TextId::ReturnToWindows,
+        TextId::Reconfigure,
+        TextId::ApplySetup,
+        TextId::ReloadSetup,
+        TextId::AssignToSeat,
+        TextId::UnassignDevice,
+        TextId::ExportSelectedResult,
+        TextId::DeleteSelectedResult,
+        TextId::ClearLocalResults,
+    };
+
+    for (const auto locale : {Locale::EnglishUnitedStates, Locale::KoreanKorea,
+                              Locale::ChineseSimplified}) {
+        for (const auto id : kCriticalActions) {
+            const auto value = text(id, locale);
+            check(!value.empty() && value.size() <= kMaxCriticalActionCharacters,
+                  "critical action copy stays present and semantically concise in every locale");
+        }
     }
 }
 
@@ -146,6 +191,7 @@ int main() {
     testFormattingAndSafetyActionsStayVisible();
     testStableNotificationAndPreflightIdsLocalizeWithoutRawText();
     testLongLocalizedSafetyCopyDoesNotCollapseToEmpty();
+    testCriticalActionCopyStaysConcise();
     testOwnerDrawStatusUsesOneShapeCue();
     testLocalizedLauncherWidthFloorIsNotEnglishSized();
     if (failures != 0) {

@@ -182,6 +182,7 @@ plan::GameRuntimeRequirement requirement(bool protectedExperimental, bool approv
     plan::GameRuntimeRequirement value;
     value.gameId = "game:community";
     value.revision = 9u;
+    value.validatedSeatCount = 2u;
     value.requirements.display = true;
     value.requirements.keyboard = true;
     value.requirements.mouse = true;

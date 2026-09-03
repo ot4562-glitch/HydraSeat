@@ -22,12 +22,16 @@ struct DeviceInterfaceIdentity {
     std::wstring interfacePath;
     std::optional<std::wstring> deviceInstanceId;
     std::optional<std::wstring> parentDeviceInstanceId;
+    std::optional<std::wstring> physicalAncestorInstanceId;
+    std::optional<std::wstring> physicalContainerId;
 };
 
 RawInputDeviceListResult enumerateRawInputDevices();
 std::optional<std::wstring> rawInputDeviceName(HANDLE deviceHandle);
 std::optional<RID_DEVICE_INFO> rawInputDeviceInfo(HANDLE deviceHandle);
 DeviceInterfaceIdentity resolveDeviceInterfaceIdentity(std::wstring_view interfacePath);
+std::wstring makeStableRawInputDeviceId(
+    std::wstring_view category, const DeviceInterfaceIdentity& identity);
 std::wstring makeStableRawInputDeviceId(
     std::wstring_view category, std::wstring_view interfacePath);
 

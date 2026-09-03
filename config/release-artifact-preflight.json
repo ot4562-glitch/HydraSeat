@@ -15,6 +15,11 @@
   },
   "artifacts": [
     {
+      "id": "setup-bootstrap",
+      "componentRole": "InstallerBootstrapper",
+      "packagePath": "x64/HydraSeatSetup.exe"
+    },
+    {
       "id": "main-ui",
       "componentRole": "ApplicationUI",
       "packagePath": "x64/HydraSeat.exe"

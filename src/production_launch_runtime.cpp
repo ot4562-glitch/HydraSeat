@@ -1086,7 +1086,7 @@ private:
 };
 
 class ProductionSeatActivationResourceFactory final
-    : public launch::ISeatActivationResourceFactory {
+    : public IProductionSeatActivationResourceFactory {
 public:
     explicit ProductionSeatActivationResourceFactory(ProductionLaunchServices services)
         : services_(std::move(services)) {
@@ -1106,7 +1106,7 @@ public:
 
     bool bindActivationEpoch(const launch::SeatActivationPlan& plan,
                              const ProductionActivationEpoch& epoch,
-                             std::string& error) {
+                             std::string& error) override {
         if (plan.seatId == 0 || plan.fingerprint == 0 || !epoch.valid() ||
             epoch.seatId != plan.seatId ||
             epoch.activationFingerprint != plan.fingerprint) {
@@ -1151,7 +1151,7 @@ public:
     bool bindTrustedHandoffExecutables(
         const launch::SeatActivationPlan& plan,
         std::vector<std::wstring> executablePaths,
-        std::string& error) {
+        std::string& error) override {
         if (plan.seatId == 0 || plan.fingerprint == 0 ||
             executablePaths.empty() ||
             executablePaths.size() > process::kMaximumTrustedHandoffExecutables ||
@@ -1178,6 +1178,15 @@ public:
         }
         error.clear();
         return true;
+    }
+
+    ProductionActivationContextHandle activationContext(
+        const launch::SeatActivationPlan& plan,
+        std::string& error) override {
+        const auto context = contextFor(plan, error);
+        if (!context || !context->activationAuthority) return {};
+        error.clear();
+        return context->activationAuthority;
     }
 
     std::unique_ptr<launch::ISeatActivationResource> create(
@@ -1370,7 +1379,7 @@ std::uint64_t seatHardwareFingerprint(const SeatConfig& seat) noexcept {
     return hash.value();
 }
 
-std::shared_ptr<launch::ISeatActivationResourceFactory>
+std::shared_ptr<IProductionSeatActivationResourceFactory>
 makeProductionSeatActivationResourceFactory(ProductionLaunchServices services) {
     return std::make_shared<ProductionSeatActivationResourceFactory>(std::move(services));
 }
@@ -1844,7 +1853,7 @@ HostProviderPlanRegistry::createForBinding(
     }
 
     if (auto* factory =
-            dynamic_cast<ProductionSeatActivationResourceFactory*>(resources_.get())) {
+            dynamic_cast<IProductionSeatActivationResourceFactory*>(resources_.get())) {
         ProductionActivationEpoch activationEpoch;
         activationEpoch.seatId = found->entry.seatId;
         activationEpoch.sessionId = found->entry.sessionId;

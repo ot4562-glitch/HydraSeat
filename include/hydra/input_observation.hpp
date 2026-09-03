@@ -83,6 +83,104 @@ struct RoutingBindingReport {
     bool operator==(const RoutingBindingReport&) const = default;
 };
 
+enum class InputIdentificationKind : std::uint8_t {
+    Keyboard,
+    Mouse
+};
+
+enum class InputIdentificationState : std::uint8_t {
+    Idle,
+    Waiting,
+    Identified,
+    Cancelled,
+    TimedOut,
+    Rejected
+};
+
+enum class InputIdentificationFailure : std::uint8_t {
+    None,
+    InvalidRequest,
+    StaleSequence,
+    StaleTimestamp,
+    MissingStableDeviceId,
+    DeviceUnavailable,
+    DeviceRemoved,
+    AmbiguousSharedDevice
+};
+
+enum class InputIdentificationDeviceStatus : std::uint8_t {
+    Unique,
+    Unavailable,
+    AmbiguousShared
+};
+
+struct InputIdentificationRequest {
+    InputIdentificationKind kind{InputIdentificationKind::Keyboard};
+    std::uint64_t minimumSequenceExclusive{0};
+    std::uint64_t startedAtMicros{0};
+    std::uint64_t timeoutMicros{0};
+
+    bool operator==(const InputIdentificationRequest&) const = default;
+};
+
+struct InputIdentificationCandidate {
+    InputIdentificationKind kind{InputIdentificationKind::Keyboard};
+    std::wstring deviceId;
+    std::uint64_t sequence{0};
+
+    bool operator==(const InputIdentificationCandidate&) const = default;
+};
+
+struct InputIdentificationSnapshot {
+    InputIdentificationState state{InputIdentificationState::Idle};
+    InputIdentificationFailure failure{InputIdentificationFailure::None};
+    std::optional<InputIdentificationCandidate> candidate;
+
+    bool terminal() const noexcept {
+        return state != InputIdentificationState::Idle &&
+               state != InputIdentificationState::Waiting;
+    }
+
+    bool operator==(const InputIdentificationSnapshot&) const = default;
+};
+
+// Small UI-independent state machine for "press/click to identify" flows. It
+// returns stable device identity only; it never mutates Seat configuration or
+// claims physical suppression. Controller capture is intentionally absent here:
+// RawInputEvent currently carries keyboard/mouse transitions but no controller
+// button payload, so pretending otherwise would create false identification.
+class InputIdentificationCapture {
+public:
+    const InputIdentificationSnapshot& begin(
+        const InputIdentificationRequest& request);
+    void cancel() noexcept;
+    void reset() noexcept;
+    void advanceTime(std::uint64_t nowMicros) noexcept;
+    void observeInput(
+        const RawInputEvent& event,
+        InputIdentificationDeviceStatus deviceStatus =
+            InputIdentificationDeviceStatus::Unique);
+    void observeDeviceChange(const RawInputDeviceChange& change);
+
+    const InputIdentificationSnapshot& snapshot() const noexcept {
+        return m_snapshot;
+    }
+
+private:
+    static std::wstring normalizeDeviceId(std::wstring_view value);
+    bool consumeObservation(std::uint64_t sequence,
+                            std::uint64_t timestampMicros);
+    bool isIntentionalTargetEvent(const RawInputEvent& event) const noexcept;
+    void reject(InputIdentificationFailure failure) noexcept;
+
+    InputIdentificationRequest m_request;
+    InputIdentificationSnapshot m_snapshot;
+    std::uint64_t m_deadlineMicros{0};
+    std::uint64_t m_lastSequence{0};
+    std::uint64_t m_lastTimestampMicros{0};
+    std::unordered_set<std::wstring> m_removedDeviceIds;
+};
+
 class InputObservationLedger {
 public:
     void observeInput(const RawInputEvent& event);

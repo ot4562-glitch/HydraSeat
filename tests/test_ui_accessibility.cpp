@@ -41,14 +41,35 @@ bool overlaps(const PixelRect& left, const PixelRect& right) {
 int deterministicWrappedHeight(std::wstring_view value, int width, unsigned dpi) {
     const int lineHeight = scaledLogical(20, dpi);
     if (value.empty() || width <= 0) return lineHeight;
-    const int textWidth = launcherTextWidthFloor(value, dpi);
-    const int lines = std::max(1, (textWidth + width - 1) / width);
-    return lines * lineHeight;
+
+    int lines = 0;
+    std::size_t lineStart = 0;
+    while (lineStart <= value.size()) {
+        const auto lineEnd = value.find(L'\n', lineStart);
+        const auto line = value.substr(
+            lineStart, lineEnd == std::wstring_view::npos
+                ? value.size() - lineStart : lineEnd - lineStart);
+        const int textWidth = launcherTextWidthFloor(line, dpi);
+        lines += std::max(1, (textWidth + width - 1) / width);
+        if (lineEnd == std::wstring_view::npos) break;
+        lineStart = lineEnd + 1;
+    }
+    return std::max(1, lines) * lineHeight;
 }
 
 LauncherTextRequirements localizedLauncherRequirements(
     Locale locale, unsigned dpi, const LauncherLayout& base) {
     LauncherTextMeasurements measured;
+    const auto metrics = launcherThemeMetrics(dpi);
+    const int buttonHorizontalPadding = metrics.space4 * 2;
+    const auto measureButton = [&](TextId id, const PixelRect& rect,
+                                   int& widthOut, int& heightOut) {
+        const auto label = text(id, locale);
+        widthOut = launcherTextWidthFloor(label, dpi);
+        heightOut = deterministicWrappedHeight(
+            label, std::max(1, rect.width - buttonHorizontalPadding), dpi);
+    };
+
     measured.heroEyebrowWidth = launcherTextWidthFloor(
         text(TextId::SelectedGame, locale), dpi);
     measured.heroTitleHeight = deterministicWrappedHeight(
@@ -57,18 +78,36 @@ LauncherTextRequirements localizedLauncherRequirements(
     measured.heroStatusHeight = deterministicWrappedHeight(
         text(TextId::ChooseSeatForSelectedGame, locale),
         std::max(1, base.heroStatus.width), dpi);
-    measured.useSeatOneWidth = launcherTextWidthFloor(
-        text(TextId::UseSeatOne, locale), dpi);
-    measured.useSeatTwoWidth = launcherTextWidthFloor(
-        text(TextId::UseSeatTwo, locale), dpi);
-    measured.useBothSeatsWidth = launcherTextWidthFloor(
-        text(TextId::UseBothSeats, locale), dpi);
-    measured.configureWidth = launcherTextWidthFloor(
-        text(TextId::SeatHardwareSetup, locale), dpi);
+
+    const std::wstring playerOne = std::wstring(text(TextId::Player, locale)) + L" 1";
+    const std::wstring playerTwo = std::wstring(text(TextId::Player, locale)) + L" 2";
+    measured.playerLabelWidth = std::max(
+        launcherTextWidthFloor(playerOne, dpi), launcherTextWidthFloor(playerTwo, dpi));
+    measured.playerLabelHeight = scaledLogical(20, dpi);
+    for (const auto status : {text(TextId::ChoosePlayer, locale), text(TextId::None, locale),
+                              text(TextId::StatusNeedsAttention, locale)}) {
+        measured.playerStatusWidth = std::max(
+            measured.playerStatusWidth, launcherTextWidthFloor(status, dpi));
+        measured.playerStatusHeight = std::max(
+            measured.playerStatusHeight,
+            deterministicWrappedHeight(status, std::max(1, base.seat1Status.width), dpi));
+    }
+
+    measureButton(TextId::SeatHardwareSetup, base.configure,
+                  measured.configureWidth, measured.configureHeight);
+    measureButton(TextId::Refresh, base.refresh,
+                  measured.refreshWidth, measured.refreshHeight);
+    measureButton(TextId::AddExecutable, base.addExecutable,
+                  measured.addExecutableWidth, measured.addExecutableHeight);
+    measureButton(TextId::Play, base.play,
+                  measured.playWidth, measured.playHeight);
+
+    measureButton(TextId::AddPlayer, base.addPlayer,
+                  measured.addPlayerWidth, measured.addPlayerHeight);
+
     measured.launchReasonHeight = deterministicWrappedHeight(
         text(TextId::RuntimeLaunchUnavailable, locale),
         std::max(1, base.launchReason.width), dpi);
-    const auto metrics = launcherThemeMetrics(dpi);
     const auto warning = launcherStatusLabelText(text(TextId::NeedsSetup, locale));
     const int warningWidth = std::max(
         metrics.minimumTarget,
@@ -84,9 +123,9 @@ void checkCriticalLauncherGeometry(const LauncherLayout& layout, int width, int 
     const auto metrics = launcherThemeMetrics(dpi);
     check(layout.valid && layout.narrow == expectNarrow &&
               rectFitsClient(layout.hero, width, height) &&
-              rectFitsClient(layout.useSeatOne, width, height) &&
-              rectFitsClient(layout.useSeatTwo, width, height) &&
-              rectFitsClient(layout.useBothSeats, width, height) &&
+              rectFitsClient(layout.playerNameLabel, width, height) &&
+              rectFitsClient(layout.playerName, width, height) &&
+              rectFitsClient(layout.addPlayer, width, height) &&
               rectFitsClient(layout.configure, width, height) &&
               rectFitsClient(layout.seat1Row, width, height) &&
               rectFitsClient(layout.seat2Row, width, height) &&
@@ -95,48 +134,34 @@ void checkCriticalLauncherGeometry(const LauncherLayout& layout, int width, int 
               rectFitsClient(layout.addExecutable, width, height) &&
               rectFitsClient(layout.launchReason, width, height) &&
               rectFitsClient(layout.play, width, height),
-          "launcher geometry keeps selected game, Seats, library, reason, and Play in the viewport");
+          "launcher geometry keeps game, Players, device setup, library, reason, and Play in the viewport");
     check(layout.play.height >= metrics.minimumTarget &&
               layout.play.width >= metrics.minimumTarget &&
-              layout.useSeatOne.height >= metrics.minimumTarget &&
-              layout.useSeatOne.width >= metrics.minimumTarget &&
-              layout.useSeatTwo.height >= metrics.minimumTarget &&
-              layout.useSeatTwo.width >= metrics.minimumTarget &&
-              layout.useBothSeats.height >= metrics.minimumTarget &&
-              layout.useBothSeats.width >= metrics.minimumTarget &&
+              layout.playerName.height >= metrics.minimumTarget &&
+              layout.addPlayer.height >= metrics.minimumTarget &&
+              layout.configure.height >= metrics.minimumTarget &&
               layout.refresh.height >= metrics.minimumTarget &&
               layout.addExecutable.height >= metrics.minimumTarget &&
               metrics.gameRowHeight >= metrics.minimumTarget,
           "launcher geometry preserves 44-logical-pixel interactive targets");
     check(!overlaps(layout.heroEyebrow, layout.heroTitle) &&
               !overlaps(layout.heroTitle, layout.heroStatus) &&
-              !overlaps(layout.heroTitle, layout.useSeatOne) &&
-              !overlaps(layout.heroTitle, layout.useSeatTwo) &&
-              !overlaps(layout.heroTitle, layout.useBothSeats) &&
-              !overlaps(layout.heroStatus, layout.configure) &&
+              !overlaps(layout.playerNameLabel, layout.playerName) &&
+              !overlaps(layout.playerName, layout.addPlayer) &&
+              !overlaps(layout.addPlayer, layout.configure) &&
               !overlaps(layout.seat1Label, layout.seat1Player) &&
-              !overlaps(layout.seat1Player, layout.seat1Game) &&
-              !overlaps(layout.seat1Game, layout.seat1Status) &&
+              !overlaps(layout.seat1Player, layout.seat1Status) &&
               !overlaps(layout.seat2Label, layout.seat2Player) &&
-              !overlaps(layout.seat2Player, layout.seat2Game) &&
-              !overlaps(layout.seat2Game, layout.seat2Status) &&
+              !overlaps(layout.seat2Player, layout.seat2Status) &&
               !overlaps(layout.gameList, layout.refresh) &&
               !overlaps(layout.gameList, layout.addExecutable) &&
               !overlaps(layout.launchReason, layout.play),
           "launcher critical regions do not overlap at supported widths");
-    check(rectFitsClient(layout.backToGames, width, height) &&
-              rectFitsClient(layout.playerName, width, height) &&
-              rectFitsClient(layout.addPlayer, width, height) &&
-              rectFitsClient(layout.playerRoster, width, height) &&
-              rectFitsClient(layout.renamePlayer, width, height) &&
-              rectFitsClient(layout.removePlayer, width, height) &&
-              rectFitsClient(layout.setupButton, width, height) &&
-              rectFitsClient(layout.diagnostics, width, height) &&
-              rectFitsClient(layout.privacySharing, width, height) &&
-              rectFitsClient(layout.privacySave, width, height) &&
-              rectFitsClient(layout.localResults, width, height) &&
-              rectFitsClient(layout.clearLocalResults, width, height),
-          "same Setup/Diagnostics HWND geometry stays inside the viewport");
+    check(layout.playerName.x >= layout.hero.x &&
+              layout.addPlayer.right() <= layout.hero.right() &&
+              layout.configure.x >= layout.hero.x &&
+              layout.configure.right() <= layout.hero.right(),
+          "rapid-test Player creation and device setup stay inside the selected-game card");
 }
 
 void testManagementMatrixAcrossLocalesAndDpi() {
@@ -203,20 +228,37 @@ void testLocalizedCriticalTextDrivesLauncherLayout() {
                       standard.heroEyebrow.width >= requirements.heroEyebrowMinimumWidth &&
                       standard.heroTitle.height >= requirements.heroTitleMinimumHeight &&
                       standard.heroStatus.height >= requirements.heroStatusMinimumHeight &&
-                      standard.useSeatOne.width >= requirements.useSeatOneMinimumWidth &&
-                      standard.useSeatTwo.width >= requirements.useSeatTwoMinimumWidth &&
-                      standard.useBothSeats.width >= requirements.useBothSeatsMinimumWidth &&
+                      standard.seat1Status.width >= requirements.playerStatusMinimumWidth &&
+                      standard.seat1Status.height >= requirements.playerStatusMinimumHeight &&
+                      standard.seat2Status.width >= requirements.playerStatusMinimumWidth &&
+                      standard.seat2Status.height >= requirements.playerStatusMinimumHeight &&
+                      standard.addPlayer.width >= requirements.addPlayerMinimumWidth &&
+                      standard.addPlayer.height >= requirements.addPlayerMinimumHeight &&
                       standard.configure.width >= requirements.configureMinimumWidth &&
+                      standard.configure.height >= requirements.configureMinimumHeight &&
+                      standard.refresh.width >= requirements.refreshMinimumWidth &&
+                      standard.refresh.height >= requirements.refreshMinimumHeight &&
+                      standard.addExecutable.width >= requirements.addExecutableMinimumWidth &&
+                      standard.addExecutable.height >= requirements.addExecutableMinimumHeight &&
+                      standard.play.width >= requirements.playMinimumWidth &&
+                      standard.play.height >= requirements.playMinimumHeight &&
                       standard.launchReason.height >= requirements.launchReasonMinimumHeight &&
                       standard.gameRowHeight >= requirements.gameRowMinimumHeight,
                   "980x720 launcher allocates measured localized critical text before secondary metadata");
+            check(standard.playerName.height >= launcherThemeMetrics(dpi).minimumTarget &&
+                      standard.addPlayer.width >= requirements.addPlayerMinimumWidth &&
+                      standard.addPlayer.height >= requirements.addPlayerMinimumHeight &&
+                      standard.configure.height >= requirements.configureMinimumHeight &&
+                      rectFitsClient(standard.playerName, standardWidth, standardHeight) &&
+                      rectFitsClient(standard.addPlayer, standardWidth, standardHeight),
+                  "980x720 rapid-test Player creation remains keyboard-sized and unclipped");
             check(standard.headerTitle.height >= scaledLogical(30, dpi) &&
                       !overlaps(standard.heroEyebrow, standard.heroTitle) &&
                       !overlaps(standard.heroTitle, standard.heroStatus) &&
-                      !overlaps(standard.useSeatOne, standard.useSeatTwo) &&
-                      !overlaps(standard.useSeatTwo, standard.useBothSeats) &&
-                      !overlaps(standard.useBothSeats, standard.configure),
-                  "localized standard launcher preserves title baselines and non-overlapping actions");
+                      !overlaps(standard.playerNameLabel, standard.playerName) &&
+                      !overlaps(standard.playerName, standard.addPlayer) &&
+                      !overlaps(standard.addPlayer, standard.configure),
+                  "localized standard launcher preserves title baselines and non-overlapping primary actions");
 
             const int narrowWidth = scaledLogical(kLauncherMinimumClientWidthLogical, dpi);
             const int narrowHeight = scaledLogical(kLauncherMinimumClientHeightLogical, dpi);
@@ -226,28 +268,40 @@ void testLocalizedCriticalTextDrivesLauncherLayout() {
             const auto narrow = computeLauncherLayout(
                 narrowWidth, narrowHeight, dpi, narrowRequirements);
             const auto metrics = launcherThemeMetrics(dpi);
-            check(narrow.valid && narrow.narrow && narrow.seatActionsTwoColumn &&
+            check(narrow.valid && narrow.narrow &&
                       narrow.heroEyebrow.width >= narrowRequirements.heroEyebrowMinimumWidth &&
                       narrow.heroTitle.height >= narrowRequirements.heroTitleMinimumHeight &&
                       narrow.heroStatus.height >= narrowRequirements.heroStatusMinimumHeight &&
-                      narrow.useSeatOne.height >= metrics.minimumTarget &&
-                      narrow.useSeatOne.width >= narrowRequirements.useSeatOneMinimumWidth &&
-                      narrow.useSeatTwo.height >= metrics.minimumTarget &&
-                      narrow.useSeatTwo.width >= narrowRequirements.useSeatTwoMinimumWidth &&
-                      narrow.useBothSeats.height >= metrics.minimumTarget &&
-                      narrow.useBothSeats.width >= narrowRequirements.useBothSeatsMinimumWidth &&
-                      narrow.configure.height >= metrics.minimumTarget &&
+                      narrow.seat1Status.width >= narrowRequirements.playerStatusMinimumWidth &&
+                      narrow.seat1Status.height >= narrowRequirements.playerStatusMinimumHeight &&
+                      narrow.seat2Status.width >= narrowRequirements.playerStatusMinimumWidth &&
+                      narrow.seat2Status.height >= narrowRequirements.playerStatusMinimumHeight &&
+                      narrow.addPlayer.width >= narrowRequirements.addPlayerMinimumWidth &&
+                      narrow.addPlayer.height >= narrowRequirements.addPlayerMinimumHeight &&
                       narrow.configure.width >= narrowRequirements.configureMinimumWidth &&
+                      narrow.configure.height >= narrowRequirements.configureMinimumHeight &&
+                      narrow.refresh.width >= narrowRequirements.refreshMinimumWidth &&
+                      narrow.refresh.height >= narrowRequirements.refreshMinimumHeight &&
+                      narrow.addExecutable.width >= narrowRequirements.addExecutableMinimumWidth &&
+                      narrow.addExecutable.height >= narrowRequirements.addExecutableMinimumHeight &&
+                      narrow.play.width >= narrowRequirements.playMinimumWidth &&
+                      narrow.play.height >= narrowRequirements.playMinimumHeight &&
                       narrow.launchReason.height >= narrowRequirements.launchReasonMinimumHeight &&
                       narrow.gameRowHeight >= narrowRequirements.gameRowMinimumHeight,
-                  "narrow launcher preserves measured selected-game copy and Seat labels without clipping");
-            check(!overlaps(narrow.useSeatOne, narrow.useSeatTwo) &&
-                      !overlaps(narrow.useSeatOne, narrow.useBothSeats) &&
-                      !overlaps(narrow.useSeatTwo, narrow.configure) &&
-                      !overlaps(narrow.useBothSeats, narrow.configure) &&
+                  "narrow launcher preserves measured selected-game copy and Player flow without clipping");
+            check(narrow.playerName.height >= metrics.minimumTarget &&
+                      narrow.addPlayer.width >= narrowRequirements.addPlayerMinimumWidth &&
+                      narrow.addPlayer.height >= narrowRequirements.addPlayerMinimumHeight &&
+                      narrow.configure.height >= narrowRequirements.configureMinimumHeight &&
+                      rectFitsClient(narrow.playerName, narrowWidth, narrowHeight) &&
+                      rectFitsClient(narrow.addPlayer, narrowWidth, narrowHeight),
+                  "narrow rapid-test Player creation remains keyboard-sized and unclipped");
+            check(!overlaps(narrow.playerNameLabel, narrow.playerName) &&
+                      !overlaps(narrow.playerName, narrow.addPlayer) &&
+                      !overlaps(narrow.addPlayer, narrow.configure) &&
                       rectFitsClient(narrow.play, narrowWidth, narrowHeight) &&
                       rectFitsClient(narrow.launchReason, narrowWidth, narrowHeight),
-                  "narrow localization reflow keeps Play and the blocking reason visible");
+                  "narrow localization reflow keeps Player creation, Play, and the blocking reason visible");
         }
     }
 }
@@ -274,6 +328,37 @@ void testLongBlockingReasonKeepsPrimaryFlowVisible() {
                           rectFitsClient(layout.play, width, height),
                       "long blocking reason expands without hiding the library or Play action");
             }
+        }
+    }
+}
+
+void testExplicitMultilineActionsUseHeightInsteadOfEnglishWidth() {
+    for (const auto dpi : {96u, 120u, 144u, 192u}) {
+        check(launcherTextWidthFloor(L"AAAA\nBB", dpi) ==
+                  launcherTextWidthFloor(L"AAAA", dpi),
+              "explicit multiline width uses the widest line instead of summing lines");
+
+        for (const int logicalWidth : {980, kLauncherMinimumClientWidthLogical}) {
+            const int logicalHeight = logicalWidth == 980
+                ? 720 : kLauncherMinimumClientHeightLogical;
+            const int width = scaledLogical(logicalWidth, dpi);
+            const int height = scaledLogical(logicalHeight, dpi);
+
+            LauncherTextMeasurements measured;
+            const int twoLineHeight = scaledLogical(40, dpi);
+            measured.addPlayerWidth = launcherTextWidthFloor(L"Add\nPlayer", dpi);
+            measured.addPlayerHeight = twoLineHeight;
+            measured.configureWidth = launcherTextWidthFloor(L"Device\nSetup", dpi);
+            measured.configureHeight = twoLineHeight;
+
+            const auto requirements = launcherTextRequirements(measured, dpi);
+            const auto layout = computeLauncherLayout(width, height, dpi, requirements);
+            check(layout.valid &&
+                      layout.addPlayer.height >= requirements.addPlayerMinimumHeight &&
+                      layout.configure.height >= requirements.configureMinimumHeight &&
+                      rectFitsClient(layout.addPlayer, width, height) &&
+                      rectFitsClient(layout.configure, width, height),
+                  "explicit two-line primary actions grow vertically without clipping or raising the window minimum");
         }
     }
 }
@@ -407,6 +492,7 @@ int main() {
     testRendererGeometryIsTheAccessibilitySourceOfTruth();
     testLocalizedCriticalTextDrivesLauncherLayout();
     testLongBlockingReasonKeepsPrimaryFlowVisible();
+    testExplicitMultilineActionsUseHeightInsteadOfEnglishWidth();
     testPresentationSemanticsAreStateConsumersOnly();
     if (failures != 0) {
         std::cerr << failures << " UI accessibility test(s) failed.\n";

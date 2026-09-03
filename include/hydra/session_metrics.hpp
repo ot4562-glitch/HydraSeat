@@ -12,6 +12,7 @@
 namespace hydra::metrics {
 
 inline constexpr std::uint32_t kSessionMetricsSchemaVersion = 1u;
+inline constexpr std::size_t kMinimumSessionMetricSeats = 1u;
 inline constexpr std::size_t kMaximumSessionMetricSeats = 2u;
 
 enum class EvidenceOrigin : std::uint8_t {

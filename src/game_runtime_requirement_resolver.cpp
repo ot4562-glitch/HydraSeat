@@ -399,13 +399,22 @@ launch::Capabilities parseCapabilities(const Value& value) {
     return result;
 }
 
-LocalRequirementEvidenceRecord parseRecord(const Value& value) {
+LocalRequirementEvidenceRecord parseRecord(const Value& value, std::uint32_t schemaVersion) {
     const auto& object = asObject(value, "requirement record");
-    requireFields(object,
-                  {"record_id", "revision", "game_id", "provider_id", "provider_app_id",
-                   "game_version", "executable_sha256", "catalog_compatibility",
-                   "provider_metadata_revision", "evidence_result_id", "evidence_provenance_id",
-                   "evidence_provenance_revision", "requirements", "capabilities"});
+    if (schemaVersion == kLegacyRequirementEvidenceStoreSchemaVersion) {
+        requireFields(object,
+                      {"record_id", "revision", "game_id", "provider_id", "provider_app_id",
+                       "game_version", "executable_sha256", "catalog_compatibility",
+                       "provider_metadata_revision", "evidence_result_id", "evidence_provenance_id",
+                       "evidence_provenance_revision", "requirements", "capabilities"});
+    } else {
+        requireFields(object,
+                      {"record_id", "revision", "game_id", "provider_id", "provider_app_id",
+                       "game_version", "executable_sha256", "catalog_compatibility",
+                       "provider_metadata_revision", "evidence_result_id", "evidence_provenance_id",
+                       "evidence_provenance_revision", "validated_seat_count", "requirements",
+                       "capabilities"});
+    }
     LocalRequirementEvidenceRecord record;
     record.recordId = asString(required(object, "record_id"), "record_id");
     record.revision = asU64(required(object, "revision"), "revision");
@@ -424,6 +433,17 @@ LocalRequirementEvidenceRecord parseRecord(const Value& value) {
                                            "evidence_provenance_id");
     record.evidenceProvenanceRevision = asU64(required(object, "evidence_provenance_revision"),
                                               "evidence_provenance_revision");
+    if (schemaVersion == kLegacyRequirementEvidenceStoreSchemaVersion) {
+        record.validatedSeatCount = 2u;
+    } else {
+        const auto seatCount = asU32(required(object, "validated_seat_count"),
+                                     "validated_seat_count");
+        if (seatCount < 1u || seatCount > 2u) {
+            throw StoreError(RequirementStoreCode::InvalidRecord,
+                             "validated_seat_count must be one or two");
+        }
+        record.validatedSeatCount = static_cast<std::uint8_t>(seatCount);
+    }
     record.requirements = parseRequirements(required(object, "requirements"));
     record.capabilities = parseCapabilities(required(object, "capabilities"));
     return record;
@@ -996,7 +1016,8 @@ RequirementStoreDiagnostic validateRequirementEvidenceDocument(
             record.providerMetadataRevision == 0u ||
             !validEvidenceIdentifier(record.evidenceResultId) ||
             !validEvidenceIdentifier(record.evidenceProvenanceId) ||
-            record.evidenceProvenanceRevision == 0u) {
+            record.evidenceProvenanceRevision == 0u ||
+            record.validatedSeatCount < 1u || record.validatedSeatCount > 2u) {
             return storeFailure(RequirementStoreCode::InvalidRecord,
                                 "runtime requirement evidence contains an invalid or unbounded record");
         }
@@ -1036,6 +1057,7 @@ RequirementStoreDiagnostic encodeRequirementEvidenceDocumentJson(
                     << "\"evidence_result_id\":" << quote(record.evidenceResultId) << ','
                     << "\"evidence_provenance_id\":" << quote(record.evidenceProvenanceId) << ','
                     << "\"evidence_provenance_revision\":" << record.evidenceProvenanceRevision << ','
+                    << "\"validated_seat_count\":" << static_cast<unsigned int>(record.validatedSeatCount) << ','
                     << "\"requirements\":" << requirementsJson(record.requirements) << ','
                     << "\"capabilities\":" << capabilitiesJson(record.capabilities)
                     << '}';
@@ -1068,18 +1090,23 @@ RequirementStoreDiagnostic decodeRequirementEvidenceDocumentJson(
         const auto& object = asObject(root, "runtime requirement evidence document");
         requireFields(object, {"schema_version", "records"});
         RequirementEvidenceDocument candidate;
-        candidate.schemaVersion = asU32(required(object, "schema_version"), "schema_version");
-        if (candidate.schemaVersion != kRequirementEvidenceStoreSchemaVersion) {
+        const auto encodedSchemaVersion =
+            asU32(required(object, "schema_version"), "schema_version");
+        if (encodedSchemaVersion != kLegacyRequirementEvidenceStoreSchemaVersion &&
+            encodedSchemaVersion != kRequirementEvidenceStoreSchemaVersion) {
             return storeFailure(RequirementStoreCode::UnsupportedSchema,
                                 "unsupported runtime requirement evidence schema version");
         }
+        candidate.schemaVersion = kRequirementEvidenceStoreSchemaVersion;
         const auto& records = asArray(required(object, "records"), "records");
         if (records.size() > kMaximumRequirementEvidenceRecords) {
             return storeFailure(RequirementStoreCode::InvalidRecord,
                                 "runtime requirement evidence record count exceeds the bounded maximum");
         }
         candidate.records.reserve(records.size());
-        for (const auto& value : records) candidate.records.push_back(parseRecord(value));
+        for (const auto& value : records) {
+            candidate.records.push_back(parseRecord(value, encodedSchemaVersion));
+        }
         const auto validation = validateRequirementEvidenceDocument(candidate);
         if (!validation.succeeded()) return validation;
         output = std::move(candidate);
@@ -1421,6 +1448,7 @@ RequirementSnapshotDiagnostic resolveTrustedGameRuntimeRequirements(
             plan::GameRuntimeRequirement requirement;
             requirement.gameId = game.gameId;
             requirement.revision = record->revision;
+            requirement.validatedSeatCount = record->validatedSeatCount;
             requirement.requirements = record->requirements;
             requirement.capabilities = record->capabilities;
             requirement.highRiskApproved = protectedApproved;

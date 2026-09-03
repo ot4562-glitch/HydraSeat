@@ -72,21 +72,18 @@ Packet title:
 Declared prerequisites:
   {dependency_text}
 
-Read and obey before editing:
-- AGENTS.md
-- .agents/AGENTS.md
-- docs/PRODUCT_V1.md
-- docs/implementation/DECISIONS.md
-- docs/implementation/README.md
-- docs/implementation/STATUS.md
-- docs/implementation/CODEX_PLAYBOOK.md
-- {phase_path}
-- every design/source/test file linked by the packet
+Context loading before editing:
+- AGENTS.md is the standing policy;
+- search PRODUCT_V1.md and DECISIONS.md only for concepts touched by {packet.packet_id}, then read the smallest matching sections;
+- search STATUS.md only for {packet.packet_id} and directly related evidence;
+- read only the {packet.packet_id} section in {phase_path};
+- inspect only the design/source/test files needed to implement the packet;
+- do not load .agents/AGENTS.md or CHUNKS.md unless this run is explicitly a concurrent worker/chunk task.
 
 Scope rules:
-- {packet.packet_id} is the starting packet, not an exclusive task boundary;
-- after completing it, additional READY/actionable packets may be implemented in declared dependency order without waiting for another user turn;
-- verify every packet's declared prerequisites before dependent implementation and keep per-packet state/evidence truthful;
+- {packet.packet_id} is the default boundary for this Codex turn;
+- do not automatically consume additional READY packets; continue only when the user explicitly requested a batch or the next packet is tiny, tightly coupled, and needs no substantial new context;
+- verify every selected packet's declared prerequisites before dependent implementation and keep per-packet state/evidence truthful;
 - do not widen v1 beyond two active Seats or the game-only product contract;
 - keep Seat, Player, Game, TwoPlayerSetup, and runtime bindings separate;
 - do not weaken fail-closed behavior or recovery requirements;
@@ -100,17 +97,16 @@ Scope rules:
 
 Required workflow:
 1. verify the packet state is actionable for the requested task; distinguish code prerequisites from D-051 deferred manual-only validation prerequisites instead of stopping solely because a physical/game/install/reboot gate is pending;
-2. inspect existing implementation and tests;
-3. record files/types, ownership/thread model, OS state touched, rollback path,
-   tests, and pending manual gates before editing;
-4. implement the starting packet and then continue through additional actionable packets in dependency order when useful;
-5. add normal, boundary, malformed, stale/duplicate, failure, teardown,
-   rollback, and no-cross-Seat tests as applicable to every changed packet;
-6. run focused checks for each changed packet plus the applicable regression suite;
-7. run python tools/validate_implementation_roadmap.py;
-8. run git diff --check;
-9. update docs/implementation/STATUS.md with truthful per-packet evidence;
-10. summarize changed files, packet states, tests, known limits, and unperformed manual gates.
+2. use targeted search and bounded reads to inspect existing implementation/tests;
+3. record only the implementation facts needed for this packet: files/types, ownership/thread model, OS state touched, rollback path, focused tests, and pending manual gates;
+4. implement the starting packet as the default turn boundary;
+5. add normal, boundary, malformed, stale/duplicate, failure, teardown, rollback, and no-cross-Seat tests as applicable;
+6. run only focused build/tests for the changed packet. Full dual-arch CTest/premerge belongs to control-tower/CI unless the user explicitly requested integration/release validation;
+7. retry the same failing command at most once, then diagnose instead of cycling shell variants;
+8. run python tools/validate_implementation_roadmap.py only when roadmap/status structure changed;
+9. run git diff --check;
+10. update only the relevant docs/implementation/STATUS.md section when packet evidence changed;
+11. summarize changed files, packet state, focused tests, known limits, and unperformed manual gates so broad validation can run separately.
 
 Do not treat CODE_COMPLETE as VALIDATED when manual acceptance remains pending.
 """

@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "base_files": {
+    "CMakeLists.txt": "add_library(hydra_local_compatibility_evidence STATIC src/local_compatibility_evidence.cpp)\nadd_library(hydra_runtime_requirement_authority STATIC src/runtime_requirement_authority.cpp)\nadd_library(hydra_local_compatibility_runner STATIC src/local_compatibility_runner.cpp)\nadd_library(hydra_production_input_authority STATIC src/production_input_authority.cpp)\nadd_executable(HydraSeat src/main.cpp)\ntarget_link_libraries(HydraSeat PRIVATE hydra_local_compatibility_evidence hydra_runtime_requirement_authority hydra_local_compatibility_runner hydra_production_input_authority)\n",
+    "include/hydra/local_compatibility_evidence.hpp": "class LocalCompatibilityEvidenceWriter { public: bool persistCompatibilityEvidence(); };\n",
+    "src/local_compatibility_evidence.cpp": "#include \"hydra/local_compatibility_evidence.hpp\"\n#include \"hydra/compatibility_local_store.hpp\"\nbool persist() { auto path = defaultCompatibilityLocalStorePath(); CompatibilityLocalStore store(*path); CompatibilityShareModel model; auto loaded = store.load(model); return loaded.succeeded() && store.save(model).succeeded(); }\n",
+    "include/hydra/runtime_requirement_authority.hpp": "class RuntimeRequirementAuthorityWriter { public: bool publishRuntimeRequirementAuthority(); };\n",
+    "src/runtime_requirement_authority.cpp": "#include \"hydra/runtime_requirement_authority.hpp\"\n#include \"hydra/game_runtime_requirement_resolver.hpp\"\nbool publish() { auto path = defaultGameRuntimeRequirementStorePath(); GameRuntimeRequirementStore store(*path); RequirementEvidenceDocument document; auto loaded = store.load(document); LocalRequirementEvidenceRecord record; document.records.push_back(record); return loaded.succeeded() && store.save(document).succeeded(); }\n",
+    "include/hydra/local_compatibility_runner.hpp": "struct ProcessLaunchSpec; class LocalCompatibilityRunner { public: bool runLocalCompatibilityCheck(const ProcessLaunchSpec& spec); void cancelLocalCompatibilityCheck(); };\n",
+    "src/local_compatibility_runner.cpp": "#include \"hydra/local_compatibility_runner.hpp\"\n#include \"hydra/process_launcher.hpp\"\n#include \"hydra/process_group.hpp\"\nbool blockedIndirectionTarget(const ProcessLaunchSpec& spec) { static const char* blocked = \"cmd.exe powershell.exe pwsh.exe\"; return blocked != nullptr && !spec.executablePath.empty(); }\nbool run(const ProcessLaunchSpec& spec) { ProcessLauncher launcher; ProcessGroup group; auto timeoutMicros = 1000u; bool cancelRequested = false; if (blockedIndirectionTarget(spec)) { (void)spec; } const auto& request = fakeRequest; (void)request.launch.executablePath; return !cancelRequested && timeoutMicros != 0u; }\n",
+    "include/hydra/production_input_authority.hpp": "struct ProductionInputAuthoritySnapshot {}; bool saveDefaultProductionPhysicalEvidenceSelection(); bool checkDefaultProductionInputAuthorityPrerequisites();\n",
+    "src/production_input_authority.cpp": "auto trustedProductionGateCProfiles() { return profiles; }\nbool saveDefaultProductionPhysicalEvidenceSelection() { auto loaded = loadPhase3HardwareAcceptanceEvidence(path); return loaded.accepted(); }\nProductionInputAuthoritySnapshot loadDefaultProductionInputAuthoritySnapshot() { auto profiles = trustedProductionGateCProfiles(); auto loaded = loadPhase3HardwareAcceptanceEvidence(path); snapshot.physicalSelection.code = PhysicalEvidenceSelectionCode::Success; if (snapshot.physicalSelection.code == PhysicalEvidenceSelectionCode::Success && evidence.has_value()) { snapshot.inputEvidenceClass = ProductionInputEvidenceClass::Physical; snapshot.physicalAcceptanceEvidence = std::move(evidence); } return snapshot; }\n",
+    "src/production_activation_bridges.cpp": "auto makeDefaultProductionActivationResourceBridges() { auto inputAuthority = loadDefaultProductionInputAuthoritySnapshot(); config.gateCProfiles = std::move(inputAuthority.gateCProfiles); config.inputEvidenceClass = inputAuthority.inputEvidenceClass; config.physicalAcceptanceEvidence = std::move(inputAuthority.physicalAcceptanceEvidence); return config; }\n",
+    "include/hydra/game_runtime_requirement_resolver.hpp": "enum class LocalEvidenceTrust { PhysicalOnly, ControlledOrPhysical }; struct RequirementResolveContext { LocalEvidenceTrust trust{LocalEvidenceTrust::PhysicalOnly}; };\n",
+    "src/game_runtime_requirement_resolver.cpp": "bool originAllowed(LocalEvidenceTrust trust, compat::ResultOrigin origin) { if (origin == compat::ResultOrigin::ImportedCommunity || origin == compat::ResultOrigin::Synthetic) { return false; } if (trust == LocalEvidenceTrust::PhysicalOnly) { return origin == compat::ResultOrigin::Physical; } return origin == compat::ResultOrigin::ControlledProcess || origin == compat::ResultOrigin::Physical; }\nbool captureProductionContext(RequirementResolveContext& candidate) { candidate.trust = LocalEvidenceTrust::PhysicalOnly; return true; }\nRequirementSnapshotDiagnostic StoreBackedTrustedRequirementSource::resolveCurrent(TrustedRequirementSnapshot& output) { RequirementEvidenceDocument stored; const auto loaded = store_.load(stored); if (!loaded.succeeded() || !loaded.found()) { return snapshotFailure(RequirementSnapshotCode::InvalidStore, \"store unavailable\"); } return resolveTrustedGameRuntimeRequirements(stored, output); }\nvoid validateEvidence() { if (bad) { addIssue(candidate, RequirementResolveCode::InvalidLocalEvidence, gameId, \"invalid\"); continue; } if (stale) { addIssue(candidate, RequirementResolveCode::StaleLocalEvidence, gameId, \"stale\"); continue; } if (missing) { addIssue(candidate, RequirementResolveCode::MissingLocalEvidence, gameId, \"missing\"); continue; } }\n",
+    "src/host_main.cpp": "int main() { auto trusted = makeDefaultProductionTrustedRequirementSource(); HostControlServer server(host, trusted); return 0; }\n",
+    "src/production_launch_runtime.cpp": "ProviderPlanInstallResult HostProviderPlanRegistry::install(const Request& request) { TrustedRequirementSnapshot trustedSnapshot; auto resolved = trustedRequirements_->resolveCurrent(trustedSnapshot); auto checked = validateProviderAwareLaunchPlanAgainstTrustedRequirements(request.plan, trustedSnapshot, true); return {}; }\nstd::unique_ptr<ISeatGameInstance> HostProviderPlanRegistry::createForBinding(SeatId seatId) { TrustedRequirementSnapshot trustedSnapshot; auto resolved = trustedRequirements_->resolveCurrent(trustedSnapshot); return {}; }\n",
+    "src/gui_win32.cpp": "#include \"hydra/local_compatibility_evidence.hpp\"\n#include \"hydra/runtime_requirement_authority.hpp\"\n#include \"hydra/local_compatibility_runner.hpp\"\nvoid openGameLibrary() { LocalCompatibilityRunner runner; LocalCompatibilityEvidenceWriter evidence; RuntimeRequirementAuthorityWriter authority; runner.runLocalCompatibilityCheck(spec); evidence.persistCompatibilityEvidence(); authority.publishRuntimeRequirementAuthority(); resolveCurrentRequirementProjection(source, projection); }\n",
+    "src/launcher_win32.cpp": "auto reviewCompatibilityTargetRisk() { auto prompt = CompatibilityRiskReviewPrompt; auto flags = MB_YESNOCANCEL; if (yes) return LocalCompatibilityTargetRisk::ProtectedOrExperimental; if (cancelled) return LocalCompatibilityTargetRisk::Unknown; return LocalCompatibilityTargetRisk::Standard; }\nbool selectPhysicalEvidenceManifest() { auto name = \"phase3-hardware-manifest.json\"; return saveDefaultProductionPhysicalEvidenceSelection(path).succeeded(); }\nvoid offerPhysicalEvidenceSelection() { auto prerequisites = checkDefaultProductionInputAuthorityPrerequisites(gameId); }\nvoid runSelectedCompatibilityCheck() { auto targetRisk = reviewCompatibilityTargetRisk(); check.targetRisk = targetRisk; offerPhysicalEvidenceSelection(); }\nvoid openGameLibrarySurface() {}\n",
+    "docs/qa/V1_PLAY_AUTHORITY_QA.md": "<!-- V1_PLAY_AUTHORITY_EVIDENCE_CLASSES\nAutomated=Automated\nControlled=Controlled\nComputerUse=ComputerUse\nPhysical=Physical\nRealGame=RealGame\nCleanMachine=CleanMachine\nSigning=Signing\nV1_PLAY_AUTHORITY_EVIDENCE_CLASSES -->\n"
+  },
+  "cases": [
+    {
+      "name": "pass_intended_architecture",
+      "expect_pass": true
+    },
+    {
+      "name": "baseline_current_gap",
+      "remove": [
+        "include/hydra/local_compatibility_evidence.hpp",
+        "src/local_compatibility_evidence.cpp",
+        "include/hydra/runtime_requirement_authority.hpp",
+        "src/runtime_requirement_authority.cpp",
+        "include/hydra/local_compatibility_runner.hpp",
+        "src/local_compatibility_runner.cpp"
+      ],
+      "override": {
+        "CMakeLists.txt": "add_executable(HydraSeat src/main.cpp)\n",
+        "src/gui_win32.cpp": "void openGameLibrary() { resolveCurrentRequirementProjection(source, projection); }\n"
+      },
+      "expect_blockers": [
+        "release_local_evidence_writer",
+        "release_runtime_authority_writer",
+        "local_check_runner_boundary",
+        "games_user_integration"
+      ]
+    },
+    {
+      "name": "reader_exists_but_no_release_writer",
+      "remove": [
+        "include/hydra/local_compatibility_evidence.hpp",
+        "src/local_compatibility_evidence.cpp"
+      ],
+      "override": {
+        "CMakeLists.txt": "add_library(hydra_runtime_requirement_authority STATIC src/runtime_requirement_authority.cpp)\nadd_library(hydra_local_compatibility_runner STATIC src/local_compatibility_runner.cpp)\nadd_executable(HydraSeat src/main.cpp)\ntarget_link_libraries(HydraSeat PRIVATE hydra_runtime_requirement_authority hydra_local_compatibility_runner)\n"
+      },
+      "expect_blockers": ["release_local_evidence_writer"]
+    },
+    {
+      "name": "authority_writer_bypasses_validated_store",
+      "override": {
+        "src/runtime_requirement_authority.cpp": "#include <fstream>\nbool publish() { std::ofstream output(\"runtime-requirements.json\"); output << \"{}\"; return true; }\n"
+      },
+      "expect_blockers": ["release_runtime_authority_writer"]
+    },
+    {
+      "name": "controlled_process_relabelled_physical",
+      "append": {
+        "src/local_compatibility_evidence.cpp": "\nvoid promote(CompatibilityResult& result) { result.origin = compat::ResultOrigin::Physical; }\n"
+      },
+      "expect_blockers": ["evidence_origin_boundary"]
+    },
+    {
+      "name": "synthetic_or_imported_accepted_as_production_authority",
+      "replace": [
+        {
+          "path": "src/game_runtime_requirement_resolver.cpp",
+          "old": "if (origin == compat::ResultOrigin::ImportedCommunity || origin == compat::ResultOrigin::Synthetic) { return false; }",
+          "new": "if (origin == compat::ResultOrigin::ImportedCommunity || origin == compat::ResultOrigin::Synthetic) { return true; }"
+        }
+      ],
+      "expect_blockers": ["evidence_origin_boundary"]
+    },
+    {
+      "name": "missing_authority_defaults_permissive",
+      "replace": [
+        {
+          "path": "src/game_runtime_requirement_resolver.cpp",
+          "old": "if (!loaded.succeeded() || !loaded.found()) { return snapshotFailure(RequirementSnapshotCode::InvalidStore, \"store unavailable\"); }",
+          "new": "if (!loaded.succeeded() || !loaded.found()) { return RequirementSnapshotDiagnostic{}; }"
+        }
+      ],
+      "expect_blockers": ["fail_closed_authority"]
+    },
+    {
+      "name": "local_runner_hardcodes_controlled_test_target",
+      "append": {
+        "src/local_compatibility_runner.cpp": "\nstatic const char* forcedTarget = \"hydra_window_test_app.exe\";\n"
+      },
+      "expect_blockers": ["local_check_runner_boundary"]
+    },
+    {
+      "name": "local_runner_uses_general_shell",
+      "append": {
+        "src/local_compatibility_runner.cpp": "\nvoid badShell() { system(\"powershell -File run-check.ps1\"); }\n"
+      },
+      "expect_blockers": ["local_check_runner_boundary"]
+    },
+    {
+      "name": "host_loses_independent_reresolution",
+      "override": {
+        "src/production_launch_runtime.cpp": "ProviderPlanInstallResult HostProviderPlanRegistry::install(const Request& request) { return {}; }\nstd::unique_ptr<ISeatGameInstance> HostProviderPlanRegistry::createForBinding(SeatId seatId) { return {}; }\n"
+      },
+      "expect_blockers": ["host_independent_reresolution"]
+    },
+    {
+      "name": "writers_exist_without_games_integration",
+      "override": {
+        "src/gui_win32.cpp": "void openGameLibrary() { resolveCurrentRequirementProjection(source, projection); }\n",
+        "src/launcher_win32.cpp": "void showGames() {}\n"
+      },
+      "expect_blockers": ["games_user_integration"]
+    },
+    {
+      "name": "games_hardcodes_standard_risk",
+      "replace": [
+        {
+          "path": "src/launcher_win32.cpp",
+          "old": "check.targetRisk = targetRisk;",
+          "new": "check.targetRisk = LocalCompatibilityTargetRisk::Standard;"
+        }
+      ],
+      "expect_blockers": ["games_user_integration"]
+    },
+    {
+      "name": "physical_selection_skips_typed_loader",
+      "override": {
+        "src/production_input_authority.cpp": "auto trustedProductionGateCProfiles() { return profiles; }\nbool saveDefaultProductionPhysicalEvidenceSelection() { return true; }\nProductionInputAuthoritySnapshot loadDefaultProductionInputAuthoritySnapshot() { snapshot.physicalSelection.code = PhysicalEvidenceSelectionCode::Success; if (snapshot.physicalSelection.code == PhysicalEvidenceSelectionCode::Success && evidence.has_value()) { snapshot.inputEvidenceClass = ProductionInputEvidenceClass::Physical; snapshot.physicalAcceptanceEvidence = std::move(evidence); } return snapshot; }\n"
+      },
+      "expect_blockers": ["production_input_authority_boundary"]
+    },
+    {
+      "name": "host_stops_fresh_physical_load",
+      "override": {
+        "src/production_activation_bridges.cpp": "auto makeDefaultProductionActivationResourceBridges() { config.gateCProfiles = {}; config.inputEvidenceClass = ProductionInputEvidenceClass::None; config.physicalAcceptanceEvidence.reset(); return config; }\n"
+      },
+      "expect_blockers": ["production_input_authority_boundary"]
+    },
+    {
+      "name": "games_injects_gatec_profile",
+      "append": {
+        "src/launcher_win32.cpp": "\nvoid badProfileEditor() { ProductionGateCProfile userProfile; gateCProfiles.push_back(userProfile); }\n"
+      },
+      "expect_blockers": ["production_input_authority_boundary"]
+    },
+    {
+      "name": "games_sets_physical_input_class_directly",
+      "append": {
+        "src/launcher_win32.cpp": "\nvoid badPhysicalPromotion() { auto value = ProductionInputEvidenceClass::Physical; }\n"
+      },
+      "expect_blockers": ["production_input_authority_boundary"]
+    },
+    {
+      "name": "evidence_matrix_promotes_controlled_and_computer_use",
+      "override": {
+        "docs/qa/V1_PLAY_AUTHORITY_QA.md": "<!-- V1_PLAY_AUTHORITY_EVIDENCE_CLASSES\nAutomated=Automated\nControlled=Physical\nComputerUse=RealGame\nPhysical=Physical\nRealGame=RealGame\nCleanMachine=CleanMachine\nSigning=Signing\nV1_PLAY_AUTHORITY_EVIDENCE_CLASSES -->\n"
+      },
+      "expect_blockers": ["evidence_class_separation"]
+    }
+  ]
+}

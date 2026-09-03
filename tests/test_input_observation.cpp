@@ -73,6 +73,241 @@ hydra::RawInputDeviceChange deviceChange(
     return change;
 }
 
+hydra::InputIdentificationRequest identificationRequest(
+    hydra::InputIdentificationKind kind,
+    std::uint64_t minimumSequenceExclusive,
+    std::uint64_t startedAtMicros,
+    std::uint64_t timeoutMicros = 5'000) {
+    hydra::InputIdentificationRequest request;
+    request.kind = kind;
+    request.minimumSequenceExclusive = minimumSequenceExclusive;
+    request.startedAtMicros = startedAtMicros;
+    request.timeoutMicros = timeoutMicros;
+    return request;
+}
+
+void testKeyboardIdentificationRequiresIntentionalPress() {
+    hydra::InputIdentificationCapture capture;
+    const auto& begun = capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Keyboard, 10, 1'000));
+    check(begun.state == hydra::InputIdentificationState::Waiting &&
+              !begun.terminal(),
+          "keyboard identification begins in deterministic waiting state");
+
+    capture.observeInput(mouseEvent(11, L"Mouse:Noise", 9, -4));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Waiting,
+          "unrelated mouse motion cannot identify a keyboard");
+    capture.observeInput(keyboardEvent(
+        12, L"Keyboard:Exact", 0x41, hydra::RawKeyTransition::Up));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Waiting,
+          "key-up without a post-begin press is not an intentional keyboard capture");
+
+    capture.observeInput(keyboardEvent(
+        13, L"Keyboard:Exact", 0x41, hydra::RawKeyTransition::Down));
+    const auto identified = capture.snapshot();
+    check(identified.state == hydra::InputIdentificationState::Identified &&
+              identified.failure == hydra::InputIdentificationFailure::None &&
+              identified.candidate &&
+              identified.candidate->kind == hydra::InputIdentificationKind::Keyboard &&
+              identified.candidate->deviceId == L"Keyboard:Exact" &&
+              identified.candidate->sequence == 13,
+          "post-begin key-down returns only the exact stable keyboard identity");
+
+    capture.cancel();
+    capture.observeInput(keyboardEvent(
+        14, L"Keyboard:Other", 0x42, hydra::RawKeyTransition::Down));
+    check(capture.snapshot() == identified,
+          "identified result is terminal until an explicit new begin");
+}
+
+void testMouseIdentificationIgnoresMotionWheelAndRelease() {
+    hydra::InputIdentificationCapture capture;
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Mouse, 20, 2'000));
+
+    capture.observeInput(keyboardEvent(
+        21, L"Keyboard:Noise", 0x41, hydra::RawKeyTransition::Down));
+    capture.observeInput(mouseEvent(22, L"Mouse:Exact", 5, -3));
+    capture.observeInput(mouseEvent(23, L"Mouse:Exact", 0, 0, 0, 120));
+    capture.observeInput(mouseEvent(24, L"Mouse:Exact", 0, 0, 0x0002));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Waiting,
+          "mouse motion, wheel and button-up noise never identify a mouse");
+
+    capture.observeInput(mouseEvent(25, L"Mouse:Exact", 0, 0, 0x0004));
+    const auto identified = capture.snapshot();
+    check(identified.state == hydra::InputIdentificationState::Identified &&
+              identified.candidate &&
+              identified.candidate->kind == hydra::InputIdentificationKind::Mouse &&
+              identified.candidate->deviceId == L"Mouse:Exact" &&
+              identified.candidate->sequence == 25,
+          "mouse button-down returns the exact stable mouse identity");
+}
+
+void testIdentificationNoiseCannotPoisonOrdering() {
+    hydra::InputIdentificationCapture capture;
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Keyboard, 100, 10'000));
+
+    capture.observeInput(keyboardEvent(
+        100, L"Keyboard:QueuedRelease", 0x41, hydra::RawKeyTransition::Up));
+    capture.observeInput(mouseEvent(99, L"Mouse:OldMotion", 4, -2));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Waiting,
+          "stale key-up and unrelated pointer noise do not poison keyboard identification ordering");
+
+    capture.observeInput(keyboardEvent(
+        101, L"Keyboard:FreshPress", 0x41, hydra::RawKeyTransition::Down));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Identified &&
+              capture.snapshot().candidate &&
+              capture.snapshot().candidate->deviceId == L"Keyboard:FreshPress",
+          "fresh key-down remains identifiable after stale non-intentional noise");
+
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Mouse, 200, 20'000));
+    capture.observeInput(mouseEvent(200, L"Mouse:QueuedMotion", 3, 1));
+    capture.observeInput(mouseEvent(199, L"Mouse:QueuedWheel", 0, 0, 0, 120));
+    capture.observeInput(mouseEvent(198, L"Mouse:QueuedRelease", 0, 0, 0x0002));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Waiting,
+          "stale mouse motion, wheel and release remain ignorable noise");
+
+    capture.observeInput(mouseEvent(201, L"Mouse:FreshClick", 0, 0, 0x0001));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Identified &&
+              capture.snapshot().candidate &&
+              capture.snapshot().candidate->deviceId == L"Mouse:FreshClick",
+          "fresh mouse button-down remains identifiable after stale pointer noise");
+}
+
+void testIdentificationCancelTimeoutAndInvalidRequest() {
+    hydra::InputIdentificationCapture capture;
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Keyboard, 30, 3'000, 500));
+    capture.cancel();
+    check(capture.snapshot().state == hydra::InputIdentificationState::Cancelled &&
+              capture.snapshot().terminal(),
+          "explicit cancellation is terminal and deterministic");
+    capture.observeInput(keyboardEvent(
+        31, L"Keyboard:Late", 0x41, hydra::RawKeyTransition::Down));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Cancelled,
+          "cancelled capture ignores later input");
+
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Keyboard, 31, 3'100, 500));
+    capture.advanceTime(3'599);
+    check(capture.snapshot().state == hydra::InputIdentificationState::Waiting,
+          "capture remains waiting strictly before its deadline");
+    capture.advanceTime(3'600);
+    check(capture.snapshot().state == hydra::InputIdentificationState::TimedOut &&
+              capture.snapshot().terminal(),
+          "capture times out exactly at its monotonic deadline");
+
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Mouse, 0, 0, 0));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Rejected &&
+              capture.snapshot().failure ==
+                  hydra::InputIdentificationFailure::InvalidRequest,
+          "zero-duration identification request fails closed");
+
+    capture.reset();
+    check(capture.snapshot().state == hydra::InputIdentificationState::Idle &&
+              capture.snapshot().failure == hydra::InputIdentificationFailure::None &&
+              !capture.snapshot().candidate && !capture.snapshot().terminal(),
+          "explicit reset clears stale identification feedback before a new hardware view");
+}
+
+void testIdentificationRejectsStaleAndOutOfOrderObservations() {
+    hydra::InputIdentificationCapture capture;
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Keyboard, 40, 4'000));
+    capture.observeInput(keyboardEvent(
+        40, L"Keyboard:Stale", 0x41, hydra::RawKeyTransition::Down));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Rejected &&
+              capture.snapshot().failure ==
+                  hydra::InputIdentificationFailure::StaleSequence,
+          "queued intentional event at the begin sequence cannot identify a device");
+
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Mouse, 50, 5'000));
+    capture.observeDeviceChange(deviceChange(
+        50, hydra::RawInputDeviceChangeKind::Removal, L"Mouse:StaleChange", 0));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Rejected &&
+              capture.snapshot().failure ==
+                  hydra::InputIdentificationFailure::StaleSequence,
+          "stale target-device change cannot mutate a fresh identification attempt");
+
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Mouse, 0, 1'000));
+    auto staleTimestamp = mouseEvent(11, L"Mouse:A", 0, 0, 0x0001);
+    staleTimestamp.monotonicTimestampMicros = 999;
+    capture.observeInput(staleTimestamp);
+    check(capture.snapshot().state == hydra::InputIdentificationState::Rejected &&
+              capture.snapshot().failure ==
+                  hydra::InputIdentificationFailure::StaleTimestamp,
+          "intentional click predating the identification start fails closed");
+}
+
+void testIdentificationRejectsRemovedAmbiguousAndUnstableDevices() {
+    hydra::InputIdentificationCapture capture;
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Mouse, 50, 5'000));
+    capture.observeDeviceChange(deviceChange(
+        51, hydra::RawInputDeviceChangeKind::Removal, L"Mouse:Removed", 0));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Rejected &&
+              capture.snapshot().failure ==
+                  hydra::InputIdentificationFailure::DeviceRemoved,
+          "target-device removal immediately ends identification so the UI can ask for a retry");
+    capture.observeInput(mouseEvent(52, L"mouse:removed", 0, 0, 0x0001));
+    check(capture.snapshot().failure == hydra::InputIdentificationFailure::DeviceRemoved,
+          "input arriving after removal cannot revive a rejected stale capture");
+
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Mouse, 60, 6'000));
+    capture.observeDeviceChange(deviceChange(
+        61, hydra::RawInputDeviceChangeKind::Removal, L"Mouse:Returned", 0));
+    capture.observeDeviceChange(deviceChange(
+        62, hydra::RawInputDeviceChangeKind::Arrival, L"MOUSE:RETURNED", 0));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Rejected &&
+              capture.snapshot().failure ==
+                  hydra::InputIdentificationFailure::DeviceRemoved,
+          "arrival cannot silently resume an identification attempt invalidated by removal");
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Mouse, 62, 6'200));
+    capture.observeInput(mouseEvent(63, L"Mouse:Returned", 0, 0, 0x0001));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Identified &&
+              capture.snapshot().candidate &&
+              capture.snapshot().candidate->deviceId == L"Mouse:Returned",
+          "a fresh retry after the newer arrival can identify the returned device");
+
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Keyboard, 70, 7'000));
+    capture.observeInput(
+        keyboardEvent(71, L"Keyboard:Shared", 0x41,
+                      hydra::RawKeyTransition::Down),
+        hydra::InputIdentificationDeviceStatus::AmbiguousShared);
+    check(capture.snapshot().state == hydra::InputIdentificationState::Rejected &&
+              capture.snapshot().failure ==
+                  hydra::InputIdentificationFailure::AmbiguousSharedDevice,
+          "shared ambiguous stable ID cannot be selected by first-event guessing");
+
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Keyboard, 75, 7'500));
+    capture.observeInput(
+        keyboardEvent(76, L"Keyboard:Filtered", 0x41,
+                      hydra::RawKeyTransition::Down),
+        hydra::InputIdentificationDeviceStatus::Unavailable);
+    check(capture.snapshot().state == hydra::InputIdentificationState::Rejected &&
+              capture.snapshot().failure ==
+                  hydra::InputIdentificationFailure::DeviceUnavailable,
+          "an input identity absent from the current physical tile inventory cannot be guessed into a Seat");
+
+    capture.begin(identificationRequest(
+        hydra::InputIdentificationKind::Keyboard, 80, 8'000));
+    capture.observeInput(keyboardEvent(
+        81, L"", 0x41, hydra::RawKeyTransition::Down));
+    check(capture.snapshot().state == hydra::InputIdentificationState::Rejected &&
+              capture.snapshot().failure ==
+                  hydra::InputIdentificationFailure::MissingStableDeviceId,
+          "device path/handle fallback cannot masquerade as stable identification");
+}
+
 void testLedgerTracksHotplugAndState() {
     hydra::InputObservationLedger ledger;
 
@@ -376,12 +611,18 @@ void testTraceWriterProducesJsonLines() {
 } // namespace
 
 int main() {
+    testKeyboardIdentificationRequiresIntentionalPress();
+    testMouseIdentificationIgnoresMotionWheelAndRelease();
+    testIdentificationNoiseCannotPoisonOrdering();
+    testIdentificationCancelTimeoutAndInvalidRequest();
+    testIdentificationRejectsStaleAndOutOfOrderObservations();
+    testIdentificationRejectsRemovedAmbiguousAndUnstableDevices();
     testLedgerTracksHotplugAndState();
     testExclusiveSeatRouting();
     testSharedDevicesAreAmbiguousForGateB();
     testInactiveMissingAndFailedTargets();
     testTraceWriterProducesJsonLines();
 
-    std::cout << "Input observation and Gate B routing tests passed.\n";
+    std::cout << "Input observation and identification tests passed.\n";
     return EXIT_SUCCESS;
 }

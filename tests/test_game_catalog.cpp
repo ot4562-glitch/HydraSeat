@@ -158,6 +158,20 @@ void testFriendlyTitleIsNeverIdentity() {
     }
 }
 
+void testManualCandidateIsNotFilteredBySteamLikeTitle() {
+    auto candidate = manual(L"Steamworks Common Redistributables",
+                            L"C:\\Games\\Manual\\manual-runtime-name.exe");
+    candidate.installRoot = L"C:\\Games\\Manual";
+
+    LocalGameCatalog catalog;
+    const auto result = buildLocalGameCatalog(
+        std::span<const GameCatalogCandidate>(&candidate, 1u), catalog);
+    check(result.succeeded() && catalog.entries.size() == 1u &&
+              catalog.entries.front().game.origin == GameOrigin::Manual &&
+              catalog.entries.front().game.title == candidate.title,
+          "manual Add EXE remains visible even when its title resembles a Steam runtime package");
+}
+
 void testConflictingStrongIdentitiesFailTransactionally() {
     auto steam = discovered("steam", "100", L"Steam Record",
                             L"C:\\Games\\Shared\\game.exe");
@@ -287,6 +301,7 @@ int main() {
     testEmptyAndSingleCandidateCatalog();
     testDuplicateProviderAndExecutableReconciliation();
     testFriendlyTitleIsNeverIdentity();
+    testManualCandidateIsNotFilteredBySteamLikeTitle();
     testConflictingStrongIdentitiesFailTransactionally();
     testMalformedAndBoundedCandidatesFailClosed();
     testMissingOptionalMetadataAndArchitectureConflictAreConservative();
