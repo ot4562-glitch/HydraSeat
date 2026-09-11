@@ -200,25 +200,25 @@ if(WIN32)
 endif()
 hydra_enable_strict_warnings(hydra_window_tracking)
 
-# P4-DIS-01 read-only DisplayConfig + DXGI topology inventory. Stable target
-# identity never relies on enumeration order and disconnected targets are kept.
-add_library(hydra_display_topology STATIC
+# Display inventory and Seat-local layout are one component: topology provides
+# stable physical identity and layout projects that topology into Seat space.
+add_library(hydra_display STATIC
     src/display_topology.cpp
+    src/seat_display_layout.cpp
     include/hydra/display_identity.hpp
     include/hydra/display_topology.hpp
-)
-if(WIN32)
-    target_link_libraries(hydra_display_topology PRIVATE User32.lib Dxgi.lib)
-endif()
-hydra_enable_strict_warnings(hydra_display_topology)
-
-# P4-DIS-02 stable Seat display groups and reversible coordinate transforms.
-add_library(hydra_seat_display_layout STATIC
-    src/seat_display_layout.cpp
     include/hydra/seat_display_layout.hpp
 )
-target_link_libraries(hydra_seat_display_layout PUBLIC hydra_display_topology hydra_runtime)
-hydra_enable_strict_warnings(hydra_seat_display_layout)
+target_link_libraries(hydra_display PUBLIC hydra_runtime)
+if(WIN32)
+    target_link_libraries(hydra_display PRIVATE User32.lib Dxgi.lib)
+endif()
+hydra_enable_strict_warnings(hydra_display)
+
+# Transitional names keep downstream targets stable while the build graph is
+# consolidated around product responsibilities rather than implementation phases.
+add_library(hydra_display_topology ALIAS hydra_display)
+add_library(hydra_seat_display_layout ALIAS hydra_display)
 
 # P4-WIN-02 typed placement planning and ownership-validated Win32 mutation.
 # The policy surface is portable; the engine applies only to currently owned
