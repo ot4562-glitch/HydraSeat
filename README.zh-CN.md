@@ -74,7 +74,7 @@ ctest --test-dir C:\HydraSeat\build-x86 -C Release --output-on-failure
 
 - [v1 产品契约](docs/PRODUCT_V1.md) · [Architecture](docs/ARCHITECTURE.md) · [Implementation Status](docs/implementation/STATUS.md)
 - [Packet roadmap](docs/implementation/README.md) · [Reference 研究索引](docs/REFERENCE_RESEARCH_INDEX.md) · [相关系统设计备忘](docs/RELATED_SYSTEMS_RESEARCH.md)
-- [Clean-room policy](docs/CLEAN_ROOM_POLICY.md) · [Compatibility matrix](docs/COMPATIBILITY_MATRIX.md) · [并行 chunk board](.agents/CHUNKS.md)
+- [Clean-room policy](docs/CLEAN_ROOM_POLICY.md) · [Compatibility matrix](docs/COMPATIBILITY_MATRIX.md)
 
 `C:\HydraSeat\references` 下的 reference tree 是只读研究输入，不是 build input。研究结论只转化为中立需求和独立编写的测试，不复制许可证不兼容的第三方实现到 HydraSeat core。
 
