@@ -221,7 +221,7 @@ CompileResult compileTwoSeatLaunchPlan(std::span<const SeatLaunchInput> inputs) 
     CompileResult result;
     if (inputs.size() != runtime::kV1MaximumActiveSeats) {
         issue(result, CompileIssueCode::ActiveSeatCount, 0,
-              "P5-LAUNCH-01 requires exactly two active Seat launch inputs");
+              "two-Seat launch requires exactly two active Seat inputs");
         return result;
     }
 
@@ -245,7 +245,7 @@ CompileResult compileTwoSeatLaunchPlan(std::span<const SeatLaunchInput> inputs) 
         }
         if (!input.seat.active) {
             issue(result, CompileIssueCode::InactiveSeat, seatId,
-                  "P5 launch input must describe an active Seat");
+                  "launch input must describe an active Seat");
         }
         if (!boundedText(input.target.gameId, kMaximumGameIdBytes)) {
             issue(result, CompileIssueCode::InvalidGameId, seatId,
@@ -395,8 +395,7 @@ bool PlannedSeatGameInstance::start(const runtime::SeatGameBinding& binding,
         error = "Seat activation is blocked until retained recovery state is cleaned";
         return false;
     }
-    if (!factory_ || plan_.seatId == 0 || plan_.fingerprint == 0 ||
-        binding.gameId != plan_.target.gameId) {
+    if (!factory_ || plan_.seatId == 0 || plan_.fingerprint == 0) {
         error = "Seat binding does not match the immutable launch plan";
         return false;
     }
@@ -639,11 +638,8 @@ bool PlannedSeatGameInstance::running() const noexcept {
 
 PlannedSeatGameInstanceFactory::PlannedSeatGameInstanceFactory(
     TwoSeatLaunchPlan plan,
-    std::shared_ptr<ISeatActivationResourceFactory> resources,
-    std::shared_ptr<ISeatActivationLifecycleHookFactory> lifecycleHooks)
-    : plan_(std::move(plan)),
-      resources_(std::move(resources)),
-      lifecycleHooks_(std::move(lifecycleHooks)) {}
+    std::shared_ptr<ISeatActivationResourceFactory> resources)
+    : plan_(std::move(plan)), resources_(std::move(resources)) {}
 
 std::unique_ptr<runtime::ISeatGameInstance>
 PlannedSeatGameInstanceFactory::create(SeatId seatId, std::string& error) {
@@ -660,16 +656,7 @@ PlannedSeatGameInstanceFactory::create(SeatId seatId, std::string& error) {
         error = "requested Seat is absent from the immutable two-Seat launch plan";
         return nullptr;
     }
-    std::unique_ptr<ISeatActivationLifecycleHook> lifecycleHook;
-    if (lifecycleHooks_) {
-        lifecycleHook = lifecycleHooks_->create(*found, error);
-        if (!lifecycleHook) {
-            if (error.empty()) error = "Seat activation lifecycle hook creation failed";
-            return nullptr;
-        }
-    }
-    return std::make_unique<PlannedSeatGameInstance>(
-        *found, resources_, std::move(lifecycleHook));
+    return std::make_unique<PlannedSeatGameInstance>(*found, resources_);
 }
 
 std::string_view resourceKindName(ResourceKind kind) noexcept {

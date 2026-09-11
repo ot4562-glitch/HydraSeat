@@ -190,15 +190,6 @@ public:
     virtual bool recoveryRequired() const noexcept = 0;
 };
 
-class ISeatActivationLifecycleHookFactory {
-public:
-    virtual ~ISeatActivationLifecycleHookFactory() = default;
-
-    virtual std::unique_ptr<ISeatActivationLifecycleHook> create(
-        const SeatActivationPlan& plan,
-        std::string& error) = 0;
-};
-
 class PlannedSeatGameInstance final : public runtime::ISeatGameInstance {
 public:
     PlannedSeatGameInstance(
@@ -235,8 +226,7 @@ class PlannedSeatGameInstanceFactory final
 public:
     PlannedSeatGameInstanceFactory(
         TwoSeatLaunchPlan plan,
-        std::shared_ptr<ISeatActivationResourceFactory> resources,
-        std::shared_ptr<ISeatActivationLifecycleHookFactory> lifecycleHooks = {});
+        std::shared_ptr<ISeatActivationResourceFactory> resources);
 
     std::unique_ptr<runtime::ISeatGameInstance> create(
         SeatId seatId, std::string& error) override;
@@ -246,7 +236,6 @@ public:
 private:
     TwoSeatLaunchPlan plan_;
     std::shared_ptr<ISeatActivationResourceFactory> resources_;
-    std::shared_ptr<ISeatActivationLifecycleHookFactory> lifecycleHooks_;
 };
 
 std::string_view resourceKindName(ResourceKind kind) noexcept;
