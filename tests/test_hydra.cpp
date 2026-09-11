@@ -416,10 +416,12 @@ void testInputIsolationSkeleton() {
     hydra::WorkspaceManager seats;
     const auto seat1 = seats.createSeat(L"Seat 1");
     const auto seat2 = seats.createSeat(L"Seat 2");
-    check(seats.assignTargetWindow(seat1, 0x1111), "seat 1 target window assignment succeeds");
-    check(seats.assignTargetWindow(seat2, 0x2222), "seat 2 target window assignment succeeds");
 
     hydra::SeatRoutingPolicy routing;
+    check(routing.bindTargetWindow(seat1, 0x1111),
+          "routing policy binds Seat 1 target window");
+    check(routing.bindTargetWindow(seat2, 0x2222),
+          "routing policy binds Seat 2 target window");
     check(routing.bindDevice(L"Keyboard:A", seat1), "routing policy binds keyboard A");
     check(routing.bindDevice(L"Keyboard:B", seat2), "routing policy binds keyboard B");
 

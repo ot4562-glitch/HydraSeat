@@ -150,13 +150,15 @@ int runSelfTest() {
     const auto seat1 = seats.createSeat(L"Seat 1");
     const auto seat2 = seats.createSeat(L"Seat 2");
     if (!seats.assignKeyboard(seat1, L"Keyboard:A") ||
-        !seats.assignKeyboard(seat2, L"Keyboard:B") ||
-        !seats.assignTargetWindow(seat1, 0x1111) ||
-        !seats.assignTargetWindow(seat2, 0x2222)) {
+        !seats.assignKeyboard(seat2, L"Keyboard:B")) {
         return 10;
     }
 
     SeatRoutingPolicy routing;
+    if (!routing.bindTargetWindow(seat1, 0x1111) ||
+        !routing.bindTargetWindow(seat2, 0x2222)) {
+        return 10;
+    }
     std::vector<std::uint64_t> targets;
     InputObservationSession session(
         seats, routing,
@@ -322,7 +324,7 @@ public:
         case WM_DESTROY:
             KillTimer(hwnd, kRefreshTimer);
             context.hwnd = nullptr;
-            m_seats.assignTargetWindow(context.seatId, 0);
+            m_routingPolicy.unbindTargetWindow(context.seatId);
             m_session.rebuildBindings();
             if (std::none_of(
                     m_windows.begin(), m_windows.end(),
@@ -442,8 +444,11 @@ private:
                 return false;
             }
             context->hwnd = hwnd;
-            m_seats.assignTargetWindow(
-                seatId, reinterpret_cast<std::uint64_t>(hwnd));
+            if (!m_routingPolicy.bindTargetWindow(
+                    seatId, reinterpret_cast<std::uint64_t>(hwnd))) {
+                DestroyWindow(hwnd);
+                return false;
+            }
             ShowWindow(hwnd, showCommand);
             UpdateWindow(hwnd);
             m_windows.push_back(std::move(context));

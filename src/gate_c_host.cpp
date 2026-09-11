@@ -3442,10 +3442,6 @@ private:
             sessionEndWindow.signalCleanupComplete(clean);
             return clean;
         };
-        for (auto& session : sessions) {
-            seats.assignTargetWindow(session.seatId, session.targetWindow);
-        }
-
         ControlStateMessage control;
         control.cursorX = 400;
         control.cursorY = 300;
@@ -3484,6 +3480,14 @@ private:
         }
 
         SeatRoutingPolicy routingPolicy;
+        for (const auto& session : sessions) {
+            if (!routingPolicy.bindTargetWindow(
+                    session.seatId, session.targetWindow)) {
+                for (auto& started : writers) started->stop();
+                (void)rollbackAndSignal(true);
+                return 44;
+            }
+        }
         InputObservationSession observation(
             seats, routingPolicy,
             [&](const RawInputEvent& event,

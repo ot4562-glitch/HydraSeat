@@ -939,6 +939,17 @@ bool SeatRoutingPolicy::unbindDevice(std::wstring_view deviceId) {
     return m_deviceOwners.erase(normalize(deviceId)) != 0;
 }
 
+bool SeatRoutingPolicy::bindTargetWindow(SeatId seatId,
+                                         std::uint64_t targetHwnd) {
+    if (seatId == 0 || targetHwnd == 0) return false;
+    m_targetWindows[seatId] = targetHwnd;
+    return true;
+}
+
+void SeatRoutingPolicy::unbindTargetWindow(SeatId seatId) noexcept {
+    m_targetWindows.erase(seatId);
+}
+
 void SeatRoutingPolicy::clearSeat(SeatId seatId) {
     for (auto it = m_deviceOwners.begin();
          it != m_deviceOwners.end();) {
@@ -948,6 +959,7 @@ void SeatRoutingPolicy::clearSeat(SeatId seatId) {
             ++it;
         }
     }
+    m_targetWindows.erase(seatId);
 }
 
 std::optional<SeatId> SeatRoutingPolicy::ownerOf(
@@ -960,6 +972,11 @@ std::optional<SeatId> SeatRoutingPolicy::ownerOf(
         return std::nullopt;
     }
     return it->second;
+}
+
+std::uint64_t SeatRoutingPolicy::targetWindow(SeatId seatId) const noexcept {
+    const auto it = m_targetWindows.find(seatId);
+    return it == m_targetWindows.end() ? 0u : it->second;
 }
 
 InputRouteDecision SeatRoutingPolicy::route(
@@ -978,7 +995,7 @@ InputRouteDecision SeatRoutingPolicy::route(
     }
 
     decision.seatId = seat->seatId;
-    decision.targetHwnd = seat->targetHwnd;
+    decision.targetHwnd = targetWindow(seat->seatId);
     decision.consumePhysicalInput = isolationRequested;
     return decision;
 }

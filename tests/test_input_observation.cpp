@@ -406,12 +406,12 @@ void testExclusiveSeatRouting() {
           "Seat 2 keyboard assignment succeeds");
     check(seats.assignMouse(seat2, L"Mouse:B"),
           "Seat 2 mouse assignment succeeds");
-    check(seats.assignTargetWindow(seat1, 0x1111),
-          "Seat 1 target assignment succeeds");
-    check(seats.assignTargetWindow(seat2, 0x2222),
-          "Seat 2 target assignment succeeds");
 
     hydra::SeatRoutingPolicy policy;
+    check(policy.bindTargetWindow(seat1, 0x1111),
+          "Seat 1 target assignment succeeds");
+    check(policy.bindTargetWindow(seat2, 0x2222),
+          "Seat 2 target assignment succeeds");
     std::vector<std::uint64_t> dispatchedTargets;
     hydra::InputObservationSession session(
         seats, policy,
@@ -466,10 +466,10 @@ void testSharedDevicesAreAmbiguousForGateB() {
           "first explicit shared assignment succeeds");
     check(seats.assignKeyboard(seat2, L"Keyboard:Shared"),
           "second shared assignment succeeds");
-    check(seats.assignTargetWindow(seat1, 1), "Seat 1 target exists");
-    check(seats.assignTargetWindow(seat2, 2), "Seat 2 target exists");
 
     hydra::SeatRoutingPolicy policy;
+    check(policy.bindTargetWindow(seat1, 1), "Seat 1 target exists");
+    check(policy.bindTargetWindow(seat2, 2), "Seat 2 target exists");
     bool dispatched = false;
     hydra::InputObservationSession session(
         seats, policy,
@@ -503,16 +503,16 @@ void testInactiveMissingAndFailedTargets() {
     check(seats.assignKeyboard(inactive, L"Keyboard:Inactive"),
           "inactive keyboard assignment succeeds");
     check(seats.setActive(inactive, false), "Seat can be disabled");
-    check(seats.assignTargetWindow(inactive, 1), "inactive target exists");
 
     check(seats.assignKeyboard(missing, L"Keyboard:Missing"),
           "missing-target keyboard assignment succeeds");
 
     check(seats.assignKeyboard(failing, L"Keyboard:Fail"),
           "failing keyboard assignment succeeds");
-    check(seats.assignTargetWindow(failing, 3), "failing target exists");
 
     hydra::SeatRoutingPolicy policy;
+    check(policy.bindTargetWindow(inactive, 1), "inactive target exists");
+    check(policy.bindTargetWindow(failing, 3), "failing target exists");
     hydra::InputObservationSession session(
         seats, policy,
         [](const hydra::RawInputEvent&,

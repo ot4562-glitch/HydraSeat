@@ -517,7 +517,7 @@ void InputObservationSession::bindExclusiveDevices(
 }
 
 RoutingBindingReport InputObservationSession::rebuildBindings() {
-    m_routingPolicy.clear();
+    m_routingPolicy.clearDeviceBindings();
     m_ambiguousDeviceIds.clear();
 
     RoutingBindingReport report;
@@ -526,7 +526,7 @@ RoutingBindingReport InputObservationSession::rebuildBindings() {
         currentSeats.insert(seat.seatId);
         auto& metrics = m_seatMetrics[seat.seatId];
         metrics.seatId = seat.seatId;
-        metrics.targetHwnd = seat.targetHwnd;
+        metrics.targetHwnd = m_routingPolicy.targetWindow(seat.seatId);
 
         bindExclusiveDevices(seat, SeatDeviceType::Keyboard,
                              seat.keyboardIds, report);
@@ -580,18 +580,15 @@ InputRouteRecord InputObservationSession::processInput(
         return result;
     }
 
-    result.targetHwnd = seat->targetHwnd;
-    if (seat->targetHwnd == 0) {
+    const auto decision = m_routingPolicy.route(
+        event.deviceId, m_seats, requestPhysicalSuppression);
+    result.targetHwnd = decision.targetHwnd;
+    if (decision.targetHwnd == 0) {
         result.disposition = InputRouteDisposition::MissingTargetWindow;
         ++m_missingTargetEvents;
         updateSeatMetrics(event, result);
         return result;
     }
-
-    InputRouteDecision decision;
-    decision.seatId = seat->seatId;
-    decision.targetHwnd = seat->targetHwnd;
-    decision.consumePhysicalInput = requestPhysicalSuppression;
 
     bool dispatched = false;
     if (m_dispatch) {

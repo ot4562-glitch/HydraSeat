@@ -337,10 +337,17 @@ class SeatRoutingPolicy {
 public:
     bool bindDevice(std::wstring deviceId, SeatId seatId);
     bool unbindDevice(std::wstring_view deviceId);
+    bool bindTargetWindow(SeatId seatId, std::uint64_t targetHwnd);
+    void unbindTargetWindow(SeatId seatId) noexcept;
     void clearSeat(SeatId seatId);
-    void clear() noexcept { m_deviceOwners.clear(); }
+    void clearDeviceBindings() noexcept { m_deviceOwners.clear(); }
+    void clear() noexcept {
+        m_deviceOwners.clear();
+        m_targetWindows.clear();
+    }
 
     std::optional<SeatId> ownerOf(std::wstring_view deviceId) const;
+    std::uint64_t targetWindow(SeatId seatId) const noexcept;
     InputRouteDecision route(std::wstring_view deviceId,
                              const WorkspaceManager& seats,
                              bool isolationRequested) const;
@@ -348,6 +355,7 @@ public:
 private:
     static std::wstring normalize(std::wstring_view value);
     std::unordered_map<std::wstring, SeatId> m_deviceOwners;
+    std::unordered_map<SeatId, std::uint64_t> m_targetWindows;
 };
 
 class InputIsolationBackend {
