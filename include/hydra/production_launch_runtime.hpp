@@ -234,24 +234,42 @@ struct ProductionLaunchServices {
     std::shared_ptr<audio::RouteBackend> audioRouteBackend;
 };
 
+// Production resource factories consume the exact host-owned activation epoch
+// before creating Seat resources. Keeping this contract explicit avoids runtime
+// downcasts from the generic launch factory interface.
+class IProductionSeatActivationResourceFactory
+    : public launch::ISeatActivationResourceFactory {
+public:
+    ~IProductionSeatActivationResourceFactory() override = default;
+
+    virtual bool bindActivationEpoch(
+        const launch::SeatActivationPlan& plan,
+        const ProductionActivationEpoch& epoch,
+        std::string& error) = 0;
+    virtual bool bindTrustedHandoffExecutables(
+        const launch::SeatActivationPlan& plan,
+        std::vector<std::wstring> executablePaths,
+        std::string& error) = 0;
+};
+
 // Reuses the existing P5 transaction interface. The default implementation uses
 // real ProcessLauncher/WindowTracker/display inventory/controller inventory/Core
 // Audio observation and the injected Gate-C input bridge. Unsupported mutation
 // paths fail closed; they are never silently replaced with synthetic resources.
-std::shared_ptr<launch::ISeatActivationResourceFactory>
+std::shared_ptr<IProductionSeatActivationResourceFactory>
 makeProductionSeatActivationResourceFactory(
     ProductionLaunchServices services = {});
 
 class HostProviderPlanRegistry final : public IHostLaunchPlanRegistry {
 public:
     explicit HostProviderPlanRegistry(
-        std::shared_ptr<launch::ISeatActivationResourceFactory> resources,
+        std::shared_ptr<IProductionSeatActivationResourceFactory> resources,
         std::shared_ptr<requirement::ITrustedRequirementSource> trustedRequirements = {},
         std::shared_ptr<materialization::ITrustedMaterializationDecisionSource>
             trustedMaterializations = {},
         std::filesystem::path materializationInstancesRoot = {});
     explicit HostProviderPlanRegistry(
-        ProductionLaunchServices services = {},
+        ProductionLaunchServices services,
         std::shared_ptr<requirement::ITrustedRequirementSource> trustedRequirements = {},
         std::shared_ptr<materialization::ITrustedMaterializationDecisionSource>
             trustedMaterializations = {},
@@ -290,7 +308,7 @@ private:
     std::uint64_t sessionGeneration_{0};
     std::vector<SeatConfig> configuredSeats_;
     std::vector<StoredPlan> plans_;
-    std::shared_ptr<launch::ISeatActivationResourceFactory> resources_;
+    std::shared_ptr<IProductionSeatActivationResourceFactory> resources_;
     std::shared_ptr<requirement::ITrustedRequirementSource> trustedRequirements_;
     std::shared_ptr<materialization::ITrustedMaterializationDecisionSource>
         trustedMaterializations_;

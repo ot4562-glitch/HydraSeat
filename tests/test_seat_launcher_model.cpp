@@ -120,6 +120,61 @@ void testSelectionBoundsAndLifecycleActions() {
           "invalid or oversized local choices fail transactionally");
 }
 
+void testMinimalPresentationPolicy() {
+    std::string error;
+
+    SeatLauncherModel idle(1);
+    auto idleAuthority = snapshot(SeatGamePhase::Idle, SeatGamePhase::Idle);
+    check(idle.applySnapshot(idleAuthority, &error),
+          "idle presentation baseline is accepted");
+    const auto idleView = seatLauncherPresentation(idle.state());
+    check(!idleView.compact && idleView.showPlayer && idleView.showGame &&
+              !idleView.showNotification && !idleView.showEndPlaying &&
+              !idleView.showReconnect,
+          "idle Seat surface keeps only identity/game context without irrelevant actions");
+
+    SeatLauncherModel starting(1);
+    auto startingAuthority = snapshot(SeatGamePhase::Starting, SeatGamePhase::Idle);
+    startingAuthority.seatGames[0].binding = SeatGameBinding{"player", "game"};
+    check(starting.applySnapshot(startingAuthority, &error),
+          "starting presentation baseline is accepted");
+    const auto startingView = seatLauncherPresentation(starting.state());
+    check(!startingView.compact && startingView.showPlayer && startingView.showGame &&
+              !startingView.showNotification && startingView.showEndPlaying &&
+              !startingView.showReconnect,
+          "startup surface remains concise while preserving the one relevant stop action");
+
+    SeatLauncherModel playing(1);
+    auto playingAuthority = snapshot(SeatGamePhase::Playing, SeatGamePhase::Idle);
+    playingAuthority.seatGames[0].binding = SeatGameBinding{"player", "game"};
+    check(playing.applySnapshot(playingAuthority, &error),
+          "playing presentation baseline is accepted");
+    const auto playingView = seatLauncherPresentation(playing.state());
+    check(playingView.compact && !playingView.showPlayer && !playingView.showGame &&
+              !playingView.showNotification && playingView.showEndPlaying &&
+              !playingView.showReconnect,
+          "playing surface is genuinely compact and keeps only End Playing");
+
+    SeatLauncherModel recovery(2);
+    auto recoveryAuthority = snapshot(SeatGamePhase::Idle, SeatGamePhase::RecoveryRequired);
+    recoveryAuthority.seatGames[1].binding = SeatGameBinding{"player-two", "game-two"};
+    recoveryAuthority.seatGames[1].diagnostic = "Recovery required";
+    check(recovery.applySnapshot(recoveryAuthority, &error),
+          "recovery presentation baseline is accepted");
+    const auto recoveryView = seatLauncherPresentation(recovery.state());
+    check(!recoveryView.compact && recoveryView.showPlayer && recoveryView.showGame &&
+              recoveryView.showNotification && recoveryView.showEndPlaying &&
+              recoveryView.showReconnect,
+          "recovery surface exposes only identity, localized attention and relevant recovery actions");
+
+    recovery.markDisconnected("host unavailable");
+    const auto disconnectedView = seatLauncherPresentation(recovery.state());
+    check(!disconnectedView.compact && !disconnectedView.showPlayer &&
+              !disconnectedView.showGame && disconnectedView.showNotification &&
+              !disconnectedView.showEndPlaying && disconnectedView.showReconnect,
+          "disconnected surface hides stale game identity and offers reconnect only");
+}
+
 void testStaleAndAuthorityChangeFailClosed() {
     SeatLauncherModel model(1);
     auto current = snapshot(SeatGamePhase::Playing, SeatGamePhase::Idle);
@@ -177,6 +232,7 @@ void testMalformedSnapshotsDoNotReplaceState() {
 int main() {
     testIndependentAuthoritativeViewsAndCommands();
     testSelectionBoundsAndLifecycleActions();
+    testMinimalPresentationPolicy();
     testStaleAndAuthorityChangeFailClosed();
     testMalformedSnapshotsDoNotReplaceState();
     if (failures != 0) {

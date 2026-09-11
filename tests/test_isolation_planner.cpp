@@ -111,8 +111,6 @@ void testObservationProfile() {
           "observation profile has no missing requirements");
     check(selected(plan, "hydra.raw-input-host"),
           "observation profile selects the host backend");
-    check(!selected(plan, "hydra.legacy-message-router"),
-          "observation profile does not add unrelated routing");
 }
 
 void testRawInputProfileFailsClosed() {
@@ -398,29 +396,6 @@ void testRecoveryGuardIsRequired() {
           "suppression remains explicitly missing");
 }
 
-void testLegacyRouterNeverClaimsRawInputIsolation() {
-    const IsolationPlanner planner({
-        hydra::rawInputHostBackend(),
-        hydra::legacyMessageRouterBackend(),
-    });
-    const auto profile =
-        hydra::compatibilityProfileTemplate("raw-input-game");
-    check(profile.has_value(), "Raw Input profile template exists");
-
-    BackendEnvironment environment;
-    const auto plan = planner.plan(*profile, environment);
-    check(plan.status == PlanStatus::Unsupported,
-          "legacy message routing cannot satisfy Raw Input isolation");
-    check(!hydra::hasCapability(
-              plan.coveredCapabilities,
-              InputIsolationCapability::RawInputDataVirtualization),
-          "legacy routing never reports Raw Input data virtualization");
-    check(!hydra::hasCapability(
-              plan.coveredCapabilities,
-              InputIsolationCapability::PhysicalInputSuppression),
-          "legacy routing never reports physical suppression");
-}
-
 void testRegistrationOrderDoesNotChangePlan() {
     BackendEnvironment environment;
     environment.protoInputAvailable = true;
@@ -491,7 +466,10 @@ void testOptionalCoverageCannotHideMissingRequirements() {
     profile.optionalCapabilities =
         InputIsolationCapability::TargetWindowMessageRouting;
 
-    const IsolationPlanner planner({hydra::legacyMessageRouterBackend()});
+    const IsolationPlanner planner({mockBackend(
+        "backend.optional",
+        InputIsolationCapability::TargetWindowMessageRouting,
+        BackendRisk::Low)});
     const auto plan = planner.plan(profile);
 
     check(plan.status == PlanStatus::Unsupported,
@@ -693,7 +671,6 @@ int main() {
     testVerifiedSuppressionBackendCanCompletePlan();
     testAntiCheatRejectsInvasiveBackends();
     testRecoveryGuardIsRequired();
-    testLegacyRouterNeverClaimsRawInputIsolation();
     testRegistrationOrderDoesNotChangePlan();
     testPreferenceAndRiskRanking();
     testOptionalCoverageCannotHideMissingRequirements();

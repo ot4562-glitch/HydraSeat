@@ -1,39 +1,36 @@
-# HydraSeat Codex Entry Point
+# HydraSeat development notes
 
-OpenAI Codex and other repository agents must follow the canonical project instructions in:
+HydraSeat v1 is a Windows, game-first multiseat application for at most two active Seats in one interactive Windows session.
 
-- [`.agents/AGENTS.md`](.agents/AGENTS.md)
-- [`docs/PRODUCT_V1.md`](docs/PRODUCT_V1.md)
-- [`docs/implementation/DECISIONS.md`](docs/implementation/DECISIONS.md)
-- [`docs/implementation/README.md`](docs/implementation/README.md)
-- [`docs/implementation/STATUS.md`](docs/implementation/STATUS.md)
-- [`docs/implementation/CODEX_PLAYBOOK.md`](docs/implementation/CODEX_PLAYBOOK.md)
+## Product invariants
 
-## Required workflow
+- Seat hardware, Player identity, Game identity, two-player setup, and runtime bindings are separate concepts.
+- Either Seat must be able to stop or change its game without tearing down the other Seat.
+- Core operation is offline-first and least-privilege.
+- Do not bypass anti-cheat, DRM, protected processes, credentials, launcher/account policy, deliberate single-instance restrictions, or security products.
+- Unsupported or ambiguous isolation must fail closed.
+- Risky Windows mutations require a verified rollback path.
+- Automated tests never substitute for physical multi-input/display/audio, clean-machine install, reboot, or signing evidence.
 
-1. Read `.agents/AGENTS.md` completely.
-2. Read `docs/implementation/STATUS.md` to identify the current default packet and its true state.
-3. Read the starting packet section and any additional actionable packet sections selected from the relevant `docs/implementation/PHASE*.md` documents.
-4. Implement one or more actionable packets in declared dependency order. After completing one packet, continue directly into additional READY/actionable packets when useful; a new user turn is not required solely to cross a packet boundary.
-5. Do not skip undeclared prerequisites, weaken fail-closed behavior, or mark manual hardware/game/install/reboot gates complete.
-6. Run focused tests for every changed packet plus the applicable regression checks, `python tools/validate_implementation_roadmap.py`, and `git diff --check`.
-7. Update `STATUS.md` with truthful per-packet automated evidence and leave unperformed manual acceptance pending.
-8. Do not push, create or merge pull requests, or otherwise mutate remote state unless the user explicitly authorizes it.
+## Architecture rules
 
-## Current task lookup
+- Prefer direct, boring code over a new manager, coordinator, registry, factory, adapter, or policy layer.
+- Add an interface only for a real OS/test seam or when there are multiple meaningful implementations.
+- Keep one authoritative owner for each piece of mutable runtime state. Do not mirror state machines across layers.
+- Organize modules by product responsibility, not roadmap packet IDs or implementation phases.
+- Public headers under `include/hydra` are for reusable product/runtime APIs. Diagnostics, acceptance harnesses, experiments, and test support belong under `tools`, `tests`, or internal source directories.
+- Keep Win32 resource ownership RAII-based and capture system errors at the failing API boundary.
+- Cross-process protocols and persisted schemas must be explicit, bounded, versioned, and pointer-free.
+- Stable hardware identity owns Seat assignment; enumeration order and friendly names do not.
+- Latency-sensitive input paths must not perform disk, network, UI, or unbounded queue work.
 
-Do not hard-code a remembered packet here. The **Current default packet** in [`docs/implementation/STATUS.md`](docs/implementation/STATUS.md) is the starting implementation frontier, not an exclusive task boundary. Additional actionable packets may be selected in dependency order.
+## Change discipline
 
-Use the validated packet helper:
+1. Read the owning source and its focused tests before changing behavior.
+2. Make the smallest coherent change that simplifies ownership or fixes a user-visible problem.
+3. Do not add abstraction solely to make a future possibility configurable.
+4. Run focused tests first. Use broad x64/x86/release validation only for integration or release work.
+5. Keep physical/manual acceptance claims explicitly pending until a human performs them.
+6. Preserve unrelated worktree changes.
 
-```text
-python tools/show_implementation_packet.py --current
-python tools/show_implementation_packet.py --current --prompt
-python tools/show_implementation_packet.py --ready
-```
-
-The prompt command produces a starting-packet Codex prompt. `--ready` lists additional candidates that may be implemented in the same task once their declared prerequisites are satisfied.
-
-## Product boundary
-
-HydraSeat v1 is a two-Seat, game-first Windows local gaming multiseat product for households that want to use the spare performance of one capable gaming PC instead of buying a second complete desktop solely for simultaneous local play. Seat hardware, Player identity, Game identity, Two-player setup, and Runtime Session are separate concepts. One Seat may stop/change games while the other continues. v1 uses a minimal idle Seat Launcher rather than a general independent desktop shell, is offline-first and least-privilege, and reports compatibility as transparent evidence rather than an official certification badge. Same-game multi-instance automation is allowed only where the game/provider permit it; protected-title attempts require explicit warnings and never imply anti-cheat safety. HydraSeat does not pursue anti-cheat, DRM, protected-process, credential, launcher/account, single-instance, or security-product bypass. Unsupported capabilities fail closed, and recovery is implemented and tested alongside risky mutations.
+For product scope, architecture decisions, compatibility constraints, or release policy, consult only the relevant section of the corresponding document under `docs/`. Avoid treating historical implementation plans as runtime architecture authority.

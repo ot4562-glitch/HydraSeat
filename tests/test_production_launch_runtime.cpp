@@ -164,6 +164,7 @@ public:
             plan::GameRuntimeRequirement runtimeRequirement;
             runtimeRequirement.gameId = seat.gameId;
             runtimeRequirement.revision = seat.requirementRevision;
+            runtimeRequirement.validatedSeatCount = 2u;
             runtimeRequirement.requirements = seat.requirements;
             runtimeRequirement.capabilities = seat.capabilities;
             runtimeRequirement.highRiskApproved = false;
@@ -608,10 +609,35 @@ private:
     bool prepared_{false};
 };
 
-class RecordingFactory final : public ISeatActivationResourceFactory {
+class RecordingFactory final : public IProductionSeatActivationResourceFactory {
 public:
     explicit RecordingFactory(std::shared_ptr<RecordingState> state)
         : state_(std::move(state)) {}
+
+    bool bindActivationEpoch(const SeatActivationPlan& plan,
+                             const ProductionActivationEpoch& epoch,
+                             std::string& error) override {
+        if (!epoch.valid() || epoch.seatId != plan.seatId ||
+            epoch.activationFingerprint != plan.fingerprint) {
+            error = "recording factory received a mismatched activation epoch";
+            return false;
+        }
+        error.clear();
+        return true;
+    }
+
+    bool bindTrustedHandoffExecutables(
+        const SeatActivationPlan& plan,
+        std::vector<std::wstring> executablePaths,
+        std::string& error) override {
+        if (std::find(executablePaths.begin(), executablePaths.end(),
+                      plan.target.process.executablePath) == executablePaths.end()) {
+            error = "recording factory did not receive the launch executable";
+            return false;
+        }
+        error.clear();
+        return true;
+    }
 
     std::unique_ptr<ISeatActivationResource> create(
         ResourceKind kind, const SeatActivationPlan& plan,

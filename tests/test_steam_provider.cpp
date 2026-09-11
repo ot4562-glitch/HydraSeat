@@ -35,13 +35,16 @@ std::string libraryFolders() {
 std::string manifest(std::string appId,
                      std::string name,
                      std::string installDir,
-                     std::string buildId) {
-    return "\"AppState\"\n{\n"
-           "\"appid\" \"" + appId + "\"\n"
-           "\"name\" \"" + name + "\"\n"
-           "\"installdir\" \"" + installDir + "\"\n"
-           "\"buildid\" \"" + buildId + "\"\n"
-           "}\n";
+                     std::string buildId,
+                     std::string appType = {}) {
+    std::string output = "\"AppState\"\n{\n"
+                         "\"appid\" \"" + appId + "\"\n"
+                         "\"name\" \"" + name + "\"\n";
+    if (!appType.empty()) output += "\"type\" \"" + appType + "\"\n";
+    output += "\"installdir\" \"" + installDir + "\"\n"
+              "\"buildid\" \"" + buildId + "\"\n"
+              "}\n";
+    return output;
 }
 
 class FakeSteamSource final : public SteamMetadataSource {
@@ -171,6 +174,67 @@ void testReadOnlyMultiLibraryDiscoveryAndDeterminism() {
               adapter.descriptor().metadataRevision == firstRevision &&
               discoverInstalledGames(adapter, games).succeeded() && games == firstGames,
           "unchanged Steam fixture produces deterministic revision and discovery output");
+}
+
+void testNonGameManifestClassificationIsConservative() {
+    auto source = validSource();
+    const std::vector<std::pair<std::wstring, std::string>> extraManifests{
+        {L"C:\\Steam\\steamapps\\appmanifest_300.acf",
+         manifest("300", "Steamworks Common Redistributables", "_CommonRedist", "30")},
+        {L"C:\\Steam\\steamapps\\appmanifest_228980.acf",
+         manifest("228980", "Steamworks Common Redistributables", "Steamworks Shared", "29")},
+        {L"C:\\Steam\\steamapps\\appmanifest_301.acf",
+         manifest("301", "SDK Tool", "SdkTool", "31", "Tool")},
+        {L"C:\\Steam\\steamapps\\appmanifest_302.acf",
+         manifest("302", "Dedicated Server Package", "ServerPackage", "32",
+                  "DedicatedServer")},
+        {L"C:\\Steam\\steamapps\\appmanifest_303.acf",
+         manifest("303", "Runtime Package", "RuntimePackage", "33", "Runtime")},
+        {L"C:\\Steam\\steamapps\\appmanifest_304.acf",
+         manifest("304", "Support Package", "SupportPackage", "34", "Support")},
+        {L"C:\\Steam\\steamapps\\appmanifest_305.acf",
+         manifest("305", "Future Legitimate Title", "FutureGame", "35", "FutureKind")},
+        {L"C:\\Steam\\steamapps\\appmanifest_306.acf",
+         manifest("306", "Explicit Game", "ExplicitGame", "36", "Game")},
+    };
+    for (const auto& [path, bytes] : extraManifests) {
+        source->manifests.push_back(path);
+        source->files[path] = bytes;
+    }
+    source->executables[L"C:\\Steam\\steamapps\\common\\_CommonRedist"] = {
+        L"C:\\Steam\\steamapps\\common\\_CommonRedist\\vcredist.exe"};
+    source->executables[L"C:\\Steam\\steamapps\\common\\Steamworks Shared"] = {
+        L"C:\\Steam\\steamapps\\common\\Steamworks Shared\\vcredist.exe"};
+    source->executables[L"C:\\Steam\\steamapps\\common\\SdkTool"] = {
+        L"C:\\Steam\\steamapps\\common\\SdkTool\\tool.exe"};
+    source->executables[L"C:\\Steam\\steamapps\\common\\ServerPackage"] = {
+        L"C:\\Steam\\steamapps\\common\\ServerPackage\\server.exe"};
+    source->executables[L"C:\\Steam\\steamapps\\common\\RuntimePackage"] = {
+        L"C:\\Steam\\steamapps\\common\\RuntimePackage\\runtime.exe"};
+    source->executables[L"C:\\Steam\\steamapps\\common\\SupportPackage"] = {
+        L"C:\\Steam\\steamapps\\common\\SupportPackage\\support.exe"};
+    source->executables[L"C:\\Steam\\steamapps\\common\\FutureGame"] = {
+        L"C:\\Steam\\steamapps\\common\\FutureGame\\future.exe"};
+    source->executables[L"C:\\Steam\\steamapps\\common\\ExplicitGame"] = {
+        L"C:\\Steam\\steamapps\\common\\ExplicitGame\\game.exe"};
+
+    SteamProviderAdapter adapter(source);
+    std::vector<catalog::GameCatalogCandidate> games;
+    const auto discovery = discoverInstalledGames(adapter, games);
+    std::map<std::string, std::wstring> visible;
+    for (const auto& game : games) {
+        if (game.providerAppId) visible.emplace(*game.providerAppId, game.title);
+    }
+    check(discovery.succeeded() && games.size() == 4u &&
+              visible.contains("100") && visible.contains("200") &&
+              visible.contains("305") && visible.contains("306") &&
+              !visible.contains("300") && !visible.contains("228980") &&
+              !visible.contains("301") && !visible.contains("302") &&
+              !visible.contains("303") &&
+              !visible.contains("304"),
+          "Steam provider metadata hides clear runtime/tool/server/support packages while keeping games");
+    check(visible.contains("305") && visible.at("305") == L"Future Legitimate Title",
+          "unknown Steam app type remains conservatively visible instead of being overfiltered");
 }
 
 void testSupportedLaunchAndPolicyBoundaries() {
@@ -319,6 +383,7 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--live-smoke") return liveSmoke();
 
     testReadOnlyMultiLibraryDiscoveryAndDeterminism();
+    testNonGameManifestClassificationIsConservative();
     testSupportedLaunchAndPolicyBoundaries();
     testProcessCandidatesRemainUnverified();
     testMalformedAndStaleMetadataFailsClosed();

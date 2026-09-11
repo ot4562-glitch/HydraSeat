@@ -1,601 +1,198 @@
-# HydraSeat Architecture Specification
+# HydraSeat architecture
 
-## 1. Product boundary
+HydraSeat turns one Windows gaming PC into at most two local gaming Seats. Both Seats remain inside the same interactive Windows session. The architecture is deliberately game-focused: it is not a replacement Windows shell, a VM manager, or a general multi-user desktop system.
 
-HydraSeat v1 is a **two-Seat Windows local gaming product**. It exists so two people can share the unused CPU/GPU/memory/I/O headroom of one sufficiently capable gaming PC instead of requiring a second complete desktop solely for simultaneous local gaming.
+`PRODUCT_V1.md` defines the user-facing v1 scope. This document defines the implementation boundaries we want contributors to build around.
 
-The canonical user/product contract is [`PRODUCT_V1.md`](PRODUCT_V1.md). This document defines the technical boundaries needed to implement that contract.
+## Design goals
 
-v1 deliberately does not implement a general-purpose independent Windows desktop per Seat. The product manages games and the launchers/helpers required by those games. Full per-Seat taskbars, wallpaper, clipboard virtualization, arbitrary general-purpose apps, and a replacement Windows shell are outside the v1 contract.
+1. **Independent Seats.** Seat 1 stopping or changing a game must not tear down a healthy Seat 2.
+2. **One runtime authority.** Mutable session and hardware state has one owner: `hydra_host.exe`.
+3. **Recoverable Windows changes.** Every risky mutation has a rollback path and a way to verify that ordinary Windows behavior was restored.
+4. **Stable hardware identity.** Seat ownership is based on stable device/display identity, never enumeration order or friendly names alone.
+5. **Fail closed.** If HydraSeat cannot prove that a requested isolation or compatibility path is supported, launch is rejected instead of silently degrading isolation.
+6. **Boring internal structure.** Prefer concrete code and clear ownership over factories, managers, registries, policies, and adapters that exist only for hypothetical future flexibility.
 
-The normal path remains one Windows interactive session. HydraSeat does not require a VM, RDP, streaming, or a second Windows installation/session per Seat.
+## Non-goals
 
-## 2. v1 invariant: two active Seats
+HydraSeat v1 does not provide independent Windows logons, virtual machines, RDP/streaming sessions, arbitrary per-Seat desktop applications, or security/protection bypasses. It does not bypass anti-cheat, DRM, protected processes, launcher/account restrictions, deliberate single-instance restrictions, or security products.
 
-The v1 product, installer, UI, compatibility evidence, physical acceptance, and support policy are defined for a maximum of two active Seats.
-
-Core containers may remain collection-based where that avoids artificial `seat1`/`seat2` branching, but production activation must reject a v1 plan containing more than two active Seats. N-Seat generalization must not delay or complicate the two-Seat release path.
-
-## 3. Separate persisted concepts
-
-HydraSeat must not collapse hardware, people, games, and runtime state into one growing profile object.
-
-```text
-SeatConfig
-  physical station only
-
-PlayerProfile
-  lightweight person preferences and provider account references
-
-GameRecord
-  installed/discovered game identity
-
-TwoPlayerSetup
-  optional same-game two-instance compatibility recipe
-
-RuntimeSession
-  temporary Seat + Player + Game bindings
-```
-
-### 3.1 SeatConfig
-
-A Seat represents physical resources:
+## Process model
 
 ```text
-Seat
-├─ Displays[]
-│  └─ PrimaryDisplay
-├─ Keyboards[]       may be empty until a selected game requires one
-├─ Mice[]            may be empty until required
-├─ Controllers[]     optional
-├─ AudioOutputs[]    optional until required
-└─ AudioInputs[]     optional
-```
-
-A Seat does not permanently own a player, game, launcher account, save, or game process.
-
-A saved Seat configuration may be incomplete. Missing resources are not automatically configuration corruption. Requirement-aware launch preflight decides whether the selected game can run with the current assignments.
-
-### 3.2 PlayerProfile
-
-A Player is independent from a Seat and may move between Seat 1 and Seat 2.
-
-A lightweight Player profile may persist:
-
-- local display name and optional local avatar reference;
-- recent games and recent Seat preference;
-- per-game instance/data-directory preferences;
-- provider account reference/selector metadata when the provider supports choosing an already authenticated account;
-- recent session choices.
-
-HydraSeat should not persist provider passwords, general provider session secrets, or unrelated credentials. Authentication remains owned by the original launcher/provider whenever practical.
-
-### 3.3 GameRecord
-
-A GameRecord describes an installed/discovered game independent from Players and Seats.
-
-Identity can include:
-
-- provider and provider application ID where available;
-- executable identity/path candidates;
-- install root and metadata source;
-- architecture where known;
-- local title and icon source;
-- version/hash/staleness information where available.
-
-Provider metadata is untrusted bounded input. Friendly title is never sufficient identity by itself.
-
-### 3.4 TwoPlayerSetup
-
-A TwoPlayerSetup is only needed when the same game is assigned to both Seats or when a title has explicit compatibility requirements that must be reused.
-
-It may declare:
-
-- instance/data/config directory separation;
-- launch arguments/environment/working directory;
-- provider-specific account selection references;
-- bounded start order/waits;
-- process/child/window expectations;
-- input/controller/audio/display compatibility requirements;
-- backend allow/deny rules;
-- protection status and known limitations;
-- exact evidence/provenance metadata.
-
-The normal user flow should call this a **two-player setup**, not expose internal compatibility schema terminology unless Expert mode is opened.
-
-Automatic creation and guided manual creation are both required product paths. No setup may authorize anti-cheat, DRM, protected-process, account, launcher, or deliberate single-instance bypass.
-
-### 3.5 RuntimeSession
-
-Runtime state is temporary and authoritative only in `hydra_host.exe`.
-
-Example:
-
-```text
-Runtime Session
-├─ Seat 1 -> Mario -> Minecraft instance A
-└─ Seat 2 -> Luigi -> Minecraft instance B
-```
-
-Runtime PIDs, HWNDs, handles, transient Raw Input handles, and live tokens are never persisted as stable profile identity.
-
-## 4. Target production topology
-
-```text
-                           HydraSeat.exe
-                     game-first management UI
-                  game library / Players / Seats
-                  two-player setup / diagnostics
-                              │
-                 versioned local control protocol
-                              │
-                              ▼
-                        hydra_host.exe
-                 authoritative per-user runtime
-                              │
-         ┌────────────────────┼────────────────────┐
-         │                    │                    │
-         ▼                    ▼                    ▼
- hydra_watchdog.exe      Seat 1 runtime       Seat 2 runtime
- recovery lease         process/window       process/window
- crash rollback         input/controller     input/controller
-                        display/audio         display/audio
-                        game lifecycle        game lifecycle
-                              │                    │
-                              ▼                    ▼
-                    Game / launcher tree   Game / launcher tree
-
-         hydra_seat_ui.exe              hydra_seat_ui.exe
-         minimal idle/start UI           minimal idle/start UI
-         only when needed                only when needed
-
-hydra_reset.exe
-  independent emergency reset and verification path
-```
-
-`HydraSeat.exe` and `hydra_seat_ui.exe` are disposable clients. They do not own authoritative mutation state. Closing the main UI must not terminate a running Seat.
-
-## 5. Whole-machine runtime vs per-Seat game lifecycle
-
-HydraSeat has two related lifecycle levels.
-
-The P4-SEAT-01 implementation keeps the levels in separate contracts. The
-whole-machine `RuntimeHost` backends continue to own shared split-environment
-prepare/rollback, while `SeatGameLifecycle` owns at most two temporary
-`SeatGameBinding` values and injected Seat-local instances. A Seat-local
-instance may clean only its exact process/window/input/audio/controller
-ownership. Its bounded protocol snapshot contains stable Seat ID, phase,
-temporary Player/Game IDs, generation, and diagnostic; it contains no handles,
-pointers, credentials, or persisted Seat-profile fields. Host protocol v3
-transports bounded Seat commands, reconnect snapshots, and ordered
-Seat-identified mutation events. A `SeatControl` connection is authenticated to
-one active configured Seat and the server accepts only assign/start/stop
-payloads for that exact Seat; it rejects global, reconcile, and cross-Seat
-mutations. `RuntimeHost` serializes accepted mutations with
-whole-machine work and performs Seat-local cleanup before explicit shared
-rollback. This controlled foundation is not a real-game, physical-device, or
-physical-display capability claim.
-
-### 5.1 Whole-machine host/split state
-
-The host can be running while no game is active. A whole-machine split environment may remain active while one Seat is idle and the other is playing.
-
-Whole-machine operations include:
-
-- loading/validating the physical Seat layout;
-- preparing global input/display/device policy;
-- entering a recoverable split runtime;
-- explicit `Return to Windows`;
-- reconfiguration requiring verified rollback;
-- watchdog/reset recovery.
-
-### 5.2 Independent Seat lifecycle
-
-Each Seat needs an independent game lifecycle:
-
-```text
-Idle
- -> Planning
- -> Starting
- -> Playing
- -> Stopping
- -> Idle
-```
-
-with `Degraded` / `RecoveryRequired` when guarantees cannot be preserved.
-
-Required behavior:
-
-- Seat 1 may be Playing while Seat 2 is Idle;
-- Seat 2 may stop its game without stopping Seat 1;
-- an idle Seat may choose another Player/game and start again;
-- an idle Seat stays on the minimal Seat Launcher while another Seat remains active;
-- when both Seats are done, policy may return the machine to ordinary Windows automatically or through the visible end-session action;
-- explicit whole-machine `Return to Windows` always performs verified rollback.
-
-### Current implementation note
-
-The current Phase 4 branch already contains a background host foundation, host IPC, Seat process/window ownership, and early display/control policy work. Its current runtime protocol still centers several transitions around a whole-session command model. **That foundation must not be described as already implementing the independent v1 Seat game lifecycle above.** The roadmap tracks that lifecycle as additional Phase 4 work before the v1 gaming MVP can rely on it.
-
-## 6. Management UI and minimal Seat UI
-
-### 6.1 Main UI (`HydraSeat.exe`)
-
-Normal users should see a lightweight launcher-like surface:
-
-```text
-Games
-  [icons discovered from local installations/providers]
-
-Seat 1                         Seat 2
-<Player>                       <Player>
-<Game>                         <Game>
-
-                    Play
-```
-
-Primary interaction:
-
-1. choose game;
-2. choose Seat 1, Seat 2, or Both;
-3. choose Player(s);
-4. resolve only required warnings/setup;
-5. Play.
-
-Click/tap is primary. Drag-and-drop of a game onto a Seat is an optional shortcut.
-
-Low-level backend, device-path, protocol, hook, and plan details stay under Diagnostics/Expert UI.
-
-P6-UI-01 implements this flow as a bounded UI-independent model plus the default Win32 `Games` surface. The model owns only local presentation/selection state and compiles through the same provider-aware plan and preflight contracts used by diagnostics; it has no launch, shell, credential, filesystem-mutation, or whole-machine authority. Provider-wide and exact-AppID adapter bindings allow one Steam adapter and multiple independent manual EXE definitions without ambiguity. The Win32 surface performs read-only Steam refresh, manual EXE selection/PE validation, Player roster management, two Seat selections, setup generation, and normal preflight display. Exact runtime-requirement evidence is injected by the caller. If evidence is absent or stale, Play stays disabled rather than assuming a title is compatible.
-
-### 6.2 Seat UI (`hydra_seat_ui.exe`)
-
-v1 does not need a full shell.
-
-The per-Seat UI appears only when useful:
-
-- idle/waiting Seat;
-- game selection after a player exits;
-- Player change;
-- launch/preflight progress;
-- compatibility/protection warning;
-- bounded error/recovery action;
-- `End Playing`.
-
-Once a game is running, the UI should disappear or remain non-intrusive.
-
-P7-SHELL-01 implements the bounded client as a fixed-Seat pure model, a narrow
-host adapter with no generic runtime command API, and a Win32 process. Complete
-snapshots drive all visible state. Snapshot sequence/generation rollback and
-authority replacement without explicit reconnect are rejected. Window placement
-is applied only when the authoritative assigned display group resolves against a
-fresh local topology snapshot; otherwise the process stays hidden. Closing the
-client only closes its IPC handle and never owns or tears down a game process.
-
-Deferred beyond v1:
-
-- independent taskbar/window switcher as general desktop chrome;
-- Seat wallpaper/desktop zones;
-- arbitrary general-purpose app launcher;
-- clipboard virtualization;
-- full Windows shell replacement.
-
-## 7. Hardware detector
-
-`HardwareDetector` and related identity helpers enumerate and normalize physical resources without claiming isolation.
-
-Responsibilities include:
-
-- physical display enumeration and stable output identity;
-- Raw Input keyboard/mouse/touchpad enumeration;
-- HID, SetupAPI, and ConfigMgr identity resolution;
-- XInput/generic HID controller discovery;
-- audio endpoint discovery in the production audio phase;
-- conservative virtual-device/display classification;
-- change/hot-plug observation;
-- privacy-preserving diagnostics.
-
-Stable identity must be used instead of enumeration order or friendly name.
-
-## 8. Input compatibility and isolation
-
-Raw Input can identify which physical device generated an event, but that alone does not prevent Windows or games from observing merged/global input state.
-
-The required user-visible guarantee for a tested configuration is:
-
-```text
-Seat 1 input -> Seat 1 game only
-Seat 2 input -> Seat 2 game only
-```
-
-HydraSeat therefore treats input as a profile/capability problem involving explicit Windows API surfaces.
-
-Existing Phase 3 work includes controlled evidence for:
-
-- Raw Input observation and stable physical identity;
-- fail-closed Seat routing in HydraSeat-owned labs;
-- process-local polling/cursor/focus/capture virtualization in controlled probes;
-- controlled Raw Input API virtualization;
-- XInput state/remapping semantics;
-- DirectInput visibility/order policy experiments;
-- bounded latency/bleed metrics;
-- watchdog/crash/reset foundations;
-- one open-source external application acceptance path.
-
-Physical two-input acceptance and real game evidence remain separate gates. A synthetic zero-cross counter is not automatically a physical zero-bleed claim.
-
-## 9. Protection boundary
-
-HydraSeat never implements stealth, anti-cheat evasion, integrity bypass, DRM bypass, credential bypass, or a method for defeating deliberate game/provider restrictions.
-
-A known protected game may still be offered as an **explicit advanced experiment** because future compatibility can change. Before such an experiment, the UI must clearly state that HydraSeat has not established compatibility or anti-cheat safety and that the game/protection system may refuse or terminate the session or take action under its own policy.
-
-Protected-game technical success remains tagged `Protected/Experimental`. It is not evidence of anti-cheat safety.
-
-## 10. Process and window ownership
-
-A running game creates a temporary Seat-owned process tree. The Seat hardware configuration does not permanently own that process.
-
-Runtime process identity should use PID plus creation identity/executable checks and Job Objects where compatible.
-
-Window ownership derives from validated process ownership. The window subsystem must:
-
-- never move/close unrelated windows;
-- handle child/recreated windows;
-- reject stale/reused HWND identity;
-- keep owned windows inside the Seat display group;
-- handle DPI/topology changes deterministically;
-- expose weaker capability explicitly when a provider/game cannot use the preferred ownership mechanism.
-
-## 11. Display model
-
-A Seat may own one or more physical displays, but v1 has at most two active Seats.
-
-```text
-Seat 1
-  Display A -> local primary (0,0)
-  Display B -> local secondary
-
-Seat 2
-  Display C -> local primary (0,0)
-```
-
-The host tracks global Windows topology and compiles Seat-local placement transforms without pretending Windows itself has two independent desktops.
-
-Physical display support is the required path. Optional virtual displays are capability-gated later and must not become a dependency of normal local-monitor use.
-
-## 12. Audio and controller routing
-
-Audio and controller support are game/API specific, not generic labels.
-
-- XInput, DirectInput, Raw HID, SDL, and vendor APIs are separate controller capabilities.
-- Per-process audio endpoint routing must be verified against the selected game/provider path.
-- Missing optional devices are allowed in saved Seat configuration; launch preflight decides what the selected game actually requires.
-
-No game is called compatible merely because display/input works if the declared test scenario also requires controller/audio isolation and that evidence is absent.
-
-## 13. Game discovery and provider boundary
-
-The normal game library should be built from read-only local discovery before manual entry.
-
-Provider adapters may inspect supported local metadata for:
-
-- Steam;
-- Epic;
-- EA;
-- GOG;
-- additional providers added later;
-- custom executable fallback.
-
-Provider adapters are lawful integration layers, not restriction bypasses.
-
-The game catalog remains provider-neutral above the adapter layer. P6-CATALOG-01 implements this layer as a pure bounded candidate-reconciliation core: adapters/manual entry supply typed metadata, provider+app identity is preferred where available, normalized Windows executable identity is the fallback, friendly title/icon never define identity, and ambiguous conflicting strong provider identities fail closed. Catalog-only icon/architecture/staleness observations remain outside the persisted `GameRecord` schema until a schema packet explicitly promotes them.
-
-P6-PROV-01 places provider-specific code behind a typed, revision-pinned boundary. A provider declares explicit discovery/account-reference/launch/process-identification capabilities and `Available`, `Offline`, or `Absent` state. Boundary validation reuses the provider-neutral catalog core, exposes only bounded opaque references to already authenticated accounts, represents launch as an executable or provider URI plus an argument vector rather than a shell command, and records post-launch PID/creation/path evidence with explicit relationship verification. Adapter output is validated completely before caller state changes; stale metadata, cross-provider identity, malformed paths/URIs/arguments, unsupported operations, and unavailable providers fail closed. This contract is fake-tested infrastructure and does not itself claim a live provider or game is supported.
-
-P6-PROV-02 implements the first concrete provider as an independently written read-only Steam adapter. A bounded KeyValues parser reads the local library/app manifest subset into provider-neutral candidates, and a deterministic content-derived revision invalidates stale plans. The supported launch output is only the normal Steam run URI for an exact discovered AppID; account selection, arbitrary launch arguments, license/single-instance assumptions, and same-title automation fail closed. Native path/PID/creation observations are candidate evidence with provider causality explicitly unverified until the runtime proves exact ownership after a real launch. No Steam credential/session store is read, no Valve binary or artwork is bundled, and live discovery does not itself start Steam or a game.
-
-P6-PROV-03D implements the provider-neutral manual fallback without turning HydraSeat into a command runner. A custom definition contains an explicit absolute executable, bounded argument vector, optional working directory, and optional local icon source. Read-only native inspection canonicalizes those paths, validates the PE identity and architecture, and derives a revision from the complete definition plus file identity before catalog or launch output is exposed. The launch boundary returns the exact executable, arguments, and working directory without invoking a shell or starting the process. Same-path process observations remain unverified evidence, and custom-provider account selection is unsupported.
-
-P6-PLAN-01 adds a pure provider-aware compilation layer above those adapters. It validates the stable Seat/Player/Game/TwoPlayerSetup documents, pins exact provider and compatibility-requirement revisions, resolves at most two active Seats and their account references, runs requirement-aware hardware/capability/high-risk preflight, rejects exclusive hardware collisions, and emits an immutable canonical plan/fingerprint. This layer never starts a process or mutates provider/system state. P6-PREFLIGHT-01 then projects that result into deterministic normal-user and Expert messages plus typed approval-gated mutation previews; arbitrary mutation payload text is intentionally not part of the preview contract.
-
-Icons should normally be obtained from locally installed executable/shortcut/provider metadata. Community setup packages should avoid redistributing third-party game artwork by default.
-
-## 14. Two-player setup engine
-
-When both Seats select the same GameRecord, the planner resolves a TwoPlayerSetup.
-
-Resolution order:
-
-```text
-Known local/community setup
-    -> validate against exact local installation/provider/version
-    -> if unavailable, attempt bounded automatic setup discovery
-    -> if still unresolved, offer guided manual setup
-```
-
-Automatic setup discovery must be read-only until the user reviews the generated plan. Any filesystem/config mutation must be explicit, bounded, reversible, and scoped to HydraSeat-owned/approved paths.
-
-The manual path must still use typed validated fields; imported profiles must not gain arbitrary script execution by default.
-
-P6-PROFILE-01 implements that shared typed core: automatic generation emits only a candidate plus mutation intents, while the manual editor holds a draft separately and commits only after full Game/setup/path validation. Both paths converge on the same `TwoPlayerSetup` and `RuntimeSessionSelection`. P6-IMPORT-01 wraps one setup in a versioned provenance envelope that replaces machine-specific working/data paths with typed variables; every variable requires explicit local remapping and the imported setup is revalidated before caller state changes. P6-CLI-01 reuses the stable schemas for diagnostics and adds a redacted versioned plan snapshot; provider account-reference values are represented only as selected/not-selected in exported plan state.
-
-## 15. Compatibility evidence architecture
-
-HydraSeat v1 uses evidence rather than an official support badge.
-
-### 15.1 Local result
-
-The compatibility harness may produce a versioned local JSON record containing bounded technical evidence such as:
-
-- game/provider/version;
-- HydraSeat version;
-- Windows version/build class;
-- selected compatibility path/backend versions;
-- scenario type (`different-games`, `same-game-two-instance`, protected experiment);
-- launch/instance results;
-- receiver-verified input/bleed metrics;
-- controller/audio result where applicable;
-- clean stop/rollback result;
-- redaction schema version.
-
-### 15.2 Community evidence
-
-Upload is explicit opt-in. The user can preview the redacted JSON first.
-
-Community aggregation may show:
-
-- success and failure count;
-- sample size;
-- success percentage;
-- sub-results such as launch, two-instance, input, audio, clean shutdown.
-
-Aggregation must segment materially different game versions, HydraSeat versions, providers, Windows environments, and compatibility paths rather than producing a misleading universal percentage.
-
-There is no requirement for a maintainer-created `Certified` badge.
-
-### 15.3 Privacy
-
-Default compatibility data excludes:
-
-- credentials/tokens/passwords/cookies;
-- raw typed text;
-- Player display names;
-- Windows account names;
-- personal absolute paths;
-- unrelated process data;
-- account identifiers and stable device serials unless a narrowly documented non-identifying field is truly required.
-
-## 16. Offline-first boundary
-
-Core functionality must work without a HydraSeat cloud account or continuous network access.
-
-Offline core:
-
-- Seat setup;
-- Player profiles;
-- local game discovery where local provider metadata is available;
-- local game library;
-- saved TwoPlayerSetups;
-- local compatibility test records;
-- game launch/runtime/recovery.
-
-Optional network functionality:
-
-- compatibility/setup catalog synchronization;
-- explicit community evidence submission;
-- program update check/download.
-
-The initial community catalog should be distributable as versioned static JSON/artifacts so HydraSeat does not require a custom always-on service to reach v1.
-
-## 17. Update and trust model
-
-Compatibility data and executable updates are different trust domains.
-
-Compatibility/setup catalogs may refresh frequently and can support user-configurable automatic checks with local-cache fallback.
-
-Executable/runtime/driver updates require user approval. Downloaded artifacts require version/hash/trust validation and staged rollback/health checks.
-
-No optional binary, driver, or script is silently downloaded and executed merely because a community profile references it.
-
-## 18. Privilege model
-
-Least privilege is a v1 requirement.
-
-Normal `HydraSeat.exe` use and ordinary runtime operations execute without elevation whenever the required Windows API permits it.
-
-Elevation is requested only for narrow operations such as:
-
-- installation/repair/uninstall steps requiring it;
-- optional driver/service installation/configuration;
-- explicitly privileged system mutation;
-- specific recovery actions requiring administrator rights.
-
-Any elevated broker/service has a small typed allowlist and cannot become a general privileged command runner.
-
-## 19. Recovery model
-
-Risky mutation is not complete without recovery.
-
-Required layers include:
-
-- background host transition ownership;
-- independent watchdog lease;
-- durable bounded crash journal/safe-mode marker;
-- emergency reset path independent from normal UI;
-- reverse-order rollback for input/device/display/audio/window mutations;
-- exact ownership checks so unrelated processes/windows/devices are never reset;
-- verified postconditions before reporting ordinary Windows restored.
-
-A Seat game exiting normally is not a whole-machine crash and must not force the other Seat to stop.
-
-## 20. Installer boundary
-
-The developer CMake/MSVC/Qt workflow is not the end-user installation contract.
-
-A v1 installer must cover:
-
-- architecture/prerequisite checks;
-- core runtime installation;
-- optional privileged components only when required;
-- first-run Seat wizard with `Set later` support;
-- repair/uninstall;
-- update staging/rollback;
-- clean removal of HydraSeat-owned persistent state;
-- post-uninstall ordinary Windows verification.
-
-## 21. Component summary
-
-```text
-HardwareDetector / identity
-  read-only physical inventory
-
-Seat configuration
-  hardware station persistence, maximum two active in v1
-
-Player store
-  lightweight people/preferences, no password vault
-
-Application catalog / provider adapters
-  local game discovery and local icon metadata
-
-Two-player setup model/planner
-  automatic + guided manual same-game instance separation
-
-hydra_host.exe
-  authoritative whole-machine runtime + independent Seat game lifecycle
-
-hydra_hostctl.exe
-  read-only diagnostics + Management-authorized whole-machine/Seat commands
-
-Process/window/display/audio/controller subsystems
-  runtime ownership and routing
-
-Input compatibility subsystem
-  explicit capability-selected paths with physical evidence gates
-
 HydraSeat.exe
-  game-first main UI / Seat settings / Player selection / diagnostics
+management UI
+     |
+     | bounded local IPC
+     v
+hydra_host.exe
+runtime authority
+     |
+     +-- Seat 1 runtime ---- game / launcher process tree
+     |
+     +-- Seat 2 runtime ---- game / launcher process tree
+     |
+     +-- recovery journal / rollback ownership
 
-hydra_seat_ui.exe
-  minimal per-Seat idle/start/error launcher, not full desktop shell
-
-hydra_watchdog.exe / hydra_reset.exe
-  independent recovery
-
-Compatibility evidence layer
-  local-first JSON + optional redacted community aggregation
-
-Installer/update layer
-  least privilege, reversible, user-approved executable updates
+hydra_seat_ui.exe   optional minimal Seat-local controls
+hydra_watchdog.exe  crash/recovery supervision
+hydra_reset.exe     independent emergency cleanup
 ```
 
-## 22. Current truth and roadmap ownership
+The UIs are clients. Closing a UI must not implicitly destroy a running Seat. The host owns the session, the two Seat runtimes, process trees, and any temporary Windows mutations.
 
-Implementation truth is tracked in [`implementation/STATUS.md`](implementation/STATUS.md). Detailed work packets live under [`implementation/`](implementation/README.md).
+## Domain model
 
-Historical Phase 3 testing/design documents remain evidence for the controlled input work and should not be rewritten to imply future product behavior already exists.
+The persisted concepts stay separate:
 
-The architectural decision rule is simple:
+- `SeatConfig` describes physical resources assigned to a station.
+- `PlayerProfile` stores lightweight local player preferences.
+- `GameRecord` identifies an installed/discovered game.
+- `TwoPlayerSetup` describes an optional same-game/two-instance compatibility recipe.
+- `LaunchPlan` is immutable data produced after validation for one launch.
+- `RuntimeSession` is temporary host-owned state binding Seats, Players, games, and live resources.
 
-> If a feature does not materially improve the two-Seat game-first journey, its safety/recovery, or its compatibility evidence for v1, defer it rather than growing HydraSeat into a general multiseat desktop platform.
+PIDs, HWNDs, Raw Input handles, process handles, and other transient Windows identifiers are runtime state and are never stable profile identity.
+
+## Runtime ownership
+
+The desired runtime shape is intentionally small:
+
+```text
+SessionController
+    owns RuntimeSession
+    owns SeatRuntime[0..2]
+    owns shared rollback/recovery state
+
+SeatRuntime
+    owns one Seat's launch plan
+    owns its process tree
+    owns its window/display mutations
+    owns its input/controller/audio activation
+    owns Seat-local rollback
+```
+
+`SessionController` coordinates operations that really are machine-wide. `SeatRuntime` owns operations that can be isolated to one Seat. State must not be mirrored in parallel lifecycle objects unless an external protocol genuinely requires a projection.
+
+The current code has `RuntimeHost`, `SeatGameLifecycle`, launch-plan/resource objects, and production activation components that overlap with this responsibility split. Migration should collapse those layers incrementally rather than replacing them with another framework.
+
+## Launch lifecycle
+
+A launch follows one understandable transaction:
+
+```text
+validate request
+    -> compile immutable LaunchPlan
+    -> reserve/recovery journal
+    -> launch process tree
+    -> identify owned game window
+    -> apply required display/input/controller/audio state
+    -> Playing
+```
+
+Stopping or a failed start walks owned state back in reverse order. A rollback is successful only when the corresponding safe-state checks also succeed. If cleanup cannot be verified, the Seat/session remains visibly recovery-required.
+
+Compatibility hooks may run at real lifecycle boundaries when a game needs them, but compatibility code must not become a second runtime state machine.
+
+## Interfaces and test seams
+
+An interface is justified when at least one of these is true:
+
+- it wraps an operating-system boundary that tests must replace;
+- there are multiple meaningful implementations in the product today;
+- it is a stable cross-process/plugin ABI boundary.
+
+Internal object construction, one-off orchestration, and speculative future backends do not justify an interface by themselves. Prefer a concrete owner with injected OS services over factory-of-factory graphs.
+
+Cross-process messages and persisted formats remain explicit, bounded, versioned, and pointer-free. Those boundaries are intentionally stricter than ordinary in-process C++ code.
+
+## Platform boundary
+
+Windows-specific work belongs behind a small platform layer. Examples include:
+
+- process creation and Job Objects;
+- window discovery/placement;
+- display topology;
+- Raw Input and HID identity;
+- controller/XInput handling;
+- Core Audio endpoint/session routing;
+- privilege/UAC operations.
+
+The domain/runtime layer should traffic in HydraSeat identities and plans rather than leaking raw Win32 handles through unrelated modules.
+
+## Providers and compatibility
+
+Steam and custom executable discovery produce normal game records and launch inputs. Provider code does not own a Seat runtime.
+
+Game-specific compatibility is optional. Gate-C/shim work, materialized instances, and community compatibility data should live at the edge of the runtime and be invoked only when the selected game's validated requirements call for them. They must not be prerequisites for understanding the normal launch path.
+
+## Recovery
+
+Recovery is part of normal architecture, not release tooling. Before an externally visible risky mutation, HydraSeat records enough owned state to undo that mutation. The watchdog/reset path must be able to restore HydraSeat-owned changes without terminating unrelated user processes or claiming success it cannot verify.
+
+## Target source layout
+
+The repository should converge toward product responsibilities instead of roadmap phases:
+
+```text
+src/
+  app/                 HydraSeat.exe and presentation glue
+  host/                host process, IPC, SessionController
+  runtime/             SeatRuntime, launch plans, process/window ownership
+  platform/windows/    Win32 device/display/input/audio/controller services
+  providers/           Steam and custom executable discovery/launch metadata
+  compatibility/       optional game-specific adapters and Gate-C work
+  recovery/            journal, watchdog, reset and rollback primitives
+
+tools/                 diagnostics, acceptance and release utilities
+tests/                 focused unit/integration tests
+include/hydra/          small reusable/public product API only
+```
+
+Most implementation-only headers should eventually move next to their owning source rather than remaining in `include/hydra/`.
+
+## Target build shape
+
+The current build graph is much more fragmented than the product. We should converge from one static library per small implementation unit toward a handful of meaningful libraries, for example:
+
+- `hydra_core` — domain values, profiles, game/provider-neutral plans;
+- `hydra_runtime` — session/Seat lifecycle and process ownership;
+- `hydra_windows` — Windows platform services;
+- `hydra_compatibility` — optional compatibility machinery;
+- `hydra_ui` — UI models/shared presentation support.
+
+Executables such as `HydraSeat.exe`, `hydra_host.exe`, `hydra_watchdog.exe`, and diagnostics link those components. Tests should usually link the component they test instead of causing a new production library to exist for every source file.
+
+The exact final number of targets is not important. The rule is that a build target represents a real ownership/dependency boundary, not an implementation packet.
+
+## Dependency direction
+
+Preferred direction:
+
+```text
+app / tools
+    -> host
+    -> runtime
+    -> core
+
+runtime -> windows abstractions
+runtime -> compatibility (only through explicit optional activation)
+providers -> core
+windows -> core types only where needed
+```
+
+Avoid cycles and avoid a generic `production` layer that imports every subsystem. Composition belongs near executable startup or the host owner.
+
+## Small-PR migration plan
+
+The large experimental implementation should not be proposed upstream as one architectural rewrite. Preserve working behavior while moving in reviewable steps:
+
+1. **Repository cleanup.** Remove development-agent artifacts and stale roadmap authority; keep product/build documentation concise.
+2. **Build cleanup.** Split the root CMake file and merge targets that do not represent real component boundaries without moving behavior.
+3. **Runtime ownership.** Consolidate overlapping host/Seat lifecycle and launch-resource ownership around `SessionController`/`SeatRuntime` responsibilities.
+4. **Windows platform boundary.** Group process/window/display/input/controller/audio services and keep Win32 details out of domain code.
+5. **Compatibility isolation.** Move Gate-C and game-specific materialization behind the normal runtime path instead of beside it.
+6. **UI/provider cleanup.** Keep game discovery and presentation simple clients of the host/runtime contracts.
+7. **Release/recovery validation.** Retain the valuable tests and recovery guarantees, but move acceptance/release orchestration out of product architecture.
+
+Each step should compile and pass its focused regression tests before the next one begins. Compatibility behavior and recovery guarantees should not be weakened merely to reduce code size.

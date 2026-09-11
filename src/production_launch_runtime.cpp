@@ -13,6 +13,7 @@
 #include <exception>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -262,7 +263,6 @@ launch::SeatActivationPlan makeActivationPlan(
     launch::SeatActivationPlan result;
     result.seatId = entry.seatId;
     result.seat = seatConfig;
-    result.seat.targetHwnd = 0;
     result.target.gameId = seatPlan.gameId;
     result.target.process.seatId = entry.seatId;
     result.target.process.executablePath = seatPlan.launchRequest.target;
@@ -1086,7 +1086,7 @@ private:
 };
 
 class ProductionSeatActivationResourceFactory final
-    : public launch::ISeatActivationResourceFactory {
+    : public IProductionSeatActivationResourceFactory {
 public:
     explicit ProductionSeatActivationResourceFactory(ProductionLaunchServices services)
         : services_(std::move(services)) {
@@ -1106,7 +1106,7 @@ public:
 
     bool bindActivationEpoch(const launch::SeatActivationPlan& plan,
                              const ProductionActivationEpoch& epoch,
-                             std::string& error) {
+                             std::string& error) override {
         if (plan.seatId == 0 || plan.fingerprint == 0 || !epoch.valid() ||
             epoch.seatId != plan.seatId ||
             epoch.activationFingerprint != plan.fingerprint) {
@@ -1151,7 +1151,7 @@ public:
     bool bindTrustedHandoffExecutables(
         const launch::SeatActivationPlan& plan,
         std::vector<std::wstring> executablePaths,
-        std::string& error) {
+        std::string& error) override {
         if (plan.seatId == 0 || plan.fingerprint == 0 ||
             executablePaths.empty() ||
             executablePaths.size() > process::kMaximumTrustedHandoffExecutables ||
@@ -1370,22 +1370,25 @@ std::uint64_t seatHardwareFingerprint(const SeatConfig& seat) noexcept {
     return hash.value();
 }
 
-std::shared_ptr<launch::ISeatActivationResourceFactory>
+std::shared_ptr<IProductionSeatActivationResourceFactory>
 makeProductionSeatActivationResourceFactory(ProductionLaunchServices services) {
     return std::make_shared<ProductionSeatActivationResourceFactory>(std::move(services));
 }
 
 HostProviderPlanRegistry::HostProviderPlanRegistry(
-    std::shared_ptr<launch::ISeatActivationResourceFactory> resources,
+    std::shared_ptr<IProductionSeatActivationResourceFactory> resources,
     std::shared_ptr<requirement::ITrustedRequirementSource> trustedRequirements,
     std::shared_ptr<materialization::ITrustedMaterializationDecisionSource>
         trustedMaterializations,
     std::filesystem::path materializationInstancesRoot)
-    : resources_(resources ? std::move(resources)
-                           : makeProductionSeatActivationResourceFactory()),
+    : resources_(std::move(resources)),
       trustedRequirements_(std::move(trustedRequirements)),
       trustedMaterializations_(std::move(trustedMaterializations)),
       materializationInstancesRoot_(std::move(materializationInstancesRoot)) {
+    if (!resources_) {
+        throw std::invalid_argument(
+            "production activation resource factory must be provided explicitly");
+    }
     if (trustedRequirements_) {
         if (!trustedMaterializations_) {
             trustedMaterializations_ =
@@ -1404,21 +1407,10 @@ HostProviderPlanRegistry::HostProviderPlanRegistry(
     std::shared_ptr<materialization::ITrustedMaterializationDecisionSource>
         trustedMaterializations,
     std::filesystem::path materializationInstancesRoot)
-    : resources_(makeProductionSeatActivationResourceFactory(std::move(services))),
-      trustedRequirements_(std::move(trustedRequirements)),
-      trustedMaterializations_(std::move(trustedMaterializations)),
-      materializationInstancesRoot_(std::move(materializationInstancesRoot)) {
-    if (trustedRequirements_) {
-        if (!trustedMaterializations_) {
-            trustedMaterializations_ =
-                trustedRequirements_->trustedMaterializationDecisionSource();
-        }
-        if (materializationInstancesRoot_.empty()) {
-            materializationInstancesRoot_ =
-                trustedRequirements_->trustedMaterializationInstancesRoot();
-        }
-    }
-}
+    : HostProviderPlanRegistry(
+          makeProductionSeatActivationResourceFactory(std::move(services)),
+          std::move(trustedRequirements), std::move(trustedMaterializations),
+          std::move(materializationInstancesRoot)) {}
 
 void HostProviderPlanRegistry::resetContext(
     std::uint64_t profileFingerprint,
@@ -1610,7 +1602,6 @@ ProviderPlanInstallResult HostProviderPlanRegistry::install(
     stored.providerPlan = request.plan;
     stored.seatPlan = *selected;
     stored.seatConfig = *configured;
-    stored.seatConfig.targetHwnd = 0;
     stored.entry.seatId = request.seatId;
     stored.entry.planFingerprint = request.planFingerprint;
     stored.entry.planRevision = request.planRevision;
@@ -1709,10 +1700,6 @@ HostProviderPlanRegistry::createForBinding(
     }
 
     std::lock_guard lock(mutex_);
-    if (!resources_) {
-        error = "internal invariant violation: production activation resource factory registration is missing";
-        return {};
-    }
     const auto found = std::find_if(plans_.begin(), plans_.end(),
                                     [&](const StoredPlan& stored) {
                                         return stored.entry.seatId == seatId;
@@ -1843,27 +1830,24 @@ HostProviderPlanRegistry::createForBinding(
             std::move(materializationPlan), std::move(compatibilityIdentity));
     }
 
-    if (auto* factory =
-            dynamic_cast<ProductionSeatActivationResourceFactory*>(resources_.get())) {
-        ProductionActivationEpoch activationEpoch;
-        activationEpoch.seatId = found->entry.seatId;
-        activationEpoch.sessionId = found->entry.sessionId;
-        activationEpoch.sessionGeneration = found->entry.sessionGeneration;
-        activationEpoch.seatGameGeneration = found->entry.seatGameGeneration;
-        activationEpoch.activationFingerprint = activation.fingerprint;
+    ProductionActivationEpoch activationEpoch;
+    activationEpoch.seatId = found->entry.seatId;
+    activationEpoch.sessionId = found->entry.sessionId;
+    activationEpoch.sessionGeneration = found->entry.sessionGeneration;
+    activationEpoch.seatGameGeneration = found->entry.seatGameGeneration;
+    activationEpoch.activationFingerprint = activation.fingerprint;
 
-        std::string contextError;
-        if (!factory->bindActivationEpoch(activation, activationEpoch, contextError)) {
-            error = "authoritative host activation epoch could not be bound to production resources";
-            if (!contextError.empty()) error += ": " + contextError;
-            return {};
-        }
-        if (!factory->bindTrustedHandoffExecutables(
-                activation, authority->executableCandidates, contextError)) {
-            error = "trusted process evidence could not be bound to activation";
-            if (!contextError.empty()) error += ": " + contextError;
-            return {};
-        }
+    std::string contextError;
+    if (!resources_->bindActivationEpoch(activation, activationEpoch, contextError)) {
+        error = "authoritative host activation epoch could not be bound to production resources";
+        if (!contextError.empty()) error += ": " + contextError;
+        return {};
+    }
+    if (!resources_->bindTrustedHandoffExecutables(
+            activation, authority->executableCandidates, contextError)) {
+        error = "trusted process evidence could not be bound to activation";
+        if (!contextError.empty()) error += ": " + contextError;
+        return {};
     }
     return std::make_unique<launch::PlannedSeatGameInstance>(
         std::move(activation), resources_, std::move(compatibilityHook));

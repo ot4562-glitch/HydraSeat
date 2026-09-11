@@ -169,6 +169,7 @@ SeatLaunchContext launchContext(ControlledProvider& provider) {
         plan::GameRuntimeRequirement requirement;
         requirement.gameId = gameId;
         requirement.revision = 5u;
+        requirement.validatedSeatCount = 1u;
         requirement.compatibility = compatibility();
         context.requirements.push_back(std::move(requirement));
     }

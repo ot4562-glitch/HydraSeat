@@ -1,5 +1,7 @@
 #include "hydra/host_transport.hpp"
 
+#include "hydra/production_activation_bridges.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -842,10 +844,22 @@ public:
                 "trusted runtime requirement source is unavailable during Host composition";
             return;
         }
+        std::string activationBridgeError;
+        auto activationBridges =
+            production::makeDefaultProductionActivationResourceBridges(
+                &activationBridgeError);
+        if (!activationBridges) {
+            compositionError = activationBridgeError.empty()
+                ? "default production activation bridges are unavailable"
+                : std::move(activationBridgeError);
+            return;
+        }
+        production::ProductionLaunchServices services;
+        services.recoveryBridge = activationBridges;
+        services.inputBridge = activationBridges;
         auto productionFactory =
             std::make_shared<production::HostProviderPlanRegistry>(
-                std::shared_ptr<launch::ISeatActivationResourceFactory>{},
-                std::move(trustedRequirements));
+                std::move(services), std::move(trustedRequirements));
         if (!host.installSeatGameFactoryIfUnavailable(
                 std::move(productionFactory), &compositionError)) {
             if (compositionError.empty()) {

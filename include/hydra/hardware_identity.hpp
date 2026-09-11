@@ -45,9 +45,24 @@ inline std::wstring canonicalizeInstanceId(std::wstring_view instanceId) {
     return normalizeDevicePath(instanceId);
 }
 
-inline std::wstring selectPhysicalIdentity(std::wstring_view parentInstanceId,
+inline std::wstring canonicalizeContainerId(std::wstring_view containerId) {
+    std::wstring normalized = trimTrailingNulls(std::wstring(containerId));
+    for (auto& character : normalized) {
+        character = asciiUpper(character);
+    }
+    return normalized;
+}
+
+inline std::wstring selectPhysicalIdentity(std::wstring_view physicalContainerId,
+                                           std::wstring_view parentInstanceId,
                                            std::wstring_view deviceInstanceId,
                                            std::wstring_view interfacePath) {
+    if (!physicalContainerId.empty()) {
+        auto identity = canonicalizeContainerId(physicalContainerId);
+        if (!identity.empty()) {
+            return L"CONTAINER:" + identity;
+        }
+    }
     if (!parentInstanceId.empty()) {
         return canonicalizeInstanceId(parentInstanceId);
     }
@@ -55,6 +70,12 @@ inline std::wstring selectPhysicalIdentity(std::wstring_view parentInstanceId,
         return canonicalizeInstanceId(deviceInstanceId);
     }
     return normalizeDevicePath(interfacePath);
+}
+
+inline std::wstring selectPhysicalIdentity(std::wstring_view parentInstanceId,
+                                           std::wstring_view deviceInstanceId,
+                                           std::wstring_view interfacePath) {
+    return selectPhysicalIdentity({}, parentInstanceId, deviceInstanceId, interfacePath);
 }
 
 inline std::wstring selectInterfaceDeviceIdentity(std::wstring_view deviceInstanceId,
@@ -66,11 +87,12 @@ inline std::wstring selectInterfaceDeviceIdentity(std::wstring_view deviceInstan
 }
 
 inline std::wstring makeStableDeviceId(std::wstring_view category,
+                                       std::wstring_view physicalContainerId,
                                        std::wstring_view parentInstanceId,
                                        std::wstring_view deviceInstanceId,
                                        std::wstring_view interfacePath) {
     const auto identity = selectPhysicalIdentity(
-        parentInstanceId, deviceInstanceId, interfacePath);
+        physicalContainerId, parentInstanceId, deviceInstanceId, interfacePath);
     if (identity.empty()) {
         return {};
     }
@@ -81,17 +103,48 @@ inline std::wstring makeStableDeviceId(std::wstring_view category,
     return id;
 }
 
+inline std::wstring makeStableDeviceId(std::wstring_view category,
+                                       std::wstring_view parentInstanceId,
+                                       std::wstring_view deviceInstanceId,
+                                       std::wstring_view interfacePath) {
+    return makeStableDeviceId(
+        category, {}, parentInstanceId, deviceInstanceId, interfacePath);
+}
+
+inline bool isPreferredRepresentativePath(std::wstring_view candidatePath,
+                                          std::wstring_view currentPath) {
+    if (candidatePath.empty()) {
+        return false;
+    }
+    if (currentPath.empty()) {
+        return true;
+    }
+    return normalizeDevicePath(candidatePath) < normalizeDevicePath(currentPath);
+}
+
 inline bool containsToken(std::wstring_view normalizedValue, std::wstring_view token) {
     return normalizedValue.find(token) != std::wstring_view::npos;
 }
 
 inline bool isObviousRemoteOrSyntheticInputPath(std::wstring_view path) {
     const auto normalized = normalizeDevicePath(path);
+    const bool rootEnumerated = containsToken(normalized, L"ROOT#") ||
+                                containsToken(normalized, L"ROOT\\");
+    const bool explicitlyVirtual = containsToken(normalized, L"VIRTUAL");
     return containsToken(normalized, L"RDP_KBD") ||
            containsToken(normalized, L"RDP_MOU") ||
            containsToken(normalized, L"ROOT#RDP") ||
            containsToken(normalized, L"ROOT\\RDP") ||
-           containsToken(normalized, L"TERMSRV");
+           containsToken(normalized, L"TERMSRV") ||
+           (rootEnumerated && explicitlyVirtual);
+}
+
+inline bool isObviousRemoteOrSyntheticInputIdentity(std::wstring_view interfacePath,
+                                                     std::wstring_view deviceInstanceId,
+                                                     std::wstring_view parentInstanceId) {
+    return isObviousRemoteOrSyntheticInputPath(interfacePath) ||
+           isObviousRemoteOrSyntheticInputPath(deviceInstanceId) ||
+           isObviousRemoteOrSyntheticInputPath(parentInstanceId);
 }
 
 inline bool isLikelyInternalKeyboardPath(std::wstring_view path) {

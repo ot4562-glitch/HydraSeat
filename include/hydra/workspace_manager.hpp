@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -23,16 +24,10 @@ struct SeatConfig {
     std::vector<std::wstring> controllerIds;
     std::optional<std::wstring> audioOutputEndpointId;
     std::optional<std::wstring> audioInputEndpointId;
-    // Runtime-only window association. Legacy schema v2 keeps a target_hwnd field
-    // for compatibility, but persistence must write zero and loading must discard it.
-    std::uint64_t targetHwnd{0};
     bool active{true};
 
     bool operator==(const SeatConfig&) const = default;
 };
-
-// Keep the public Phase 1 type name while callers migrate to Seat terminology.
-using WorkspaceConfig = SeatConfig;
 
 class WorkspaceManager {
 public:
@@ -54,18 +49,12 @@ public:
                           bool shareable = false);
     bool unassignController(SeatId seatId, const std::wstring& controllerId);
 
-    // Compatibility overloads for existing XInput-index callers.
-    bool assignController(SeatId seatId, std::uint32_t xinputIndex,
-                          bool shareable = false);
-    bool unassignController(SeatId seatId, std::uint32_t xinputIndex);
-
     bool assignAudioOutput(SeatId seatId, const std::wstring& endpointId,
                            bool shareable = false);
     bool unassignAudioOutput(SeatId seatId);
     bool assignAudioInput(SeatId seatId, const std::wstring& endpointId,
                           bool shareable = false);
     bool unassignAudioInput(SeatId seatId);
-    bool assignTargetWindow(SeatId seatId, std::uint64_t hwnd);
     bool setActive(SeatId seatId, bool active);
 
     // The visible whole-machine control plane belongs to one Management Seat.
@@ -88,18 +77,12 @@ public:
     const SeatConfig* getSeat(SeatId seatId) const;
     std::vector<SeatConfig> getAllSeats() const;
 
-    bool saveToFile(const std::string& filePath = "workspace_config.json") const;
+    bool saveToFile(
+        const std::filesystem::path& filePath = std::filesystem::path{"workspace_config.json"}) const;
     // Loading is transactional: any parse or validation failure leaves state intact.
-    bool loadFromFile(const std::string& filePath = "workspace_config.json");
+    bool loadFromFile(
+        const std::filesystem::path& filePath = std::filesystem::path{"workspace_config.json"});
     const std::string& lastError() const noexcept { return m_lastError; }
-
-    // Compatibility wrappers for existing WorkspaceManager callers.
-    SeatId createWorkspace(const std::wstring& name = {}) { return createSeat(name); }
-    bool removeWorkspace(SeatId id) { return removeSeat(id); }
-    const WorkspaceConfig* getWorkspace(SeatId id) const { return getSeat(id); }
-    std::vector<WorkspaceConfig> getAllWorkspaces() const { return getAllSeats(); }
-    SeatId findWorkspaceByKeyboardPath(const std::wstring& path) const;
-    SeatId findWorkspaceByMousePath(const std::wstring& path) const;
 
 private:
     static std::wstring normalizeId(const std::wstring& value);

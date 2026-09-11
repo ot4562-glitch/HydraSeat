@@ -22,7 +22,8 @@ class ITrustedMaterializationDecisionSource;
 
 namespace hydra::requirement {
 
-inline constexpr std::uint32_t kRequirementEvidenceStoreSchemaVersion = 1u;
+inline constexpr std::uint32_t kLegacyRequirementEvidenceStoreSchemaVersion = 1u;
+inline constexpr std::uint32_t kRequirementEvidenceStoreSchemaVersion = 2u;
 inline constexpr std::size_t kMaximumRequirementEvidenceStoreBytes = 4u * 1024u * 1024u;
 inline constexpr std::size_t kMaximumRequirementEvidenceRecords = profile::kMaximumGames;
 inline constexpr std::size_t kMaximumRequirementResolveIssues = profile::kMaximumGames;
@@ -46,6 +47,7 @@ struct LocalRequirementEvidenceRecord {
     std::string evidenceResultId;
     std::string evidenceProvenanceId;
     std::uint64_t evidenceProvenanceRevision{0};
+    std::uint8_t validatedSeatCount{0};
 
     launch::Requirements requirements;
     launch::Capabilities capabilities;
@@ -245,6 +247,7 @@ enum class TrustedPlanRequirementCode : std::uint8_t {
     UntrustedEvidenceOrigin,
     StaleEvidence,
     ProtectedApprovalRequired,
+    ValidationSeatScopeExceeded,
 };
 
 struct TrustedPlanRequirementDiagnostic {
@@ -322,6 +325,8 @@ inline TrustedPlanRequirementDiagnostic validateProviderAwareLaunchPlanAgainstTr
     for (std::size_t index = 0u; index < snapshot.authorities.size(); ++index) {
         const auto& authority = snapshot.authorities[index];
         if (authority.requirement.gameId.empty() || authority.requirement.revision == 0u ||
+            authority.requirement.validatedSeatCount < 1u ||
+            authority.requirement.validatedSeatCount > 2u ||
             authority.providerId.empty() || authority.providerMetadataRevision == 0u ||
             authority.executableCandidates.empty() ||
             authority.executableCandidates.size() > profile::kMaximumExecutableCandidates ||
@@ -411,6 +416,16 @@ inline TrustedPlanRequirementDiagnostic validateProviderAwareLaunchPlanAgainstTr
                 "provider metadata revision changed after trusted requirement resolution");
         }
         const auto& trusted = authority->requirement;
+        const auto selectedSeatCount = static_cast<std::uint8_t>(std::count_if(
+            providerPlan.seats.begin(), providerPlan.seats.end(),
+            [&](const plan::SeatProviderLaunchPlan& candidate) {
+                return candidate.gameId == seat.gameId;
+            }));
+        if (selectedSeatCount > trusted.validatedSeatCount) {
+            return detail::trustedPlanFailure(
+                TrustedPlanRequirementCode::ValidationSeatScopeExceeded, seat.gameId,
+                "provider plan uses the Game on more Seats than the trusted physical validation scope");
+        }
         if (seat.requirementRevision != trusted.revision ||
             seat.requirements != trusted.requirements ||
             seat.capabilities != trusted.capabilities ||

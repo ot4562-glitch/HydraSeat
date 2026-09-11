@@ -159,6 +159,22 @@ void testHidUsageClassification() {
 
 void testHardwareDetector() {
     hydra::HardwareDetector detector;
+    const auto checkStableInputInventory = [](const std::vector<hydra::DeviceInfo>& devices,
+                                              hydra::DeviceType expectedType,
+                                              std::string_view category) {
+        for (std::size_t index = 0; index < devices.size(); ++index) {
+            check(devices[index].type == expectedType,
+                  std::string(category) + " inventory preserves the requested device category");
+            check(!devices[index].id.empty(),
+                  std::string(category) + " inventory never exposes an empty stable identity");
+            check(!devices[index].devicePath.empty(),
+                  std::string(category) + " inventory keeps one representative runtime interface");
+            if (index > 0) {
+                check(devices[index - 1].id < devices[index].id,
+                      std::string(category) + " inventory is uniquely sorted by stable physical identity");
+            }
+        }
+    };
 
     const auto displays = detector.detectDisplays();
     checkDetectorQuery(detector, "displays");
@@ -166,6 +182,7 @@ void testHardwareDetector() {
 
     const auto keyboards = detector.detectKeyboards();
     checkDetectorQuery(detector, "keyboards");
+    checkStableInputInventory(keyboards, hydra::DeviceType::Keyboard, "keyboard");
     std::cout << "[Test] Keyboards detected: " << keyboards.size() << std::endl;
     for (std::size_t i = 0; i < keyboards.size(); ++i) {
         std::wcout << L"  KBD [" << i << L"]: handle=0x" << std::hex << keyboards[i].nativeHandle
@@ -176,6 +193,7 @@ void testHardwareDetector() {
 
     const auto mice = detector.detectMice();
     checkDetectorQuery(detector, "mice/touchpads");
+    checkStableInputInventory(mice, hydra::DeviceType::Mouse, "mouse/touchpad");
     std::cout << "[Test] Mice/touchpads detected: " << mice.size() << std::endl;
     for (std::size_t i = 0; i < mice.size(); ++i) {
         std::wcout << L"  MOU [" << i << L"]: handle=0x" << std::hex << mice[i].nativeHandle
@@ -230,26 +248,18 @@ void testWorkspaceManager() {
 
     check(mgr.assignAudioOutput(seat1, L"Audio:Headset"), "audio output assignment succeeds");
     check(mgr.assignAudioInput(seat1, L"Audio:Mic"), "audio input assignment succeeds");
-    check(mgr.assignTargetWindow(seat1, 0x12345678u),
-          "runtime target window can be associated before persistence");
 
     const auto* config = mgr.getSeat(seat1);
     check(config != nullptr, "created seat can be retrieved");
     check(config->displayIds.size() == 2, "seat retains multiple displays");
     check(config->primaryDisplayId && *config->primaryDisplayId == L"Display:Samsung",
           "explicit primary display is retained");
-    check(config->targetHwnd == 0x12345678u,
-          "runtime target window remains available before persistence");
 
     check(mgr.saveToFile(roundTripPath), "seat profile saves as JSON");
     hydra::WorkspaceManager loaded;
     check(loaded.loadFromFile(roundTripPath), "saved seat profile loads successfully");
-    auto expectedPersistedSeats = mgr.getAllSeats();
-    for (auto& seat : expectedPersistedSeats) seat.targetHwnd = 0u;
-    check(loaded.getAllSeats() == expectedPersistedSeats,
-          "save/load preserves stable seat configuration while discarding runtime HWND identity");
-    check(loaded.getSeat(seat1) != nullptr && loaded.getSeat(seat1)->targetHwnd == 0u,
-          "saved runtime target HWND is never restored from the profile");
+    check(loaded.getAllSeats() == mgr.getAllSeats(),
+          "save/load preserves stable seat configuration without runtime window state");
     check(loaded.managementSeatId() == seat2,
           "save/load preserves the explicit Management Seat");
     check(loaded.isDeviceShareable(hydra::SeatDeviceType::Keyboard, L"Keyboard:Shared"),
@@ -282,8 +292,9 @@ void testWorkspaceManager() {
     hydra::WorkspaceManager legacyLoaded;
     check(legacyLoaded.loadFromFile(legacyRuntimePath),
           "historical schema-v2 profile with a nonzero HWND still parses");
-    check(legacyLoaded.getSeat(1) != nullptr && legacyLoaded.getSeat(1)->targetHwnd == 0u,
-          "historical persisted HWND is discarded instead of becoming live ownership state");
+    check(legacyLoaded.getSeat(1) != nullptr &&
+              legacyLoaded.getSeat(1)->name == L"Legacy Seat",
+          "historical persisted HWND is ignored while stable Seat data is restored");
 
     const auto beforeMalformed = loaded.getAllSeats();
     {
@@ -398,10 +409,12 @@ void testInputIsolationSkeleton() {
     hydra::WorkspaceManager seats;
     const auto seat1 = seats.createSeat(L"Seat 1");
     const auto seat2 = seats.createSeat(L"Seat 2");
-    check(seats.assignTargetWindow(seat1, 0x1111), "seat 1 target window assignment succeeds");
-    check(seats.assignTargetWindow(seat2, 0x2222), "seat 2 target window assignment succeeds");
 
     hydra::SeatRoutingPolicy routing;
+    check(routing.bindTargetWindow(seat1, 0x1111),
+          "routing policy binds Seat 1 target window");
+    check(routing.bindTargetWindow(seat2, 0x2222),
+          "routing policy binds Seat 2 target window");
     check(routing.bindDevice(L"Keyboard:A", seat1), "routing policy binds keyboard A");
     check(routing.bindDevice(L"Keyboard:B", seat2), "routing policy binds keyboard B");
 

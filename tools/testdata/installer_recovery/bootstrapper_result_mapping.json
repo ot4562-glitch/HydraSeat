@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {"exitCode": 0, "result": "Success"},
+    {"exitCode": 1223, "result": "Cancelled"},
+    {"exitCode": 1602, "result": "Cancelled"},
+    {"exitCode": 1, "result": "Failed"},
+    {"exitCode": 5, "result": "Failed"}
+  ]
+}

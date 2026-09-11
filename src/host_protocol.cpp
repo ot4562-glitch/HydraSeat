@@ -839,7 +839,9 @@ std::vector<std::byte> encodeProfilePayload(const ProfilePayload& profile) {
         writer.u32(seat.seatId);
         writer.u8(seat.active ? 1u : 0u);
         writer.u8(0); writer.u8(0); writer.u8(0);
-        writer.u64(seat.targetHwnd);
+        // Protocol v3 keeps the former target-HWND slot for wire compatibility.
+        // Runtime window ownership is not part of SeatConfig anymore.
+        writer.u64(0);
         if (!writeWide(writer, seat.name) ||
             !writeWideVector(writer, seat.displayIds) ||
             !writeOptionalWide(writer, seat.primaryDisplayId) ||
@@ -869,10 +871,11 @@ std::optional<ProfilePayload> decodeProfilePayload(std::span<const std::byte> pa
     for (std::uint32_t index = 0; index < count; ++index) {
         SeatConfig seat;
         std::uint8_t active = 0, r1 = 0, r2 = 0, r3 = 0;
+        std::uint64_t legacyTargetHwnd = 0;
         if (!reader.u32(seat.seatId) || seat.seatId == 0 ||
             !reader.u8(active) || !reader.u8(r1) || !reader.u8(r2) || !reader.u8(r3) ||
             active > 1u || r1 != 0 || r2 != 0 || r3 != 0 ||
-            !reader.u64(seat.targetHwnd) || !readWide(reader, seat.name) ||
+            !reader.u64(legacyTargetHwnd) || !readWide(reader, seat.name) ||
             !readWideVector(reader, seat.displayIds) ||
             !readOptionalWide(reader, seat.primaryDisplayId) ||
             !readWideVector(reader, seat.keyboardIds) ||
@@ -882,6 +885,7 @@ std::optional<ProfilePayload> decodeProfilePayload(std::span<const std::byte> pa
             !readOptionalWide(reader, seat.audioInputEndpointId)) {
             return std::nullopt;
         }
+        (void)legacyTargetHwnd;
         seat.active = active != 0u;
         profile.seats.push_back(std::move(seat));
     }

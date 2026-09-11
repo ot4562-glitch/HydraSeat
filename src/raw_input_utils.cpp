@@ -7,7 +7,11 @@
 #include <algorithm>
 #include <cstddef>
 #include <cfgmgr32.h>
+#include <initguid.h>
+#include <devpkey.h>
+#include <iomanip>
 #include <setupapi.h>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -71,6 +75,80 @@ std::optional<std::wstring> configManagerInstanceId(DEVINST deviceInstance) {
         return std::nullopt;
     }
     return hardware::trimTrailingNulls(std::wstring(buffer.data()));
+}
+
+bool isNullGuid(const GUID& value) noexcept {
+    if (value.Data1 != 0 || value.Data2 != 0 || value.Data3 != 0) {
+        return false;
+    }
+    for (const auto byte : value.Data4) {
+        if (byte != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::wstring formatGuid(const GUID& value) {
+    std::wostringstream output;
+    output << L'{' << std::uppercase << std::hex << std::setfill(L'0')
+           << std::setw(8) << value.Data1 << L'-'
+           << std::setw(4) << value.Data2 << L'-'
+           << std::setw(4) << value.Data3 << L'-'
+           << std::setw(2) << static_cast<unsigned int>(value.Data4[0])
+           << std::setw(2) << static_cast<unsigned int>(value.Data4[1]) << L'-'
+           << std::setw(2) << static_cast<unsigned int>(value.Data4[2])
+           << std::setw(2) << static_cast<unsigned int>(value.Data4[3])
+           << std::setw(2) << static_cast<unsigned int>(value.Data4[4])
+           << std::setw(2) << static_cast<unsigned int>(value.Data4[5])
+           << std::setw(2) << static_cast<unsigned int>(value.Data4[6])
+           << std::setw(2) << static_cast<unsigned int>(value.Data4[7]) << L'}';
+    return output.str();
+}
+
+std::optional<std::wstring> configManagerContainerId(DEVINST deviceInstance) {
+    GUID value{};
+    DEVPROPTYPE propertyType = 0;
+    ULONG propertyBytes = sizeof(value);
+    if (CM_Get_DevNode_PropertyW(
+            deviceInstance, &DEVPKEY_Device_ContainerId, &propertyType,
+            reinterpret_cast<PBYTE>(&value), &propertyBytes, 0) != CR_SUCCESS ||
+        propertyType != DEVPROP_TYPE_GUID || propertyBytes != sizeof(value) ||
+        isNullGuid(value)) {
+        return std::nullopt;
+    }
+    return formatGuid(value);
+}
+
+bool isPhysicalUsbDeviceInstance(std::wstring_view instanceId) {
+    const auto normalized = hardware::canonicalizeInstanceId(instanceId);
+    return normalized.starts_with(L"USB\\") &&
+           hardware::containsToken(normalized, L"VID_") &&
+           hardware::containsToken(normalized, L"PID_") &&
+           !hardware::containsToken(normalized, L"&MI_");
+}
+
+struct PhysicalAncestorIdentity {
+    std::optional<std::wstring> instanceId;
+    std::optional<std::wstring> containerId;
+};
+
+PhysicalAncestorIdentity resolvePhysicalAncestor(DEVINST deviceInstance) {
+    constexpr int kMaxAncestorDepth = 12;
+    DEVINST current = deviceInstance;
+    for (int depth = 0; depth < kMaxAncestorDepth; ++depth) {
+        const auto instanceId = configManagerInstanceId(current);
+        if (instanceId && isPhysicalUsbDeviceInstance(*instanceId)) {
+            return {*instanceId, configManagerContainerId(current)};
+        }
+
+        DEVINST parent = 0;
+        if (CM_Get_Parent(&parent, current, 0) != CR_SUCCESS || parent == current) {
+            break;
+        }
+        current = parent;
+    }
+    return {};
 }
 
 } // namespace
@@ -212,24 +290,48 @@ DeviceInterfaceIdentity resolveDeviceInterfaceIdentity(std::wstring_view interfa
 
     result.deviceInstanceId = setupApiInstanceId(deviceInfoSet.get(), deviceInfoData);
 
+    const auto physicalAncestor = resolvePhysicalAncestor(deviceInfoData.DevInst);
+    result.physicalAncestorInstanceId = physicalAncestor.instanceId;
+    result.physicalContainerId = physicalAncestor.containerId;
+
     DEVINST parentInstance = 0;
     if (CM_Get_Parent(&parentInstance, deviceInfoData.DevInst, 0) == CR_SUCCESS) {
         result.parentDeviceInstanceId = configManagerInstanceId(parentInstance);
+        if (!result.physicalContainerId) {
+            result.physicalContainerId = configManagerContainerId(parentInstance);
+        }
+    }
+    if (!result.physicalContainerId) {
+        result.physicalContainerId = configManagerContainerId(deviceInfoData.DevInst);
     }
     return result;
 }
 
 std::wstring makeStableRawInputDeviceId(
-    std::wstring_view category, std::wstring_view interfacePath) {
-    const auto identity = resolveDeviceInterfaceIdentity(interfacePath);
+    std::wstring_view category, const DeviceInterfaceIdentity& identity) {
+    const std::wstring_view containerId = identity.physicalContainerId
+                                              ? *identity.physicalContainerId
+                                              : std::wstring_view{};
+    const std::wstring_view physicalAncestorId = identity.physicalAncestorInstanceId
+                                                     ? *identity.physicalAncestorInstanceId
+                                                     : std::wstring_view{};
     const std::wstring_view parentId = identity.parentDeviceInstanceId
                                            ? *identity.parentDeviceInstanceId
                                            : std::wstring_view{};
+    const std::wstring_view selectedAncestorId = !physicalAncestorId.empty()
+                                                     ? physicalAncestorId
+                                                     : parentId;
     const std::wstring_view deviceId = identity.deviceInstanceId
                                            ? *identity.deviceInstanceId
                                            : std::wstring_view{};
     return hardware::makeStableDeviceId(
-        category, parentId, deviceId, identity.interfacePath);
+        category, containerId, selectedAncestorId, deviceId, identity.interfacePath);
+}
+
+std::wstring makeStableRawInputDeviceId(
+    std::wstring_view category, std::wstring_view interfacePath) {
+    return makeStableRawInputDeviceId(
+        category, resolveDeviceInterfaceIdentity(interfacePath));
 }
 
 } // namespace hydra::win32

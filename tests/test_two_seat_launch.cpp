@@ -44,7 +44,6 @@ SeatLaunchInput makeInput(SeatId seatId, std::string gameId) {
     input.seat.controllerIds = {L"CONTROLLER-" + std::to_wstring(seatId)};
     input.seat.audioOutputEndpointId = L"AUDIO-" + std::to_wstring(seatId);
     input.seat.audioInputEndpointId = L"MIC-" + std::to_wstring(seatId);
-    input.seat.targetHwnd = 1000u + seatId;
     input.seat.active = true;
 
     input.target.gameId = std::move(gameId);
@@ -311,7 +310,7 @@ SeatGameBinding bindingFor(const SeatActivationPlan& seat, std::string player) {
     return {std::move(player), seat.target.gameId};
 }
 
-void testCompileDeterminismAndTransientStateRemoval() {
+void testCompileDeterminism() {
     auto inputs = validInputs();
     auto first = compileTwoSeatLaunchPlan(inputs);
     check(first.succeeded(), "valid exactly-two-Seat launch inputs compile");
@@ -319,18 +318,13 @@ void testCompileDeterminismAndTransientStateRemoval() {
     check(first.plan->seats.size() == 2 && first.plan->seats[0].seatId == 1 &&
               first.plan->seats[1].seatId == 2 && first.plan->fingerprint != 0,
           "compiled plan is canonical by Seat ID and fingerprinted");
-    check(first.plan->seats[0].seat.targetHwnd == 0 &&
-              first.plan->seats[1].seat.targetHwnd == 0,
-          "legacy transient HWND is stripped from the immutable launch plan");
 
     std::reverse(inputs.begin(), inputs.end());
-    inputs[0].seat.targetHwnd = 999999u;
-    inputs[1].seat.targetHwnd = 888888u;
     auto second = compileTwoSeatLaunchPlan(inputs);
     check(second.succeeded() && second.plan &&
               second.plan->fingerprint == first.plan->fingerprint &&
               second.plan->seats == first.plan->seats,
-          "input order and stale HWND do not change the canonical immutable plan");
+          "input order does not change the canonical immutable plan");
 
     auto changed = validInputs();
     changed[0].target.capabilities.audio = false;
@@ -684,7 +678,7 @@ void testOneSeatStartFailureDoesNotRollbackHealthySeat() {
 } // namespace
 
 int main() {
-    testCompileDeterminismAndTransientStateRemoval();
+    testCompileDeterminism();
     testCompilePreflightFailsBeforeMutation();
     testEveryActivationFailureRollsBackInReverse();
     testRollbackFailureRetainsRecoveryOwnership();

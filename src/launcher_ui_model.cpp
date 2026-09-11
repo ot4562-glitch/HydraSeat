@@ -448,12 +448,13 @@ UiDiagnostic LauncherUiModel::selectBoth(std::string gameId,
 }
 
 UiDiagnostic LauncherUiModel::clearSeat(SeatId seatId) {
-    const auto before = selection_.bindings.size();
+    const auto* seat = findPtr(seats_.seats, [&](const auto& value) {
+        return value.seatId == seatId;
+    });
+    if (seat == nullptr) return fail(UiResult::MissingSeat, "Seat was not found");
+
     std::erase_if(selection_.bindings,
                   [&](const auto& binding) { return binding.seatId == seatId; });
-    if (selection_.bindings.size() == before) {
-        return fail(UiResult::MissingSeat, "Seat has no current game selection");
-    }
     auto ignored = normalizeSelection(selection_);
     (void)ignored;
     return {};

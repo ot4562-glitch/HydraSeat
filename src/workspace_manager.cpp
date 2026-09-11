@@ -467,12 +467,6 @@ bool WorkspaceManager::assignController(SeatId id, const std::wstring& value, bo
 bool WorkspaceManager::unassignController(SeatId id, const std::wstring& value) {
     return unassignFromList(id, SeatDeviceType::Controller, value, &SeatConfig::controllerIds);
 }
-bool WorkspaceManager::assignController(SeatId id, std::uint32_t index, bool shareable) {
-    return assignController(id, L"xinput:" + std::to_wstring(index), shareable);
-}
-bool WorkspaceManager::unassignController(SeatId id, std::uint32_t index) {
-    return unassignController(id, L"xinput:" + std::to_wstring(index));
-}
 
 bool WorkspaceManager::assignAudioOutput(SeatId id, const std::wstring& endpoint, bool shareable) {
     if (!canAssign(id, SeatDeviceType::AudioOutput, endpoint, shareable)) return false;
@@ -501,12 +495,6 @@ bool WorkspaceManager::unassignAudioInput(SeatId id) {
     return true;
 }
 
-bool WorkspaceManager::assignTargetWindow(SeatId id, std::uint64_t hwnd) {
-    auto it = m_seats.find(id);
-    if (it == m_seats.end()) return false;
-    it->second.targetHwnd = hwnd;
-    return true;
-}
 bool WorkspaceManager::setActive(SeatId id, bool active) {
     auto it = m_seats.find(id);
     if (it == m_seats.end()) return false;
@@ -538,13 +526,6 @@ std::optional<SeatId> WorkspaceManager::findControllerOwner(const std::wstring& 
 std::optional<SeatId> WorkspaceManager::findAudioOutputOwner(const std::wstring& id) const { return firstOwner(*this, SeatDeviceType::AudioOutput, id); }
 std::optional<SeatId> WorkspaceManager::findAudioInputOwner(const std::wstring& id) const { return firstOwner(*this, SeatDeviceType::AudioInput, id); }
 
-SeatId WorkspaceManager::findWorkspaceByKeyboardPath(const std::wstring& path) const {
-    return findKeyboardOwner(path).value_or(0);
-}
-SeatId WorkspaceManager::findWorkspaceByMousePath(const std::wstring& path) const {
-    return findMouseOwner(path).value_or(0);
-}
-
 void WorkspaceManager::removeUnusedShareableResources() {
     for (auto it = m_shareableResources.begin(); it != m_shareableResources.end();) {
         bool used = false;
@@ -560,7 +541,7 @@ void WorkspaceManager::removeUnusedShareableResources() {
     }
 }
 
-bool WorkspaceManager::saveToFile(const std::string& filePath) const {
+bool WorkspaceManager::saveToFile(const std::filesystem::path& filePath) const {
     m_lastError.clear();
     try {
         std::ostringstream out;
@@ -611,18 +592,18 @@ bool WorkspaceManager::saveToFile(const std::string& filePath) const {
         }
 
         const auto bytes = out.str();
-        return writeFileAtomically(std::filesystem::path(filePath), bytes, m_lastError);
+        return writeFileAtomically(filePath, bytes, m_lastError);
     } catch (const std::exception& e) {
         m_lastError = e.what();
         return false;
     }
 }
 
-bool WorkspaceManager::loadFromFile(const std::string& filePath) {
+bool WorkspaceManager::loadFromFile(const std::filesystem::path& filePath) {
     m_lastError.clear();
     try {
         std::string profileBytes;
-        if (!readBoundedFile(std::filesystem::path(filePath), profileBytes, m_lastError)) {
+        if (!readBoundedFile(filePath, profileBytes, m_lastError)) {
             return false;
         }
         const auto root = objectOf(parseJson(profileBytes));
@@ -664,10 +645,9 @@ bool WorkspaceManager::loadFromFile(const std::string& filePath) {
             seat.name = fromUtf8(stringOf(required(o, "name")));
             if (seat.name.empty()) throw std::runtime_error("seat name must not be empty");
             seat.active = boolOf(required(o, "active"));
-            // Parse the legacy field to keep schema-v2 compatibility, but never
-            // restore a persisted HWND into live runtime ownership state.
+            // Keep accepting the legacy schema-v2 field, but runtime window
+            // ownership no longer belongs to SeatConfig.
             (void)uintOf(required(o, "target_hwnd"));
-            seat.targetHwnd = 0u;
             seat.displayIds = readStringArray(required(o, "displays"));
             if (const auto& p = required(o, "primary_display"); !std::holds_alternative<std::nullptr_t>(p.value))
                 seat.primaryDisplayId = fromUtf8(stringOf(p));
@@ -691,7 +671,6 @@ bool WorkspaceManager::loadFromFile(const std::string& filePath) {
             dest.seatId = id;
             dest.name = seat.name;
             dest.active = seat.active;
-            dest.targetHwnd = seat.targetHwnd;
             for (const auto& d : seat.displayIds)
                 if (!temp.assignDisplay(id, d, seat.primaryDisplayId && normalizeId(*seat.primaryDisplayId) == normalizeId(d)))
                     throw std::runtime_error("display is exclusively owned by another seat");

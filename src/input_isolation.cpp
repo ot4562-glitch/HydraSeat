@@ -493,17 +493,6 @@ IsolationPlan IsolationPlanner::plan(
     }
 
     for (const auto& step : result.selectedBackends) {
-        if (step.backendId == "hydra.legacy-message-router") {
-            result.warnings.push_back(makeDiagnostic(
-                profile,
-                IsolationDiagnosticCode::LegacyRoutingNotIsolation,
-                IsolationDiagnosticSeverity::Warning,
-                step.backendId,
-                step.assignedCapabilities,
-                "Legacy target-window messages do not virtualize Raw Input, polling APIs, focus, cursor state or the normal Windows input path.",
-                "Use this backend only for controlled test applications or simple profiles."));
-        }
-
         if (step.risk != BackendRisk::Low ||
             step.requiresProcessInjection ||
             step.usesKernelDriver ||
@@ -566,19 +555,6 @@ BackendDescriptor rawInputHostBackend() {
         BackendAvailability::Available,
         BackendRisk::Low,
         100);
-    result.reversible = true;
-    result.sessionScoped = true;
-    return result;
-}
-
-BackendDescriptor legacyMessageRouterBackend() {
-    auto result = makeDescriptor(
-        "hydra.legacy-message-router",
-        L"HydraSeat legacy message router",
-        Capability::TargetWindowMessageRouting,
-        BackendAvailability::Available,
-        BackendRisk::Low,
-        60);
     result.reversible = true;
     result.sessionScoped = true;
     return result;
@@ -728,7 +704,6 @@ std::vector<BackendDescriptor> builtInIsolationBackends(
     const BackendEnvironment& environment) {
     return {
         rawInputHostBackend(),
-        legacyMessageRouterBackend(),
         protoInputBackend(environment.protoInputAvailable),
         hidHideSessionBackend(environment.hidHideAvailability),
         directInputAdapterBackend(
@@ -748,12 +723,6 @@ std::vector<GameCompatibilityProfile> compatibilityProfileTemplates() {
     observation.injectionPolicy = InjectionPolicy::Forbidden;
     observation.driverPolicy = DriverPolicy::Forbidden;
     observation.recoveryPolicy = RecoveryPolicy::NotApplicable;
-
-    GameCompatibilityProfile legacy = observation;
-    legacy.id = "legacy-message-test";
-    legacy.name = L"Legacy message test";
-    legacy.requiredCapabilities |=
-        Capability::TargetWindowMessageRouting;
 
     GameCompatibilityProfile raw;
     raw.id = "raw-input-game";
@@ -853,7 +822,6 @@ std::vector<GameCompatibilityProfile> compatibilityProfileTemplates() {
 
     return {
         observation,
-        legacy,
         raw,
         polled,
         focus,
@@ -867,7 +835,6 @@ std::vector<GameCompatibilityProfile> compatibilityProfileTemplates() {
 std::vector<std::string_view> isolationProfileTemplateNames() {
     return {
         "observation-harness",
-        "legacy-message-test",
         "raw-input-game",
         "polled-keyboard-mouse-game",
         "focus-cursor-game",
@@ -916,7 +883,6 @@ std::string_view diagnosticCodeName(
     case IsolationDiagnosticCode::PersistentStateForbidden: return "PersistentStateForbidden";
     case IsolationDiagnosticCode::GlobalSuppressionForbidden: return "GlobalSuppressionForbidden";
     case IsolationDiagnosticCode::RecoveryGuardMissing: return "RecoveryGuardMissing";
-    case IsolationDiagnosticCode::LegacyRoutingNotIsolation: return "LegacyRoutingNotIsolation";
     case IsolationDiagnosticCode::ElevatedRiskBackend: return "ElevatedRiskBackend";
     case IsolationDiagnosticCode::ExperimentalOverride: return "ExperimentalOverride";
     case IsolationDiagnosticCode::HandshakeFailed: return "HandshakeFailed";
@@ -973,6 +939,17 @@ bool SeatRoutingPolicy::unbindDevice(std::wstring_view deviceId) {
     return m_deviceOwners.erase(normalize(deviceId)) != 0;
 }
 
+bool SeatRoutingPolicy::bindTargetWindow(SeatId seatId,
+                                         std::uint64_t targetHwnd) {
+    if (seatId == 0 || targetHwnd == 0) return false;
+    m_targetWindows[seatId] = targetHwnd;
+    return true;
+}
+
+void SeatRoutingPolicy::unbindTargetWindow(SeatId seatId) noexcept {
+    m_targetWindows.erase(seatId);
+}
+
 void SeatRoutingPolicy::clearSeat(SeatId seatId) {
     for (auto it = m_deviceOwners.begin();
          it != m_deviceOwners.end();) {
@@ -982,6 +959,7 @@ void SeatRoutingPolicy::clearSeat(SeatId seatId) {
             ++it;
         }
     }
+    m_targetWindows.erase(seatId);
 }
 
 std::optional<SeatId> SeatRoutingPolicy::ownerOf(
@@ -994,6 +972,11 @@ std::optional<SeatId> SeatRoutingPolicy::ownerOf(
         return std::nullopt;
     }
     return it->second;
+}
+
+std::uint64_t SeatRoutingPolicy::targetWindow(SeatId seatId) const noexcept {
+    const auto it = m_targetWindows.find(seatId);
+    return it == m_targetWindows.end() ? 0u : it->second;
 }
 
 InputRouteDecision SeatRoutingPolicy::route(
@@ -1012,7 +995,7 @@ InputRouteDecision SeatRoutingPolicy::route(
     }
 
     decision.seatId = seat->seatId;
-    decision.targetHwnd = seat->targetHwnd;
+    decision.targetHwnd = targetWindow(seat->seatId);
     decision.consumePhysicalInput = isolationRequested;
     return decision;
 }

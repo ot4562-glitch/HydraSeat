@@ -16,6 +16,7 @@ EXE_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}\.exe$")
 SCRIPT_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}\.ps1$")
 ALLOWED_ARCHITECTURES = {"x64"}
 EXPECTED_TARGETS = {
+    "HydraSeatSetup": "HydraSeatSetup.exe",
     "HydraSeat": "HydraSeat.exe",
     "hydra_host": "hydra_host.exe",
     "hydra_seat_ui": "hydra_seat_ui.exe",

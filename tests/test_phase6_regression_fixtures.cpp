@@ -129,6 +129,7 @@ GameRuntimeRequirement requirement(const profile::GameRecord& game,
     GameRuntimeRequirement value;
     value.gameId = game.gameId;
     value.revision = 9u;
+    value.validatedSeatCount = 1u;
     value.requirements.display = true;
     value.requirements.keyboard = true;
     value.requirements.mouse = true;

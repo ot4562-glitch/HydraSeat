@@ -56,6 +56,26 @@ bool uniqueSeatShape(const runtime::HostRuntimeSnapshot& snapshot) {
 
 } // namespace
 
+SeatLauncherPresentation seatLauncherPresentation(
+    const SeatLauncherState& state) noexcept {
+    SeatLauncherPresentation presentation;
+    presentation.compact = state.phase == SeatLauncherPhase::Playing &&
+                           state.nonIntrusiveWhilePlaying;
+    presentation.showEndPlaying = state.canEndPlaying;
+    presentation.showReconnect = state.canReconnect &&
+                                 (state.phase == SeatLauncherPhase::Disconnected ||
+                                  state.phase == SeatLauncherPhase::Warning ||
+                                  state.phase == SeatLauncherPhase::Recovery);
+    presentation.showNotification =
+        state.phase == SeatLauncherPhase::Disconnected ||
+        state.phase == SeatLauncherPhase::Warning ||
+        state.phase == SeatLauncherPhase::Recovery;
+    presentation.showPlayer = state.connected && !presentation.compact &&
+                              state.phase != SeatLauncherPhase::Disconnected;
+    presentation.showGame = presentation.showPlayer;
+    return presentation;
+}
+
 SeatLauncherModel::SeatLauncherModel(SeatId seatId) : seatId_(seatId) {
     state_.seatId = seatId;
     state_.status = seatId == 0 ? "Invalid Seat identity" : "Waiting for HydraSeat host";

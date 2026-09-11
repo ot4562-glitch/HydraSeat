@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "packageRootEntries": [
+    "x64",
+    "signing-provenance.json",
+    "signing-provenance.json.p7s"
+  ],
+  "packageFiles": [
+    "HydraSeatSetup.exe",
+    "HydraSeat.exe",
+    "hydra_host.exe",
+    "hydra_seat_ui.exe",
+    "hydra_watchdog.exe",
+    "hydra_reset.exe",
+    "hydraseat_profilectl.exe",
+    "hydraseat_community_validate.exe",
+    "install_hydraseat.ps1"
+  ],
+  "installedOwnedFiles": [
+    "HydraSeat.exe",
+    "hydra_host.exe",
+    "hydra_seat_ui.exe",
+    "hydra_watchdog.exe",
+    "hydra_reset.exe",
+    "hydraseat_profilectl.exe",
+    "hydraseat_community_validate.exe",
+    "install_hydraseat.ps1"
+  ]
+}
