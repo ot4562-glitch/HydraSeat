@@ -32,9 +32,6 @@ struct SeatConfig {
     bool operator==(const SeatConfig&) const = default;
 };
 
-// Keep the public Phase 1 type name while callers migrate to Seat terminology.
-using WorkspaceConfig = SeatConfig;
-
 class WorkspaceManager {
 public:
     SeatId createSeat(const std::wstring& name = {});
@@ -54,11 +51,6 @@ public:
     bool assignController(SeatId seatId, const std::wstring& controllerId,
                           bool shareable = false);
     bool unassignController(SeatId seatId, const std::wstring& controllerId);
-
-    // Compatibility overloads for existing XInput-index callers.
-    bool assignController(SeatId seatId, std::uint32_t xinputIndex,
-                          bool shareable = false);
-    bool unassignController(SeatId seatId, std::uint32_t xinputIndex);
 
     bool assignAudioOutput(SeatId seatId, const std::wstring& endpointId,
                            bool shareable = false);
@@ -95,14 +87,6 @@ public:
     bool loadFromFile(
         const std::filesystem::path& filePath = std::filesystem::path{"workspace_config.json"});
     const std::string& lastError() const noexcept { return m_lastError; }
-
-    // Compatibility wrappers for existing WorkspaceManager callers.
-    SeatId createWorkspace(const std::wstring& name = {}) { return createSeat(name); }
-    bool removeWorkspace(SeatId id) { return removeSeat(id); }
-    const WorkspaceConfig* getWorkspace(SeatId id) const { return getSeat(id); }
-    std::vector<WorkspaceConfig> getAllWorkspaces() const { return getAllSeats(); }
-    SeatId findWorkspaceByKeyboardPath(const std::wstring& path) const;
-    SeatId findWorkspaceByMousePath(const std::wstring& path) const;
 
 private:
     static std::wstring normalizeId(const std::wstring& value);

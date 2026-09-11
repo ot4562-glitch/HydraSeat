@@ -467,12 +467,6 @@ bool WorkspaceManager::assignController(SeatId id, const std::wstring& value, bo
 bool WorkspaceManager::unassignController(SeatId id, const std::wstring& value) {
     return unassignFromList(id, SeatDeviceType::Controller, value, &SeatConfig::controllerIds);
 }
-bool WorkspaceManager::assignController(SeatId id, std::uint32_t index, bool shareable) {
-    return assignController(id, L"xinput:" + std::to_wstring(index), shareable);
-}
-bool WorkspaceManager::unassignController(SeatId id, std::uint32_t index) {
-    return unassignController(id, L"xinput:" + std::to_wstring(index));
-}
 
 bool WorkspaceManager::assignAudioOutput(SeatId id, const std::wstring& endpoint, bool shareable) {
     if (!canAssign(id, SeatDeviceType::AudioOutput, endpoint, shareable)) return false;
@@ -537,13 +531,6 @@ std::optional<SeatId> WorkspaceManager::findMouseOwner(const std::wstring& id) c
 std::optional<SeatId> WorkspaceManager::findControllerOwner(const std::wstring& id) const { return firstOwner(*this, SeatDeviceType::Controller, id); }
 std::optional<SeatId> WorkspaceManager::findAudioOutputOwner(const std::wstring& id) const { return firstOwner(*this, SeatDeviceType::AudioOutput, id); }
 std::optional<SeatId> WorkspaceManager::findAudioInputOwner(const std::wstring& id) const { return firstOwner(*this, SeatDeviceType::AudioInput, id); }
-
-SeatId WorkspaceManager::findWorkspaceByKeyboardPath(const std::wstring& path) const {
-    return findKeyboardOwner(path).value_or(0);
-}
-SeatId WorkspaceManager::findWorkspaceByMousePath(const std::wstring& path) const {
-    return findMouseOwner(path).value_or(0);
-}
 
 void WorkspaceManager::removeUnusedShareableResources() {
     for (auto it = m_shareableResources.begin(); it != m_shareableResources.end();) {
