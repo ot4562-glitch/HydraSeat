@@ -1180,15 +1180,6 @@ public:
         return true;
     }
 
-    ProductionActivationContextHandle activationContext(
-        const launch::SeatActivationPlan& plan,
-        std::string& error) override {
-        const auto context = contextFor(plan, error);
-        if (!context || !context->activationAuthority) return {};
-        error.clear();
-        return context->activationAuthority;
-    }
-
     std::unique_ptr<launch::ISeatActivationResource> create(
         launch::ResourceKind kind, const launch::SeatActivationPlan& plan,
         std::string& error) override {
@@ -1385,7 +1376,7 @@ makeProductionSeatActivationResourceFactory(ProductionLaunchServices services) {
 }
 
 HostProviderPlanRegistry::HostProviderPlanRegistry(
-    std::shared_ptr<launch::ISeatActivationResourceFactory> resources,
+    std::shared_ptr<IProductionSeatActivationResourceFactory> resources,
     std::shared_ptr<requirement::ITrustedRequirementSource> trustedRequirements,
     std::shared_ptr<materialization::ITrustedMaterializationDecisionSource>
         trustedMaterializations,
@@ -1852,27 +1843,24 @@ HostProviderPlanRegistry::createForBinding(
             std::move(materializationPlan), std::move(compatibilityIdentity));
     }
 
-    if (auto* factory =
-            dynamic_cast<IProductionSeatActivationResourceFactory*>(resources_.get())) {
-        ProductionActivationEpoch activationEpoch;
-        activationEpoch.seatId = found->entry.seatId;
-        activationEpoch.sessionId = found->entry.sessionId;
-        activationEpoch.sessionGeneration = found->entry.sessionGeneration;
-        activationEpoch.seatGameGeneration = found->entry.seatGameGeneration;
-        activationEpoch.activationFingerprint = activation.fingerprint;
+    ProductionActivationEpoch activationEpoch;
+    activationEpoch.seatId = found->entry.seatId;
+    activationEpoch.sessionId = found->entry.sessionId;
+    activationEpoch.sessionGeneration = found->entry.sessionGeneration;
+    activationEpoch.seatGameGeneration = found->entry.seatGameGeneration;
+    activationEpoch.activationFingerprint = activation.fingerprint;
 
-        std::string contextError;
-        if (!factory->bindActivationEpoch(activation, activationEpoch, contextError)) {
-            error = "authoritative host activation epoch could not be bound to production resources";
-            if (!contextError.empty()) error += ": " + contextError;
-            return {};
-        }
-        if (!factory->bindTrustedHandoffExecutables(
-                activation, authority->executableCandidates, contextError)) {
-            error = "trusted process evidence could not be bound to activation";
-            if (!contextError.empty()) error += ": " + contextError;
-            return {};
-        }
+    std::string contextError;
+    if (!resources_->bindActivationEpoch(activation, activationEpoch, contextError)) {
+        error = "authoritative host activation epoch could not be bound to production resources";
+        if (!contextError.empty()) error += ": " + contextError;
+        return {};
+    }
+    if (!resources_->bindTrustedHandoffExecutables(
+            activation, authority->executableCandidates, contextError)) {
+        error = "trusted process evidence could not be bound to activation";
+        if (!contextError.empty()) error += ": " + contextError;
+        return {};
     }
     return std::make_unique<launch::PlannedSeatGameInstance>(
         std::move(activation), resources_, std::move(compatibilityHook));

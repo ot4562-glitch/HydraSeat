@@ -234,10 +234,9 @@ struct ProductionLaunchServices {
     std::shared_ptr<audio::RouteBackend> audioRouteBackend;
 };
 
-// Narrow production composition seam shared by the Host and guided validation.
-// The mutable activation authority remains private to the implementation; callers
-// can bind only an immutable epoch/executable allowlist and receive a read-only
-// context snapshot for the exact Seat plan.
+// Production resource factories consume the exact host-owned activation epoch
+// before creating Seat resources. Keeping this contract explicit avoids runtime
+// downcasts from the generic launch factory interface.
 class IProductionSeatActivationResourceFactory
     : public launch::ISeatActivationResourceFactory {
 public:
@@ -250,9 +249,6 @@ public:
     virtual bool bindTrustedHandoffExecutables(
         const launch::SeatActivationPlan& plan,
         std::vector<std::wstring> executablePaths,
-        std::string& error) = 0;
-    virtual ProductionActivationContextHandle activationContext(
-        const launch::SeatActivationPlan& plan,
         std::string& error) = 0;
 };
 
@@ -267,7 +263,7 @@ makeProductionSeatActivationResourceFactory(
 class HostProviderPlanRegistry final : public IHostLaunchPlanRegistry {
 public:
     explicit HostProviderPlanRegistry(
-        std::shared_ptr<launch::ISeatActivationResourceFactory> resources,
+        std::shared_ptr<IProductionSeatActivationResourceFactory> resources,
         std::shared_ptr<requirement::ITrustedRequirementSource> trustedRequirements = {},
         std::shared_ptr<materialization::ITrustedMaterializationDecisionSource>
             trustedMaterializations = {},
@@ -312,7 +308,7 @@ private:
     std::uint64_t sessionGeneration_{0};
     std::vector<SeatConfig> configuredSeats_;
     std::vector<StoredPlan> plans_;
-    std::shared_ptr<launch::ISeatActivationResourceFactory> resources_;
+    std::shared_ptr<IProductionSeatActivationResourceFactory> resources_;
     std::shared_ptr<requirement::ITrustedRequirementSource> trustedRequirements_;
     std::shared_ptr<materialization::ITrustedMaterializationDecisionSource>
         trustedMaterializations_;

@@ -367,7 +367,7 @@ void testProviderRegistryRequiresFreshTrustedRequirements() {
     const auto profileFingerprint = hydra::runtime::runtimeProfileFingerprint(seats, 1u);
 
     hydra::production::HostProviderPlanRegistry withoutSource(
-        std::shared_ptr<hydra::launch::ISeatActivationResourceFactory>{});
+        std::shared_ptr<hydra::production::IProductionSeatActivationResourceFactory>{});
     withoutSource.resetContext(profileFingerprint, sessionId, 7u, seats);
     const auto deniedWithoutSource = withoutSource.install(
         providerRegistryRequest(withoutSource, seats, sessionId, plan));
@@ -378,7 +378,7 @@ void testProviderRegistryRequiresFreshTrustedRequirements() {
     auto source = std::make_shared<FakeTrustedRequirementSource>();
     source->snapshot = trustedRuntimeRequirements();
     hydra::production::HostProviderPlanRegistry registry(
-        std::shared_ptr<hydra::launch::ISeatActivationResourceFactory>{}, source);
+        std::shared_ptr<hydra::production::IProductionSeatActivationResourceFactory>{}, source);
     registry.resetContext(profileFingerprint, sessionId, 7u, seats);
     const auto installed = registry.install(providerRegistryRequest(registry, seats, sessionId, plan));
     check(installed.succeeded() && installed.registry.entries.size() == 1u &&
@@ -396,7 +396,7 @@ void testProviderRegistryRequiresFreshTrustedRequirements() {
     auto staleProviderSource = std::make_shared<FakeTrustedRequirementSource>();
     staleProviderSource->snapshot = trustedRuntimeRequirements();
     hydra::production::HostProviderPlanRegistry staleProviderRegistry(
-        std::shared_ptr<hydra::launch::ISeatActivationResourceFactory>{}, staleProviderSource);
+        std::shared_ptr<hydra::production::IProductionSeatActivationResourceFactory>{}, staleProviderSource);
     staleProviderRegistry.resetContext(profileFingerprint, sessionId, 7u, seats);
     auto staleProviderPlan = plan;
     ++staleProviderPlan.seats.front().launchRequest.metadataRevision;
@@ -410,7 +410,7 @@ void testProviderRegistryRequiresFreshTrustedRequirements() {
     auto wrongExecutableSource = std::make_shared<FakeTrustedRequirementSource>();
     wrongExecutableSource->snapshot = trustedRuntimeRequirements();
     hydra::production::HostProviderPlanRegistry wrongExecutableRegistry(
-        std::shared_ptr<hydra::launch::ISeatActivationResourceFactory>{}, wrongExecutableSource);
+        std::shared_ptr<hydra::production::IProductionSeatActivationResourceFactory>{}, wrongExecutableSource);
     wrongExecutableRegistry.resetContext(profileFingerprint, sessionId, 7u, seats);
     auto wrongExecutablePlan = plan;
     wrongExecutablePlan.seats.front().launchRequest.target = L"C:\\Games\\Other\\other.exe";
@@ -424,7 +424,7 @@ void testProviderRegistryRequiresFreshTrustedRequirements() {
     auto tamperedSource = std::make_shared<FakeTrustedRequirementSource>();
     tamperedSource->snapshot = trustedRuntimeRequirements();
     hydra::production::HostProviderPlanRegistry tamperedRegistry(
-        std::shared_ptr<hydra::launch::ISeatActivationResourceFactory>{}, tamperedSource);
+        std::shared_ptr<hydra::production::IProductionSeatActivationResourceFactory>{}, tamperedSource);
     tamperedRegistry.resetContext(profileFingerprint, sessionId, 7u, seats);
     auto tamperedPlan = plan;
     ++tamperedPlan.seats.front().requirementRevision;
@@ -438,7 +438,7 @@ void testProviderRegistryRequiresFreshTrustedRequirements() {
     auto wrongGameSource = std::make_shared<FakeTrustedRequirementSource>();
     wrongGameSource->snapshot = trustedRuntimeRequirements();
     hydra::production::HostProviderPlanRegistry wrongGameRegistry(
-        std::shared_ptr<hydra::launch::ISeatActivationResourceFactory>{}, wrongGameSource);
+        std::shared_ptr<hydra::production::IProductionSeatActivationResourceFactory>{}, wrongGameSource);
     wrongGameRegistry.resetContext(profileFingerprint, sessionId, 7u, seats);
     auto wrongGamePlan = plan;
     wrongGamePlan.seats.front().gameId = "game:b";
@@ -453,7 +453,7 @@ void testProviderRegistryRequiresFreshTrustedRequirements() {
     auto foreignProfileSource = std::make_shared<FakeTrustedRequirementSource>();
     foreignProfileSource->snapshot = trustedRuntimeRequirements();
     hydra::production::HostProviderPlanRegistry foreignProfileRegistry(
-        std::shared_ptr<hydra::launch::ISeatActivationResourceFactory>{}, foreignProfileSource);
+        std::shared_ptr<hydra::production::IProductionSeatActivationResourceFactory>{}, foreignProfileSource);
     foreignProfileRegistry.resetContext(profileFingerprint, sessionId, 7u, seats);
     auto foreignProfileRequest = providerRegistryRequest(
         foreignProfileRegistry, seats, sessionId, plan);
@@ -468,7 +468,7 @@ void testProviderRegistryRequiresFreshTrustedRequirements() {
     communitySource->snapshot.authorities.front().evidenceOrigin =
         hydra::compat::ResultOrigin::ImportedCommunity;
     hydra::production::HostProviderPlanRegistry communityRegistry(
-        std::shared_ptr<hydra::launch::ISeatActivationResourceFactory>{}, communitySource);
+        std::shared_ptr<hydra::production::IProductionSeatActivationResourceFactory>{}, communitySource);
     communityRegistry.resetContext(profileFingerprint, sessionId, 7u, seats);
     const auto communityResult = communityRegistry.install(
         providerRegistryRequest(communityRegistry, seats, sessionId, plan));
@@ -480,7 +480,7 @@ void testProviderRegistryRequiresFreshTrustedRequirements() {
     staleEvidenceSource->snapshot = trustedRuntimeRequirements();
     staleEvidenceSource->snapshot.authorities.front().evidenceTimestampBucket = "2026-01";
     hydra::production::HostProviderPlanRegistry staleEvidenceRegistry(
-        std::shared_ptr<hydra::launch::ISeatActivationResourceFactory>{}, staleEvidenceSource);
+        std::shared_ptr<hydra::production::IProductionSeatActivationResourceFactory>{}, staleEvidenceSource);
     staleEvidenceRegistry.resetContext(profileFingerprint, sessionId, 7u, seats);
     const auto staleEvidenceResult = staleEvidenceRegistry.install(
         providerRegistryRequest(staleEvidenceRegistry, seats, sessionId, plan));
@@ -494,7 +494,7 @@ void testRuntimeHostInstallDelegatesToTrustedRegistryAuthority() {
     auto source = std::make_shared<FakeTrustedRequirementSource>();
     source->snapshot = trustedRuntimeRequirements();
     auto registry = std::make_shared<hydra::production::HostProviderPlanRegistry>(
-        std::shared_ptr<hydra::launch::ISeatActivationResourceFactory>{}, source);
+        std::shared_ptr<hydra::production::IProductionSeatActivationResourceFactory>{}, source);
     RuntimeHost host({}, registry);
     check(host.loadProfile(seats, 1u, 700u).succeeded() &&
               host.plan(701u).succeeded() && host.prepare(702u).succeeded() &&
@@ -551,7 +551,7 @@ void testRuntimeHostInstallDelegatesToTrustedRegistryAuthority() {
     communitySource->snapshot.authorities.front().evidenceOrigin =
         hydra::compat::ResultOrigin::ImportedCommunity;
     auto communityRegistry = std::make_shared<hydra::production::HostProviderPlanRegistry>(
-        std::shared_ptr<hydra::launch::ISeatActivationResourceFactory>{}, communitySource);
+        std::shared_ptr<hydra::production::IProductionSeatActivationResourceFactory>{}, communitySource);
     RuntimeHost communityHost({}, communityRegistry);
     check(communityHost.loadProfile(seats, 1u, 710u).succeeded() &&
               communityHost.plan(711u).succeeded() && communityHost.prepare(712u).succeeded() &&
