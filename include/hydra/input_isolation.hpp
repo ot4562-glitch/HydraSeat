@@ -188,7 +188,6 @@ enum class IsolationDiagnosticCode {
     PersistentStateForbidden,
     GlobalSuppressionForbidden,
     RecoveryGuardMissing,
-    LegacyRoutingNotIsolation,
     ElevatedRiskBackend,
     ExperimentalOverride,
     HandshakeFailed,
@@ -307,7 +306,6 @@ private:
 };
 
 BackendDescriptor rawInputHostBackend();
-BackendDescriptor legacyMessageRouterBackend();
 BackendDescriptor protoInputBackend(bool available = false);
 BackendDescriptor hidHideSessionBackend(
     HidHideAvailability availability = HidHideAvailability::Unavailable);
