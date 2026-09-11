@@ -269,7 +269,7 @@ public:
             trustedMaterializations = {},
         std::filesystem::path materializationInstancesRoot = {});
     explicit HostProviderPlanRegistry(
-        ProductionLaunchServices services = {},
+        ProductionLaunchServices services,
         std::shared_ptr<requirement::ITrustedRequirementSource> trustedRequirements = {},
         std::shared_ptr<materialization::ITrustedMaterializationDecisionSource>
             trustedMaterializations = {},

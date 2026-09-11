@@ -15,16 +15,14 @@ enum class Surface : std::uint8_t {
 };
 
 enum class FocusAction : std::uint8_t {
-    GameList = 0,
-    AddExecutable,
-    PlayerName,
+    PlayerName = 0,
     AddPlayer,
-    PlayerRoster,
+    HardwareSetup,
     Seat1Player,
-    Seat1Game,
     Seat2Player,
-    Seat2Game,
-    TwoPlayerSetup,
+    GameList,
+    Refresh,
+    AddExecutable,
     Play,
     EndPlaying,
     Reconnect,
@@ -38,8 +36,6 @@ enum class AccessibilityIssue : std::uint8_t {
     NoInputModality,
     CriticalActionHidden,
     LocalizedActionTooLong,
-    ViewportOverflow,
-    HitTargetTooSmall,
 };
 
 struct LayoutRequest {
@@ -63,9 +59,8 @@ struct LayoutAssessment {
     std::vector<AccessibilityIssue> issues;
 };
 
-// Pure readiness check used by both Win32 surfaces. It does not claim that a
-// physical DPI/input/screen-reader matrix was exercised; it only guarantees that
-// the declared layout contract cannot hide required safety/recovery actions.
+// A small functional readiness contract. Presentation geometry belongs to the
+// native controls, not to a second HydraSeat layout or theme engine.
 LayoutAssessment assessLayout(const LayoutRequest& request);
 
 std::string_view focusActionName(FocusAction action) noexcept;

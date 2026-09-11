@@ -161,115 +161,57 @@ if(WIN32)
 endif()
 hydra_enable_strict_warnings(hydra_host_transport)
 
-# P4-PROC-01 Seat-owned process trees. Windows Job Objects provide exact
-# descendant containment and completion notifications; weaker capabilities are
-# explicit and never grant ownership over unrelated processes.
-add_library(hydra_process STATIC
+# Windows process/display/window responsibility. These sources share one reason
+# to change: how the Windows host identifies and controls owned local resources.
+# Keeping them as separate source files preserves readability; separate static
+# libraries only made the dependency graph mirror implementation steps.
+add_library(hydra_windows STATIC
     src/process_group.cpp
     src/process_launcher.cpp
+    src/window_tracker.cpp
+    src/display_topology.cpp
+    src/seat_display_layout.cpp
+    src/window_policy.cpp
+    src/window_placement.cpp
+    src/seat_runtime_policy.cpp
+    src/display_recovery.cpp
+    src/management_seat.cpp
     include/hydra/process_group.hpp
     include/hydra/process_launcher.hpp
+    include/hydra/window_identity.hpp
+    include/hydra/window_tracker.hpp
+    include/hydra/display_identity.hpp
+    include/hydra/display_topology.hpp
+    include/hydra/seat_display_layout.hpp
+    include/hydra/window_policy.hpp
+    include/hydra/window_placement.hpp
+    include/hydra/seat_runtime_policy.hpp
+    include/hydra/display_recovery.hpp
+    include/hydra/management_seat.hpp
 )
-target_link_libraries(hydra_process PUBLIC hydra_runtime Threads::Threads)
+target_link_libraries(hydra_windows PUBLIC hydra_runtime Threads::Threads)
 if(WIN32)
-    target_link_libraries(hydra_process PRIVATE User32.lib)
+    target_link_libraries(hydra_windows PRIVATE User32.lib Dxgi.lib)
 endif()
-hydra_enable_strict_warnings(hydra_process)
+hydra_enable_strict_warnings(hydra_windows)
 
-# P5-LAUNCH-01 immutable exactly-two-Seat launch plan and Seat-local activation
-# transaction. Production resource backends are injected behind a typed factory;
-# the coordinator owns ordering, verification, reverse rollback, and isolation.
+# Exactly-two-Seat launch transaction. This remains separate from hydra_windows:
+# it is runtime orchestration over injected resources, not an OS implementation.
 add_library(hydra_two_seat_launch STATIC
     src/two_seat_launch.cpp
     include/hydra/two_seat_launch.hpp
 )
-target_link_libraries(hydra_two_seat_launch PUBLIC hydra_process hydra_runtime)
+target_link_libraries(hydra_two_seat_launch PUBLIC hydra_windows hydra_runtime)
 hydra_enable_strict_warnings(hydra_two_seat_launch)
 
-# P4-WIN-01 process-identity-backed top-level window inventory. WinEvent
-# callbacks only enqueue bounded hints; ownership/classification work stays on a
-# dedicated message-pump worker and never adopts windows outside Seat groups.
-add_library(hydra_window_tracking STATIC
-    src/window_tracker.cpp
-    include/hydra/window_identity.hpp
-    include/hydra/window_tracker.hpp
-)
-target_link_libraries(hydra_window_tracking PUBLIC hydra_process Threads::Threads)
-if(WIN32)
-    target_link_libraries(hydra_window_tracking PRIVATE User32.lib)
-endif()
-hydra_enable_strict_warnings(hydra_window_tracking)
-
-# Display inventory and Seat-local layout are one component: topology provides
-# stable physical identity and layout projects that topology into Seat space.
-add_library(hydra_display STATIC
-    src/display_topology.cpp
-    src/seat_display_layout.cpp
-    include/hydra/display_identity.hpp
-    include/hydra/display_topology.hpp
-    include/hydra/seat_display_layout.hpp
-)
-target_link_libraries(hydra_display PUBLIC hydra_runtime)
-if(WIN32)
-    target_link_libraries(hydra_display PRIVATE User32.lib Dxgi.lib)
-endif()
-hydra_enable_strict_warnings(hydra_display)
-
-# Transitional names keep downstream targets stable while the build graph is
-# consolidated around product responsibilities rather than implementation phases.
-add_library(hydra_display_topology ALIAS hydra_display)
-add_library(hydra_seat_display_layout ALIAS hydra_display)
-
-# P4-WIN-02 typed placement planning and ownership-validated Win32 mutation.
-# The policy surface is portable; the engine applies only to currently owned
-# windows and captures rollback state before every mutation.
-add_library(hydra_window_placement STATIC
-    src/window_policy.cpp
-    src/window_placement.cpp
-    include/hydra/window_policy.hpp
-    include/hydra/window_placement.hpp
-)
-target_link_libraries(hydra_window_placement PUBLIC hydra_window_tracking hydra_seat_display_layout)
-if(WIN32)
-    target_link_libraries(hydra_window_placement PRIVATE User32.lib)
-endif()
-hydra_enable_strict_warnings(hydra_window_placement)
-
-# P4-POL-01 serialized desired-vs-observed Seat runtime policy coordinator.
-add_library(hydra_seat_runtime_policy STATIC
-    src/seat_runtime_policy.cpp
-    include/hydra/seat_runtime_policy.hpp
-)
-target_link_libraries(hydra_seat_runtime_policy PUBLIC hydra_window_placement)
-hydra_enable_strict_warnings(hydra_seat_runtime_policy)
-
-# P4-DIS-03 deterministic display hot-plug degradation and recovery planning.
-add_library(hydra_display_recovery STATIC
-    src/display_recovery.cpp
-    include/hydra/display_recovery.hpp
-)
-target_link_libraries(hydra_display_recovery PUBLIC hydra_seat_display_layout hydra_seat_runtime_policy)
-hydra_enable_strict_warnings(hydra_display_recovery)
-
 hydra_enable_strict_warnings(hydra_hardware)
-
-# P4-CTRL-01 Management Seat placement and global-control permission model.
-add_library(hydra_management_seat STATIC
-    src/management_seat.cpp
-    include/hydra/management_seat.hpp
-)
-target_link_libraries(hydra_management_seat PUBLIC hydra_seat_display_layout)
-if(WIN32)
-    target_link_libraries(hydra_management_seat PRIVATE User32.lib)
-endif()
-hydra_enable_strict_warnings(hydra_management_seat)
 
 # P4-CTRL-01 authoritative host/config-backed control-surface presentation model.
 add_library(hydra_control_surface STATIC
     src/control_surface_model.cpp
     include/hydra/control_surface_model.hpp
 )
-target_link_libraries(hydra_control_surface PUBLIC hydra_management_seat hydra_runtime)
+target_link_libraries(hydra_control_surface PUBLIC hydra_windows hydra_runtime)
 hydra_enable_strict_warnings(hydra_control_surface)
 
 # P4-CTRL-02 verified Stop/Reconfigure/Save+Start control-surface state model.
@@ -277,7 +219,7 @@ add_library(hydra_session_control STATIC
     src/session_control_transition.cpp
     include/hydra/session_control_transition.hpp
 )
-target_link_libraries(hydra_session_control PUBLIC hydra_management_seat hydra_host_transport)
+target_link_libraries(hydra_session_control PUBLIC hydra_windows hydra_host_transport)
 hydra_enable_strict_warnings(hydra_session_control)
 
 # P3-CTRL-01 bounded, process-local normalized XInput state. This component
@@ -383,107 +325,45 @@ add_library(hydra_profile_migration STATIC
 target_link_libraries(hydra_profile_migration PUBLIC hydra_profile_schema)
 hydra_enable_strict_warnings(hydra_profile_migration)
 
-# P6-CATALOG-01 provider-neutral, read-only candidate reconciliation into bounded
-# stable GameRecords plus catalog-only icon/architecture/staleness metadata.
-add_library(hydra_game_catalog STATIC
+# Launch/catalog component. Discovery, provider metadata, manual executables,
+# immutable launch plans and preflight are one product responsibility. Keeping
+# them in separate static libraries created build graph noise without isolation.
+add_library(hydra_launch STATIC
     src/game_catalog.cpp
-    include/hydra/game_catalog.hpp
-)
-target_link_libraries(hydra_game_catalog PUBLIC hydra_profile_schema)
-hydra_enable_strict_warnings(hydra_game_catalog)
-
-# P6-PROV-01 bounded lawful launcher-provider boundary. Provider-specific I/O
-# stays behind this contract; the core validates discovery, account references,
-# typed launch requests, revision freshness, and process evidence transactionally.
-add_library(hydra_provider_adapter STATIC
     src/provider_adapter.cpp
-    include/hydra/provider_adapter.hpp
-)
-target_link_libraries(hydra_provider_adapter PUBLIC hydra_game_catalog)
-hydra_enable_strict_warnings(hydra_provider_adapter)
-
-# P6-PROV-02 independently implemented read-only Steam metadata adapter.
-# It parses bounded local KeyValues metadata, creates normal steam://run plans,
-# keeps authentication in Steam, and never launches or mutates provider state.
-add_library(hydra_steam_provider STATIC
     src/steam_provider.cpp
-    include/hydra/steam_provider.hpp
-)
-target_link_libraries(hydra_steam_provider PUBLIC hydra_provider_adapter)
-if(WIN32)
-    target_link_libraries(hydra_steam_provider PRIVATE advapi32)
-endif()
-
-# P6-PROV-03D typed manual executable fallback. Native inspection is read-only;
-# launch output is an exact executable path plus argument vector/working folder.
-add_library(hydra_custom_executable_provider STATIC
     src/custom_executable_provider.cpp
-    include/hydra/custom_executable_provider.hpp
-)
-target_link_libraries(hydra_custom_executable_provider PUBLIC hydra_provider_adapter)
-hydra_enable_strict_warnings(hydra_custom_executable_provider)
-hydra_enable_strict_warnings(hydra_steam_provider)
-
-# P6-PLAN-01 pure immutable provider-aware plan compiler. It resolves bounded
-# Seat/Player/Game/setup/provider snapshots and performs exact hardware/capability
-# preflight without launching a process or mutating provider/system state.
-add_library(hydra_provider_launch_plan STATIC
     src/provider_launch_plan.cpp
-    include/hydra/provider_launch_plan.hpp
-)
-target_link_libraries(hydra_provider_launch_plan PUBLIC
-    hydra_provider_adapter hydra_profile_schema hydra_two_seat_launch)
-hydra_enable_strict_warnings(hydra_provider_launch_plan)
-
-# P6-PREFLIGHT-01 deterministic normal/expert requirement, risk, and typed
-# mutation preview. The preview surface cannot carry arbitrary mutation payloads.
-add_library(hydra_plan_preflight STATIC
     src/plan_preflight.cpp
-    include/hydra/plan_preflight.hpp
-)
-target_link_libraries(hydra_plan_preflight PUBLIC hydra_provider_launch_plan)
-hydra_enable_strict_warnings(hydra_plan_preflight)
-
-# P6-PROFILE-01 typed two-player setup generation/editor model. Automatic
-# generation is pure/read-only, while manual Save is transactional and keeps the
-# previous valid setup on validation failure.
-add_library(hydra_two_player_setup_editor STATIC
     src/two_player_setup_editor.cpp
+    include/hydra/game_catalog.hpp
+    include/hydra/provider_adapter.hpp
+    include/hydra/steam_provider.hpp
+    include/hydra/custom_executable_provider.hpp
+    include/hydra/provider_launch_plan.hpp
+    include/hydra/plan_preflight.hpp
     include/hydra/two_player_setup_editor.hpp
 )
-target_link_libraries(hydra_two_player_setup_editor PUBLIC hydra_profile_schema)
-hydra_enable_strict_warnings(hydra_two_player_setup_editor)
+target_link_libraries(hydra_launch PUBLIC hydra_profile_schema hydra_two_seat_launch)
+if(WIN32)
+    target_link_libraries(hydra_launch PRIVATE advapi32)
+endif()
+hydra_enable_strict_warnings(hydra_launch)
 
-# P7-I18N-01 stable UI-string catalog. Protocol/schema/diagnostic identifiers stay
-# canonical English while presentation strings have en-US/ko-KR/zh-CN entries.
-add_library(hydra_ui_localization STATIC
+# Thin presentation component. Localization/accessibility, launcher flow state and
+# durable UI-only selections change for the same reason and do not own runtime state.
+add_library(hydra_ui STATIC
     src/ui_localization.cpp
     src/ui_accessibility.cpp
-    src/launcher_layout.cpp
+    src/launcher_ui_model.cpp
+    src/launcher_user_state.cpp
     include/hydra/ui_localization.hpp
     include/hydra/ui_accessibility.hpp
-    include/hydra/launcher_layout.hpp
-)
-hydra_enable_strict_warnings(hydra_ui_localization)
-
-# P6-UI-01 Qt-independent product-flow model. UI state is exercised with fake
-# providers and immutable snapshots; the model performs no launch or mutation.
-add_library(hydra_launcher_ui_model STATIC
-    src/launcher_ui_model.cpp
     include/hydra/launcher_ui_model.hpp
-)
-target_link_libraries(hydra_launcher_ui_model PUBLIC
-    hydra_plan_preflight hydra_two_player_setup_editor hydra_game_catalog)
-hydra_enable_strict_warnings(hydra_launcher_ui_model)
-
-# V1 hands-on durable launcher user state. This owns only Player profile and
-# last-selection persistence semantics; the Win32 launcher consumes the API.
-add_library(hydra_launcher_user_state STATIC
-    src/launcher_user_state.cpp
     include/hydra/launcher_user_state.hpp
 )
-target_link_libraries(hydra_launcher_user_state PUBLIC hydra_profile_schema)
-hydra_enable_strict_warnings(hydra_launcher_user_state)
+target_link_libraries(hydra_ui PUBLIC hydra_launch hydra_profile_schema)
+hydra_enable_strict_warnings(hydra_ui)
 
 # P7-SHELL-01 pure per-Seat presentation/policy state and its capability-
 # restricted host adapter. Neither surface exposes whole-machine commands.
@@ -502,7 +382,7 @@ add_library(hydra_seat_launcher STATIC
     include/hydra/seat_navigation_model.hpp
 )
 target_link_libraries(hydra_seat_launcher PUBLIC
-    hydra_host_transport hydra_launcher_ui_model)
+    hydra_host_transport hydra_ui)
 hydra_enable_strict_warnings(hydra_seat_launcher)
 
 # P6-IMPORT-01 versioned portable two-player setup package with provenance,
@@ -511,7 +391,7 @@ add_library(hydra_setup_package STATIC
     src/setup_package.cpp
     include/hydra/setup_package.hpp
 )
-target_link_libraries(hydra_setup_package PUBLIC hydra_two_player_setup_editor)
+target_link_libraries(hydra_setup_package PUBLIC hydra_launch)
 hydra_enable_strict_warnings(hydra_setup_package)
 
 # P6-CLI-01 deterministic expert renderer plus redacted stable plan snapshots.
@@ -519,7 +399,7 @@ add_library(hydra_profile_cli STATIC
     src/profile_cli.cpp
     include/hydra/profile_cli.hpp
 )
-target_link_libraries(hydra_profile_cli PUBLIC hydra_profile_schema hydra_provider_launch_plan)
+target_link_libraries(hydra_profile_cli PUBLIC hydra_profile_schema hydra_launch)
 hydra_enable_strict_warnings(hydra_profile_cli)
 
 add_executable(hydraseat_profilectl src/profilectl_main.cpp)
@@ -546,15 +426,9 @@ add_library(hydra_game_runtime_requirement_resolver STATIC
     include/hydra/game_runtime_requirement_resolver.hpp
 )
 target_link_libraries(hydra_game_runtime_requirement_resolver PUBLIC
-    hydra_compatibility_result
-    hydra_game_catalog
-    hydra_provider_launch_plan
-)
+    hydra_compatibility_result hydra_launch)
 target_link_libraries(hydra_game_runtime_requirement_resolver PRIVATE
-    hydra_steam_provider
-    hydra_custom_executable_provider
-    hydra_community_submission
-)
+    hydra_community_submission)
 if(WIN32)
     target_link_libraries(hydra_game_runtime_requirement_resolver PRIVATE Bcrypt.lib)
 endif()
@@ -580,7 +454,7 @@ add_library(hydra_community_package STATIC
 )
 target_link_libraries(hydra_community_package PUBLIC
     hydra_artifact_trust hydra_compatibility_result hydra_setup_package
-    hydra_provider_launch_plan)
+    hydra_launch)
 hydra_enable_strict_warnings(hydra_community_package)
 
 # P8-DATA-01 pure optional compatibility/setup catalog cache lifecycle. Network/file
@@ -670,7 +544,7 @@ add_library(hydra_acceptance_probe STATIC
 target_link_libraries(hydra_acceptance_probe PUBLIC
     hydra_audio_inventory
     hydra_controller_runtime
-    hydra_display_topology
+    hydra_windows
 )
 if(WIN32)
     target_link_libraries(hydra_acceptance_probe PRIVATE
@@ -691,7 +565,7 @@ add_library(hydra_production_compatibility_activation STATIC
     include/hydra/production_compatibility_activation.hpp
 )
 target_link_libraries(hydra_production_compatibility_activation PUBLIC
-    hydra_provider_launch_plan
+    hydra_launch
     hydra_two_seat_launch
 )
 hydra_enable_strict_warnings(hydra_production_compatibility_activation)
@@ -706,8 +580,8 @@ add_library(hydra_production_launch_runtime STATIC
 )
 target_link_libraries(hydra_production_launch_runtime PUBLIC
     hydra_two_seat_launch
-    hydra_provider_launch_plan
-    hydra_window_placement
+    hydra_launch
+    hydra_windows
     hydra_controller_runtime
     hydra_audio_routing
 )
@@ -850,7 +724,7 @@ add_library(hydra_local_compatibility_runner STATIC
     include/hydra/local_compatibility_runner.hpp
 )
 target_link_libraries(hydra_local_compatibility_runner PUBLIC
-    hydra_process hydra_window_tracking hydra_session_metrics)
+    hydra_windows hydra_session_metrics)
 hydra_enable_strict_warnings(hydra_local_compatibility_runner)
 
 # P8-RESET-01 bounded runtime reset registration and verified emergency-reset
@@ -1056,8 +930,7 @@ endif()
 add_executable(HydraSeat WIN32 src/main.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(HydraSeat PRIVATE
     hydra_hardware hydra_input_router hydra_workspace hydra_host_transport hydra_control_surface hydra_session_control
-    hydra_launcher_ui_model hydra_launcher_user_state hydra_steam_provider hydra_custom_executable_provider
-    hydra_ui_localization hydra_community_submission
+    hydra_ui hydra_launch hydra_community_submission
     hydra_game_runtime_requirement_resolver hydra_local_compatibility_evidence
     hydra_runtime_requirement_authority hydra_local_compatibility_runner
     hydra_production_input_authority hydra_production_launch_installer)
@@ -1092,7 +965,7 @@ hydra_enable_strict_warnings(hydra_hostctl)
 # its authoritative display group resolves against a fresh topology snapshot.
 add_executable(hydra_seat_ui WIN32 src/seat_ui_main.cpp)
 target_link_libraries(hydra_seat_ui PRIVATE
-    hydra_seat_launcher hydra_seat_display_layout hydra_ui_localization)
+    hydra_seat_launcher hydra_windows hydra_ui)
 if(WIN32)
     target_link_libraries(hydra_seat_ui PRIVATE User32.lib Shell32.lib)
 endif()
@@ -1290,8 +1163,7 @@ endif()
 add_executable(hydra_tests tests/test_hydra.cpp ${HYDRA_SOURCES} ${HYDRA_HEADERS})
 target_link_libraries(hydra_tests PRIVATE
     hydra_hardware hydra_input_router hydra_workspace hydra_host_transport hydra_control_surface hydra_session_control
-    hydra_launcher_ui_model hydra_launcher_user_state hydra_steam_provider hydra_custom_executable_provider
-    hydra_ui_localization hydra_community_submission hydra_game_runtime_requirement_resolver
+    hydra_ui hydra_launch hydra_community_submission hydra_game_runtime_requirement_resolver
     hydra_local_compatibility_evidence hydra_local_compatibility_runner hydra_runtime_requirement_authority
     hydra_production_input_authority)
 if(WIN32)
@@ -1370,13 +1242,13 @@ add_test(NAME SeatNavigationModelTests COMMAND seat_navigation_model_tests)
 set_tests_properties(SeatNavigationModelTests PROPERTIES LABELS "P7-CURSOR-01")
 
 add_executable(ui_localization_tests tests/test_ui_localization.cpp)
-target_link_libraries(ui_localization_tests PRIVATE hydra_ui_localization)
+target_link_libraries(ui_localization_tests PRIVATE hydra_ui)
 hydra_enable_strict_warnings(ui_localization_tests)
 add_test(NAME UiLocalizationTests COMMAND ui_localization_tests)
 set_tests_properties(UiLocalizationTests PROPERTIES LABELS "P7-I18N-01")
 
 add_executable(ui_accessibility_tests tests/test_ui_accessibility.cpp)
-target_link_libraries(ui_accessibility_tests PRIVATE hydra_ui_localization)
+target_link_libraries(ui_accessibility_tests PRIVATE hydra_ui)
 hydra_enable_strict_warnings(ui_accessibility_tests)
 add_test(NAME UiAccessibilityTests COMMAND ui_accessibility_tests)
 set_tests_properties(UiAccessibilityTests PROPERTIES LABELS "P7-A11Y-01")
@@ -1385,7 +1257,7 @@ if(WIN32)
     add_executable(seat_launch_flow_process_tests
         tests/test_seat_launch_flow_process.cpp)
     target_link_libraries(seat_launch_flow_process_tests PRIVATE
-        hydra_seat_launcher hydra_process hydra_runtime)
+        hydra_seat_launcher hydra_windows hydra_runtime)
     hydra_enable_strict_warnings(seat_launch_flow_process_tests)
     add_test(NAME SeatLaunchFlowProcessTests COMMAND seat_launch_flow_process_tests)
     set_tests_properties(SeatLaunchFlowProcessTests PROPERTIES
@@ -1416,7 +1288,7 @@ if(WIN32)
     # evidence explicitly synthetic until physical validation is performed.
     add_executable(hydra_two_seat_mvp_lab src/two_seat_mvp_lab.cpp)
     target_link_libraries(hydra_two_seat_mvp_lab PRIVATE
-        hydra_two_seat_launch hydra_session_metrics hydra_runtime hydra_process
+        hydra_two_seat_launch hydra_session_metrics hydra_runtime hydra_windows
         Threads::Threads)
     add_dependencies(hydra_two_seat_mvp_lab hydra_process_tree_child)
     hydra_enable_strict_warnings(hydra_two_seat_mvp_lab)
@@ -1429,7 +1301,7 @@ if(WIN32)
     add_executable(seat_game_process_lifecycle_tests
         tests/test_seat_game_process_lifecycle.cpp)
     target_link_libraries(seat_game_process_lifecycle_tests PRIVATE
-        hydra_runtime hydra_process hydra_host_protocol hydra_host_transport
+        hydra_runtime hydra_windows hydra_host_protocol hydra_host_transport
         Threads::Threads)
     add_dependencies(seat_game_process_lifecycle_tests hydra_process_tree_child)
     hydra_enable_strict_warnings(seat_game_process_lifecycle_tests)
@@ -1442,7 +1314,7 @@ if(WIN32)
 endif()
 
 add_executable(process_group_tests tests/test_process_group.cpp)
-target_link_libraries(process_group_tests PRIVATE hydra_process)
+target_link_libraries(process_group_tests PRIVATE hydra_windows)
 add_dependencies(process_group_tests hydra_process_tree_child)
 hydra_enable_strict_warnings(process_group_tests)
 add_test(NAME ProcessGroupTests COMMAND process_group_tests)
@@ -1451,7 +1323,7 @@ add_executable(hydra_window_test_app tests/window_test_app.cpp)
 hydra_enable_strict_warnings(hydra_window_test_app)
 
 add_executable(window_tracker_tests tests/test_window_tracker.cpp)
-target_link_libraries(window_tracker_tests PRIVATE hydra_window_tracking)
+target_link_libraries(window_tracker_tests PRIVATE hydra_windows)
 add_dependencies(window_tracker_tests hydra_window_test_app)
 if(WIN32)
     target_link_libraries(window_tracker_tests PRIVATE User32.lib)
@@ -1460,36 +1332,36 @@ hydra_enable_strict_warnings(window_tracker_tests)
 add_test(NAME WindowTrackerTests COMMAND window_tracker_tests)
 
 add_executable(hydra_display_diag src/display_diag_main.cpp)
-target_link_libraries(hydra_display_diag PRIVATE hydra_display_topology)
+target_link_libraries(hydra_display_diag PRIVATE hydra_windows)
 hydra_enable_strict_warnings(hydra_display_diag)
 
 add_executable(display_topology_tests tests/test_display_topology.cpp)
-target_link_libraries(display_topology_tests PRIVATE hydra_display_topology)
+target_link_libraries(display_topology_tests PRIVATE hydra_windows)
 hydra_enable_strict_warnings(display_topology_tests)
 add_test(NAME DisplayTopologyTests COMMAND display_topology_tests)
 
 add_executable(seat_display_layout_tests tests/test_seat_display_layout.cpp)
-target_link_libraries(seat_display_layout_tests PRIVATE hydra_seat_display_layout)
+target_link_libraries(seat_display_layout_tests PRIVATE hydra_windows)
 hydra_enable_strict_warnings(seat_display_layout_tests)
 add_test(NAME SeatDisplayLayoutTests COMMAND seat_display_layout_tests)
 
 add_executable(window_policy_tests tests/test_window_policy.cpp)
-target_link_libraries(window_policy_tests PRIVATE hydra_window_placement)
+target_link_libraries(window_policy_tests PRIVATE hydra_windows)
 hydra_enable_strict_warnings(window_policy_tests)
 add_test(NAME WindowPolicyTests COMMAND window_policy_tests)
 
 add_executable(seat_runtime_policy_tests tests/test_seat_runtime_policy.cpp)
-target_link_libraries(seat_runtime_policy_tests PRIVATE hydra_seat_runtime_policy)
+target_link_libraries(seat_runtime_policy_tests PRIVATE hydra_windows)
 hydra_enable_strict_warnings(seat_runtime_policy_tests)
 add_test(NAME SeatRuntimePolicyTests COMMAND seat_runtime_policy_tests)
 
 add_executable(display_recovery_tests tests/test_display_recovery.cpp)
-target_link_libraries(display_recovery_tests PRIVATE hydra_display_recovery)
+target_link_libraries(display_recovery_tests PRIVATE hydra_windows)
 hydra_enable_strict_warnings(display_recovery_tests)
 add_test(NAME DisplayRecoveryTests COMMAND display_recovery_tests)
 
 add_executable(management_seat_tests tests/test_management_seat.cpp)
-target_link_libraries(management_seat_tests PRIVATE hydra_management_seat)
+target_link_libraries(management_seat_tests PRIVATE hydra_windows)
 hydra_enable_strict_warnings(management_seat_tests)
 add_test(NAME ManagementSeatTests COMMAND management_seat_tests)
 
@@ -1798,7 +1670,7 @@ set_tests_properties(ProfileMigrationTests PROPERTIES LABELS "P6-MIG-01")
 # P6-CATALOG-01 provider/executable identity, malformed metadata, deterministic
 # duplicate reconciliation, missing artwork, staleness, and transaction tests.
 add_executable(game_catalog_tests tests/test_game_catalog.cpp)
-target_link_libraries(game_catalog_tests PRIVATE hydra_game_catalog)
+target_link_libraries(game_catalog_tests PRIVATE hydra_launch)
 hydra_enable_strict_warnings(game_catalog_tests)
 add_test(NAME GameCatalogTests COMMAND game_catalog_tests)
 set_tests_properties(GameCatalogTests PROPERTIES LABELS "P6-CATALOG-01")
@@ -1806,7 +1678,7 @@ set_tests_properties(GameCatalogTests PROPERTIES LABELS "P6-CATALOG-01")
 # P6-PROV-01 fake-provider contract, revision, bounds, offline/absent,
 # transactional failure, typed-launch, and post-launch evidence tests.
 add_executable(provider_adapter_tests tests/test_provider_adapter.cpp)
-target_link_libraries(provider_adapter_tests PRIVATE hydra_provider_adapter)
+target_link_libraries(provider_adapter_tests PRIVATE hydra_launch)
 hydra_enable_strict_warnings(provider_adapter_tests)
 add_test(NAME ProviderAdapterTests COMMAND provider_adapter_tests)
 set_tests_properties(ProviderAdapterTests PROPERTIES LABELS "P6-PROV-01")
@@ -1814,7 +1686,7 @@ set_tests_properties(ProviderAdapterTests PROPERTIES LABELS "P6-PROV-01")
 # P6-PROV-02 virtual metadata-source fixtures plus a Windows-only, read-only
 # installed-Steam smoke test. Neither test starts Steam or a game.
 add_executable(steam_provider_tests tests/test_steam_provider.cpp)
-target_link_libraries(steam_provider_tests PRIVATE hydra_steam_provider)
+target_link_libraries(steam_provider_tests PRIVATE hydra_launch)
 hydra_enable_strict_warnings(steam_provider_tests)
 add_test(NAME SteamProviderTests COMMAND steam_provider_tests)
 set_tests_properties(SteamProviderTests PROPERTIES LABELS "P6-PROV-02")
@@ -1830,7 +1702,7 @@ endif()
 add_executable(custom_executable_provider_tests
     tests/test_custom_executable_provider.cpp)
 target_link_libraries(custom_executable_provider_tests PRIVATE
-    hydra_custom_executable_provider)
+    hydra_launch)
 hydra_enable_strict_warnings(custom_executable_provider_tests)
 add_test(NAME CustomExecutableProviderTests COMMAND custom_executable_provider_tests)
 set_tests_properties(CustomExecutableProviderTests PROPERTIES LABELS "P6-PROV-03D")
@@ -1844,7 +1716,7 @@ endif()
 # P6-PLAN-01 deterministic provider-aware plan/hash, same-game setup, stale
 # requirement/provider, account ambiguity, and exact hardware preflight tests.
 add_executable(provider_launch_plan_tests tests/test_provider_launch_plan.cpp)
-target_link_libraries(provider_launch_plan_tests PRIVATE hydra_provider_launch_plan)
+target_link_libraries(provider_launch_plan_tests PRIVATE hydra_launch)
 hydra_enable_strict_warnings(provider_launch_plan_tests)
 add_test(NAME ProviderLaunchPlanTests COMMAND provider_launch_plan_tests)
 set_tests_properties(ProviderLaunchPlanTests PROPERTIES LABELS "P6-PLAN-01")
@@ -1998,20 +1870,20 @@ endif()
 # P6-PREFLIGHT-01 normal/expert messages, deterministic mutation ordering,
 # explicit approval gates, and typed no-secret mutation preview tests.
 add_executable(plan_preflight_tests tests/test_plan_preflight.cpp)
-target_link_libraries(plan_preflight_tests PRIVATE hydra_plan_preflight)
+target_link_libraries(plan_preflight_tests PRIVATE hydra_launch)
 hydra_enable_strict_warnings(plan_preflight_tests)
 add_test(NAME PlanPreflightTests COMMAND plan_preflight_tests)
 set_tests_properties(PlanPreflightTests PROPERTIES LABELS "P6-PREFLIGHT-01")
 
 # P6-UI-01 full normal flow over fake providers and immutable local snapshots.
 add_executable(launcher_ui_model_tests tests/test_launcher_ui_model.cpp)
-target_link_libraries(launcher_ui_model_tests PRIVATE hydra_launcher_ui_model)
+target_link_libraries(launcher_ui_model_tests PRIVATE hydra_ui)
 hydra_enable_strict_warnings(launcher_ui_model_tests)
 add_test(NAME LauncherUiModelTests COMMAND launcher_ui_model_tests)
 set_tests_properties(LauncherUiModelTests PROPERTIES LABELS "P6-UI-01")
 
 add_executable(launcher_user_state_tests tests/test_launcher_user_state.cpp)
-target_link_libraries(launcher_user_state_tests PRIVATE hydra_launcher_user_state)
+target_link_libraries(launcher_user_state_tests PRIVATE hydra_ui)
 hydra_enable_strict_warnings(launcher_user_state_tests)
 add_test(NAME LauncherUserStateTests COMMAND launcher_user_state_tests)
 set_tests_properties(LauncherUserStateTests PROPERTIES LABELS "V1-HANDS-ON")
@@ -2023,8 +1895,7 @@ add_test(NAME InstallerBootstrapTests COMMAND installer_bootstrap_tests)
 set_tests_properties(InstallerBootstrapTests PROPERTIES LABELS "P8-INST-01;V1-HANDS-ON")
 
 add_executable(v1_user_journey_tests tests/test_v1_user_journey.cpp)
-target_link_libraries(v1_user_journey_tests PRIVATE
-    hydra_launcher_ui_model hydra_launcher_user_state)
+target_link_libraries(v1_user_journey_tests PRIVATE hydra_ui)
 hydra_enable_strict_warnings(v1_user_journey_tests)
 add_test(NAME V1UserJourneyTests COMMAND v1_user_journey_tests)
 set_tests_properties(V1UserJourneyTests PROPERTIES LABELS "V1-HANDS-ON")
@@ -2041,7 +1912,7 @@ endif()
 # P6-PROFILE-01 automatic/manual convergence, transactional Save, bounded path,
 # shared-data-root, and cross-document runtime-selection validation tests.
 add_executable(two_player_setup_editor_tests tests/test_two_player_setup_editor.cpp)
-target_link_libraries(two_player_setup_editor_tests PRIVATE hydra_two_player_setup_editor)
+target_link_libraries(two_player_setup_editor_tests PRIVATE hydra_launch)
 hydra_enable_strict_warnings(two_player_setup_editor_tests)
 add_test(NAME TwoPlayerSetupEditorTests COMMAND two_player_setup_editor_tests)
 set_tests_properties(TwoPlayerSetupEditorTests PROPERTIES LABELS "P6-PROFILE-01")
@@ -2059,8 +1930,7 @@ set_tests_properties(SetupPackageTests PROPERTIES LABELS "P6-IMPORT-01")
 # provider absence/offline, Unicode, moved paths, and stale/uninstalled metadata.
 add_executable(phase6_regression_tests tests/test_phase6_regression_fixtures.cpp)
 target_link_libraries(phase6_regression_tests PRIVATE
-    hydra_game_catalog hydra_provider_launch_plan hydra_plan_preflight
-    hydra_two_player_setup_editor hydra_setup_package)
+    hydra_launch hydra_setup_package)
 hydra_enable_strict_warnings(phase6_regression_tests)
 add_test(NAME Phase6RegressionTests COMMAND phase6_regression_tests)
 set_tests_properties(Phase6RegressionTests PROPERTIES LABELS "P6-REG-01")

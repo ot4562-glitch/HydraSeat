@@ -337,9 +337,6 @@ CompileResult compileTwoSeatLaunchPlan(std::span<const SeatLaunchInput> inputs) 
         SeatActivationPlan plan;
         plan.seatId = seatId;
         plan.seat = input.seat;
-        // targetHwnd is legacy/transient runtime state. Window ownership is
-        // derived from the launched process tree, never from a persisted HWND.
-        plan.seat.targetHwnd = 0;
         plan.target = input.target;
         plan.resources = resources;
         seats.push_back(std::move(plan));

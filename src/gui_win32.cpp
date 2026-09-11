@@ -263,6 +263,8 @@ static void updateTileAccessibleName(VisualDeviceTile& tile) {
         label += localizedText(ui::TextId::PrimaryDisplay);
     }
     SetWindowTextW(tile.hwndControl, label.c_str());
+    SendMessageW(tile.hwndControl, WM_SETFONT,
+                 reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
 }
 
 #define ID_BTN_REFRESH   1001
@@ -279,8 +281,9 @@ static void updateTileAccessibleName(VisualDeviceTile& tile) {
 #define ID_BTN_UNASSIGN_DEVICE 1015
 #define ID_BTN_IDENTIFY_KEYBOARD 1016
 #define ID_BTN_IDENTIFY_MOUSE 1017
+#define ID_BTN_MAKE_PRIMARY 1018
 
-#define TIMER_FLASH_RESET 2001
+#define TIMER_IDENTIFICATION 2001
 #define TIMER_HOST_REFRESH 2002
 constexpr UINT WM_HYDRA_ACTIVATE_CONTROL = WM_APP + 17;
 
@@ -299,279 +302,10 @@ Win32App::~Win32App() {
     }
 }
 
-LRESULT CALLBACK Win32App::DeviceTileProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    VisualDeviceTile* tile = reinterpret_cast<VisualDeviceTile*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-
-    if (uMsg == WM_LBUTTONDOWN) {
-        if (tile && g_appInstance) {
-            SetFocus(hwnd);
-            g_appInstance->selectDeviceTile(tile);
-            if (g_appInstance->configurationEditingAllowed()) {
-                tile->pointerPressed = true;
-                tile->isDragging = false;
-                GetCursorPos(&tile->dragStartScreen);
-                SetCapture(hwnd);
-            }
-        }
-        return 0;
-    }
-
-    if (uMsg == WM_MOUSEMOVE) {
-        if (tile && tile->pointerPressed && g_appInstance) {
-            POINT screenPt{};
-            GetCursorPos(&screenPt);
-            if (!tile->isDragging) {
-                const int dx = screenPt.x >= tile->dragStartScreen.x
-                                   ? screenPt.x - tile->dragStartScreen.x
-                                   : tile->dragStartScreen.x - screenPt.x;
-                const int dy = screenPt.y >= tile->dragStartScreen.y
-                                   ? screenPt.y - tile->dragStartScreen.y
-                                   : tile->dragStartScreen.y - screenPt.y;
-                const int dragX = std::max(4, GetSystemMetrics(SM_CXDRAG));
-                const int dragY = std::max(4, GetSystemMetrics(SM_CYDRAG));
-                if (dx >= dragX || dy >= dragY) {
-                    tile->isDragging = true;
-                    SetCursor(LoadCursor(NULL, IDC_SIZEALL));
-                }
-            }
-            if (!tile->isDragging) return 0;
-
-            RECT windowRect{};
-            GetWindowRect(hwnd, &windowRect);
-            const int width = windowRect.right - windowRect.left;
-            const int height = windowRect.bottom - windowRect.top;
-            POINT clientPt = screenPt;
-            HWND parentHwnd = GetParent(hwnd);
-            ScreenToClient(parentHwnd, &clientPt);
-            SetWindowPos(hwnd, HWND_TOP, clientPt.x - width / 2,
-                         clientPt.y - height / 2, 0, 0,
-                         SWP_NOSIZE | SWP_SHOWWINDOW);
-        }
-        return 0;
-    }
-
-    if (uMsg == WM_LBUTTONUP) {
-        if (tile && tile->pointerPressed) {
-            const bool wasDragging = tile->isDragging;
-            tile->pointerPressed = false;
-            tile->isDragging = false;
-            if (GetCapture() == hwnd) ReleaseCapture();
-            SetCursor(LoadCursor(NULL, IDC_ARROW));
-            if (g_appInstance && wasDragging) {
-                POINT screenPt{};
-                GetCursorPos(&screenPt);
-                g_appInstance->dropTileAtScreenPos(tile, screenPt);
-            } else if (g_appInstance) {
-                g_appInstance->selectDeviceTile(tile);
-            }
-        }
-        return 0;
-    }
-
-    if (uMsg == WM_CAPTURECHANGED) {
-        if (tile && tile->pointerPressed) {
-            tile->pointerPressed = false;
-            tile->isDragging = false;
-            if (g_appInstance) g_appInstance->layoutDeviceTiles();
-        }
-        return 0;
-    }
-
-    if (uMsg == WM_KEYDOWN && (wParam == VK_RETURN || wParam == VK_SPACE)) {
-        if (tile && g_appInstance) g_appInstance->selectDeviceTile(tile);
-        return 0;
-    }
-
-    if (uMsg == WM_SETFOCUS || uMsg == WM_KILLFOCUS) {
-        InvalidateRect(hwnd, nullptr, FALSE);
-        return 0;
-    }
-
-    if (uMsg == WM_RBUTTONUP) {
-        if (tile && g_appInstance) g_appInstance->selectDeviceTile(tile);
-        if (tile && g_appInstance && tile->type == DeviceCategory::Display &&
-            tile->owner != PartitionOwner::Pool) {
-            if (!g_appInstance->configurationEditingAllowed()) {
-                MessageBeep(MB_ICONWARNING);
-                return 0;
-            }
-            const bool changed = !tile->isPrimaryDisplay;
-            for (auto& candidate : g_appInstance->m_deviceTiles) {
-                if (candidate && candidate->type == DeviceCategory::Display &&
-                    candidate->owner == tile->owner) {
-                    candidate->isPrimaryDisplay = (candidate.get() == tile);
-                    updateTileAccessibleName(*candidate);
-                    InvalidateRect(candidate->hwndControl, nullptr, FALSE);
-                }
-            }
-            if (changed) {
-                g_appInstance->m_profileOutOfSync = true;
-                g_appInstance->updateControlSurfaceUi();
-            }
-            g_appInstance->updateDeviceAssignmentUi();
-        }
-        return 0;
-    }
-
-    if (uMsg == WM_PAINT) {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-
-        RECT rect;
-        GetClientRect(hwnd, &rect);
-
-        const bool isFlashing = tile && tile->flashUntil > GetTickCount64();
-        const bool hasFocus = GetFocus() == hwnd;
-        const bool selected = tile && tile->isSelected;
-
-        const COLORREF bgCol = GetSysColor(COLOR_WINDOW);
-        COLORREF borderCol = GetSysColor(COLOR_3DSHADOW);
-        if (tile && tile->owner == PartitionOwner::Player1) {
-            borderCol = RGB(37, 99, 235);
-        } else if (tile && tile->owner == PartitionOwner::Player2) {
-            borderCol = RGB(5, 150, 105);
-        }
-        if (selected || hasFocus) borderCol = GetSysColor(COLOR_HIGHLIGHT);
-        if (isFlashing) borderCol = RGB(217, 119, 6);
-
-        const int penWidth = selected || hasFocus || isFlashing ? 3 : 2;
-        HBRUSH bgBrush = CreateSolidBrush(bgCol);
-        HPEN borderPen = CreatePen(PS_SOLID, penWidth, borderCol);
-
-        HGDIOBJ oldBrush = SelectObject(hdc, bgBrush);
-        HGDIOBJ oldPen = SelectObject(hdc, borderPen);
-        RoundRect(hdc, rect.left, rect.top, rect.right, rect.bottom, 10, 10);
-
-        if (tile) {
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
-
-            if (selected) {
-                RECT selectionRail{rect.left + 2, rect.top + 5,
-                                   rect.left + 7, rect.bottom - 5};
-                FillRect(hdc, &selectionRail, GetSysColorBrush(COLOR_HIGHLIGHT));
-            }
-
-            HFONT headerFont = CreateFontW(
-                14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-            HFONT bodyFont = CreateFontW(
-                13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-            HGDIOBJ oldFont = SelectObject(hdc, headerFont);
-
-            RECT headerRect{rect.left + 12, rect.top + 6,
-                            rect.right - 10, rect.top + 23};
-            std::wstring headerText = tile->displayLabel.empty()
-                                          ? std::wstring(deviceCategoryText(tile->type))
-                                          : tile->displayLabel;
-            if (tile->isPrimaryDisplay) {
-                headerText += L" · ";
-                headerText += localizedText(ui::TextId::PrimaryDisplay);
-            }
-            DrawTextW(hdc, headerText.c_str(), -1, &headerRect,
-                      DT_SINGLELINE | DT_LEFT | DT_END_ELLIPSIS | DT_NOPREFIX);
-
-            SelectObject(hdc, bodyFont);
-            RECT nameRect{rect.left + 12, rect.top + 24,
-                          rect.right - 10, rect.bottom - 18};
-            const auto name = tileFriendlyName(*tile);
-            DrawTextW(hdc, name.c_str(), -1, &nameRect,
-                      DT_SINGLELINE | DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS |
-                          DT_NOPREFIX);
-
-            RECT ownerRect{rect.left + 12, rect.bottom - 18,
-                           rect.right - 10, rect.bottom - 4};
-            std::wstring ownerText = partitionOwnerText(tile->owner);
-            DrawTextW(hdc, ownerText.c_str(), -1, &ownerRect,
-                      DT_SINGLELINE | DT_RIGHT | DT_VCENTER | DT_END_ELLIPSIS |
-                          DT_NOPREFIX);
-
-            if (isFlashing) {
-                HBRUSH activeBrush = CreateSolidBrush(RGB(217, 119, 6));
-                HPEN activePen = CreatePen(PS_NULL, 0, RGB(217, 119, 6));
-                HGDIOBJ oldActiveBrush = SelectObject(hdc, activeBrush);
-                HGDIOBJ oldActivePen = SelectObject(hdc, activePen);
-                Ellipse(hdc, rect.right - 16, rect.top + 7,
-                        rect.right - 8, rect.top + 15);
-                SelectObject(hdc, oldActiveBrush);
-                SelectObject(hdc, oldActivePen);
-                DeleteObject(activeBrush);
-                DeleteObject(activePen);
-            }
-
-            if (hasFocus) {
-                RECT focusRect = rect;
-                InflateRect(&focusRect, -4, -4);
-                DrawFocusRect(hdc, &focusRect);
-            }
-
-            SelectObject(hdc, oldFont);
-            DeleteObject(headerFont);
-            DeleteObject(bodyFont);
-        }
-
-        SelectObject(hdc, oldBrush);
-        SelectObject(hdc, oldPen);
-        DeleteObject(bgBrush);
-        DeleteObject(borderPen);
-
-        EndPaint(hwnd, &ps);
-        return 0;
-    }
-    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
-}
-
-void Win32App::dropTileAtScreenPos(VisualDeviceTile* tile, POINT screenPt) {
-    if (!configurationEditingAllowed()) {
-        MessageBeep(MB_ICONWARNING);
-        return;
-    }
-    if (!tile || !m_hwnd) return;
-
-    PartitionOwner target = tile->owner;
-    bool foundTarget = false;
-    const auto hitGroup = [&](HWND group, PartitionOwner owner) {
-        if (group == nullptr) return;
-        RECT rect{};
-        if (GetWindowRect(group, &rect) && PtInRect(&rect, screenPt)) {
-            target = owner;
-            foundTarget = true;
-        }
-    };
-    hitGroup(m_poolGroup, PartitionOwner::Pool);
-    hitGroup(m_p1Group, PartitionOwner::Player1);
-    hitGroup(m_p2Group, PartitionOwner::Player2);
-    if (!foundTarget) {
-        layoutDeviceTiles();
-        return;
-    }
-    (void)assignTileToOwner(tile, target);
-}
-
 void Win32App::selectDeviceTile(VisualDeviceTile* tile) {
-    if (m_selectedDeviceTile == tile) {
-        if (tile != nullptr) {
-            tile->isSelected = true;
-            updateTileAccessibleName(*tile);
-            InvalidateRect(tile->hwndControl, nullptr, FALSE);
-        }
-        updateDeviceAssignmentUi();
-        return;
-    }
-
-    if (m_selectedDeviceTile != nullptr) {
-        m_selectedDeviceTile->isSelected = false;
-        updateTileAccessibleName(*m_selectedDeviceTile);
-        InvalidateRect(m_selectedDeviceTile->hwndControl, nullptr, FALSE);
-    }
     m_selectedDeviceTile = tile;
-    if (m_selectedDeviceTile != nullptr) {
-        m_selectedDeviceTile->isSelected = true;
-        updateTileAccessibleName(*m_selectedDeviceTile);
-        InvalidateRect(m_selectedDeviceTile->hwndControl, nullptr, FALSE);
+    if (tile != nullptr && tile->hwndControl != nullptr) {
+        SetFocus(tile->hwndControl);
     }
     updateDeviceAssignmentUi();
 }
@@ -633,6 +367,27 @@ bool Win32App::assignTileToOwner(VisualDeviceTile* tile, PartitionOwner owner) {
     updateDeviceAssignmentUi();
     updateControlSurfaceUi();
     return true;
+}
+
+void Win32App::makeSelectedDisplayPrimary() {
+    auto* tile = m_selectedDeviceTile;
+    if (tile == nullptr || tile->type != DeviceCategory::Display ||
+        tile->owner == PartitionOwner::Pool || !configurationEditingAllowed()) {
+        MessageBeep(MB_ICONWARNING);
+        return;
+    }
+    if (tile->isPrimaryDisplay) return;
+
+    for (auto& candidate : m_deviceTiles) {
+        if (candidate && candidate->type == DeviceCategory::Display &&
+            candidate->owner == tile->owner) {
+            candidate->isPrimaryDisplay = (candidate.get() == tile);
+            updateTileAccessibleName(*candidate);
+        }
+    }
+    m_profileOutOfSync = true;
+    updateDeviceAssignmentUi();
+    updateControlSurfaceUi();
 }
 
 void Win32App::updateDeviceAssignmentUi() {
@@ -724,6 +479,12 @@ void Win32App::updateDeviceAssignmentUi() {
                      editing && !identifying && tile != nullptr &&
                          tile->owner != PartitionOwner::Pool);
     }
+    if (m_makePrimaryDisplayBtn != nullptr) {
+        EnableWindow(m_makePrimaryDisplayBtn,
+                     editing && !identifying && tile != nullptr &&
+                         tile->type == DeviceCategory::Display &&
+                         tile->owner != PartitionOwner::Pool && !tile->isPrimaryDisplay);
+    }
 }
 
 void Win32App::beginInputIdentification(InputIdentificationKind kind) {
@@ -799,14 +560,6 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
     icex.dwICC = ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icex);
 
-    WNDCLASSEXW wcTile = { sizeof(WNDCLASSEXW) };
-    wcTile.lpfnWndProc = Win32App::DeviceTileProc;
-    wcTile.hInstance = hInstance;
-    wcTile.hCursor = LoadCursor(NULL, IDC_HAND);
-    wcTile.hbrBackground = NULL;
-    wcTile.lpszClassName = L"HydraSeatDeviceTileClass";
-    RegisterClassExW(&wcTile);
-
     WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
     wc.lpfnWndProc = Win32App::WindowProc;
     wc.hInstance = hInstance;
@@ -824,7 +577,7 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
         0, L"HydraSeatMainWindowClass",
         windowTitle.c_str(),
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 980, 750,
+        CW_USEDEFAULT, CW_USEDEFAULT, 860, 620,
         NULL, NULL, hInstance, NULL
     );
 
@@ -834,7 +587,6 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
     // Hook diagnostics before device-change notifications begin. The main UI
     // remains a configuration surface; it does not claim zero-bleed isolation.
     m_inputRouter.setGlobalCallback([this](const RawInputEvent& evt) {
-        triggerDeviceFlash(evt.deviceHandle, evt.devicePath, evt.rawDevType, evt.isTouchpad);
         observeIdentificationInput(evt);
     });
     if (!m_inputRouter.initialize(reinterpret_cast<uint64_t>(m_hwnd))) {
@@ -856,7 +608,7 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
 
     (void)initializeControlSurface();
 
-    SetTimer(m_hwnd, TIMER_FLASH_RESET, 50, NULL);
+    SetTimer(m_hwnd, TIMER_IDENTIFICATION, 50, NULL);
     SetTimer(m_hwnd, TIMER_HOST_REFRESH, 1000, NULL);
 
     (void)nCmdShow;
@@ -866,220 +618,63 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
     return true;
 }
 
-void Win32App::triggerDeviceFlash(uintptr_t handle, const std::wstring& devPath, uint32_t rawDevType, bool isTouchpad) {
-    uint64_t now = GetTickCount64();
-
-    // Log every raw input event for debugging
-    if (diagnosticBudgetAvailable()) {
-        static uint64_t lastLogTime = 0;
-        if (now - lastLogTime > 100) { // Throttle logging to max 10/sec
-            const wchar_t* typeStr = (rawDevType == RIM_TYPEKEYBOARD) ? L"KBD" :
-                                     (rawDevType == RIM_TYPEMOUSE) ? L"MOUSE" :
-                                     (rawDevType == RIM_TYPEHID) ? L"HID" : L"UNK";
-            g_diagLog << L"[INPUT] type=" << typeStr
-                      << L" isTouchpad=" << isTouchpad
-                      << L" mapped=" << (m_handleToTileIndex.count(handle) > 0 ? L"YES" : L"NO");
-            if (m_handleToTileIndex.count(handle) > 0) {
-                size_t tIdx = m_handleToTileIndex[handle];
-                if (tIdx < m_deviceTiles.size() && m_deviceTiles[tIdx]) {
-                    g_diagLog << L" -> tile[" << tIdx << L"] " << m_deviceTiles[tIdx]->displayLabel;
-                }
-            }
-            g_diagLog << std::endl;
-            lastLogTime = now;
-        }
-    }
-
-    // 1. Direct Handle Lookup via m_handleToTileIndex
-    if (handle != 0) {
-        auto it = m_handleToTileIndex.find(handle);
-        if (it != m_handleToTileIndex.end() && it->second < m_deviceTiles.size()) {
-            m_deviceTiles[it->second]->flashUntil = now + 250;
-            InvalidateRect(m_deviceTiles[it->second]->hwndControl, NULL, FALSE);
-            return;
-        }
-    }
-
-    // 2. Fallback: resolve the interface to the same stable ID used by HardwareDetector.
-    if (!devPath.empty()) {
-        const auto category = stableIdCategory(rawDevType);
-        const auto incomingId = category.empty()
-                                    ? std::wstring{}
-                                    : win32::makeStableRawInputDeviceId(category, devPath);
-        for (size_t tIdx = 0; tIdx < m_deviceTiles.size(); tIdx++) {
-            auto& tilePtr = m_deviceTiles[tIdx];
-            if (!tilePtr) continue;
-            // TYPE CHECK: Only match tiles compatible with the raw device type
-            if (!isTypeCompatible(rawDevType, tilePtr->type)) continue;
-            if (!incomingId.empty() && incomingId == tilePtr->deviceId) {
-                tilePtr->flashUntil = now + 250;
-                InvalidateRect(tilePtr->hwndControl, NULL, FALSE);
-                // Cache this handle for future O(1) lookups
-                if (handle != 0) {
-                    m_handleToTileIndex[handle] = tIdx;
-                    if (g_diagLog.is_open()) {
-                        g_diagLog << L"[CACHE] mapped -> tile[" << tIdx << L"] "
-                                  << tilePtr->displayLabel << std::endl;
-                    }
-                }
-                return;
-            }
-        }
-    }
-
-    // Do not guess by device type: that can associate input with the wrong
-    // physical keyboard or mouse on a multiseat system.
-    if (g_diagLog.is_open()) {
-        const wchar_t* typeStr = (rawDevType == RIM_TYPEKEYBOARD) ? L"KBD" :
-                                 (rawDevType == RIM_TYPEMOUSE) ? L"MOUSE" :
-                                 (rawDevType == RIM_TYPEHID) ? L"HID" : L"UNK";
-        g_diagLog << L"[FALLBACK] type=" << typeStr
-                  << L" isTouchpad=" << isTouchpad << std::endl;
-    }
-}
-
 void Win32App::setupUI() {
     const auto locale = ui::systemLocale();
     const auto text = [locale](ui::TextId id) {
         return std::wstring(ui::text(id, locale));
     };
-    const auto setupTitle = text(ui::TextId::SeatHardwareSetup);
-    const auto applySetup = text(ui::TextId::ApplySetup);
-    const auto reloadSetup = text(ui::TextId::ReloadSetup);
-    const auto refresh = text(ui::TextId::Refresh);
-    const auto backToGames = text(ui::TextId::BackToGames);
-    const auto detectingHardware = text(ui::TextId::DetectingHardware);
-    const auto returnToWindows = text(ui::TextId::ReturnToWindows);
-    const auto reconfigure = text(ui::TextId::Reconfigure);
-    const auto hardwareHint = text(ui::TextId::AvailableHardwareHint);
-    const auto assignSeat1 = ui::formatOne(ui::TextId::AssignToSeat, locale, L"1");
-    const auto assignSeat2 = ui::formatOne(ui::TextId::AssignToSeat, locale, L"2");
-    const auto unassignDevice = text(ui::TextId::UnassignDevice);
-    const auto identifyKeyboard = text(ui::TextId::IdentifyKeyboard);
-    const auto identifyMouse = text(ui::TextId::IdentifyMouse);
-    const auto availableHardware = text(ui::TextId::AvailableHardware);
-    const auto seat1Hardware = ui::formatOne(ui::TextId::SeatHardwareLabel, locale, L"1");
-    const auto seat2Hardware = ui::formatOne(ui::TextId::SeatHardwareLabel, locale, L"2");
+    const auto module = GetModuleHandleW(nullptr);
+    const auto create = [&](const wchar_t* klass, const std::wstring& label, DWORD style,
+                            int id, bool visible = true) {
+        HWND control = CreateWindowExW(
+            0, klass, label.c_str(), WS_CHILD | (visible ? WS_VISIBLE : 0) | style,
+            0, 0, 1, 1, m_hwnd,
+            id == 0 ? nullptr : reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+            module, nullptr);
+        SendMessageW(control, WM_SETFONT,
+                     reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        return control;
+    };
 
-    // Secondary hardware/recovery surface. Normal users should return to Games
-    // instead of treating this window as the product's primary launcher.
-    m_headerLabel = CreateWindowExW(0, L"STATIC", setupTitle.c_str(),
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, 15, 420, 30, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
+    m_headerLabel = create(L"STATIC", text(ui::TextId::SeatHardwareSetup), SS_LEFT, 0);
+    m_saveProfileBtn = create(L"BUTTON", text(ui::TextId::ApplySetup),
+                              WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_SAVE_PROF);
+    m_loadProfileBtn = create(L"BUTTON", text(ui::TextId::ReloadSetup),
+                              WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_LOAD_PROF);
+    m_refreshBtn = create(L"BUTTON", text(ui::TextId::Refresh),
+                          WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_REFRESH);
+    m_gameLibraryBtn = create(L"BUTTON", text(ui::TextId::BackToGames),
+                              WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_GAME_LIBRARY);
 
-    HFONT hFontHeader = CreateFontW(22, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
-        DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    SendMessageW(m_headerLabel, WM_SETFONT, (WPARAM)hFontHeader, TRUE);
+    m_runtimeStatusLabel = create(L"STATIC", L"", SS_LEFT, 0, false);
+    m_stopSessionBtn = create(L"BUTTON", text(ui::TextId::ReturnToWindows),
+                              WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_STOP_SESSION, false);
+    m_reconfigureBtn = create(L"BUTTON", text(ui::TextId::Reconfigure),
+                              WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_RECONFIGURE, false);
 
-    // Persist and apply the current Seat hardware assignment.
-    m_saveProfileBtn = CreateWindowExW(0, L"BUTTON", applySetup.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        450, 15, 110, 32, m_hwnd, (HMENU)ID_BTN_SAVE_PROF, GetModuleHandle(NULL), NULL);
+    m_deviceStatusLabel = create(L"STATIC", text(ui::TextId::DetectingHardware), SS_LEFT, 0);
+    m_selectedDeviceLabel = create(L"STATIC", text(ui::TextId::AvailableHardwareHint), SS_LEFT, 0);
+    m_assignSeat1Btn = create(L"BUTTON", ui::formatOne(ui::TextId::AssignToSeat, locale, L"1"),
+                              WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_ASSIGN_SEAT1);
+    m_assignSeat2Btn = create(L"BUTTON", ui::formatOne(ui::TextId::AssignToSeat, locale, L"2"),
+                              WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_ASSIGN_SEAT2);
+    m_unassignDeviceBtn = create(L"BUTTON", text(ui::TextId::UnassignDevice),
+                                 WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_UNASSIGN_DEVICE);
+    m_makePrimaryDisplayBtn = create(L"BUTTON", text(ui::TextId::PrimaryDisplay),
+                                     WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_MAKE_PRIMARY);
+    m_identifyKeyboardBtn = create(L"BUTTON", text(ui::TextId::IdentifyKeyboard),
+                                   WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_IDENTIFY_KEYBOARD);
+    m_identifyMouseBtn = create(L"BUTTON", text(ui::TextId::IdentifyMouse),
+                                WS_TABSTOP | BS_PUSHBUTTON, ID_BTN_IDENTIFY_MOUSE);
 
-    // Reload the last committed hardware assignment.
-    m_loadProfileBtn = CreateWindowExW(0, L"BUTTON", reloadSetup.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        570, 15, 110, 32, m_hwnd, (HMENU)ID_BTN_LOAD_PROF, GetModuleHandle(NULL), NULL);
-
-    // Refresh Button
-    m_refreshBtn = CreateWindowExW(0, L"BUTTON", refresh.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        690, 15, 90, 32, m_hwnd, (HMENU)ID_BTN_REFRESH, GetModuleHandle(NULL), NULL);
-
-    m_gameLibraryBtn = CreateWindowExW(0, L"BUTTON", backToGames.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        790, 15, 140, 32, m_hwnd, (HMENU)ID_BTN_GAME_LIBRARY,
-        GetModuleHandle(NULL), NULL);
-
-    // Status Label
-    m_deviceStatusLabel = CreateWindowExW(0, L"STATIC", detectingHardware.c_str(),
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, 82, 920, 22, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-
-    HFONT hFontNormal = CreateFontW(15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
-        DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    SendMessageW(m_deviceStatusLabel, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_saveProfileBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_loadProfileBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_refreshBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_gameLibraryBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-
-    m_runtimeStatusLabel = CreateWindowExW(
-        0, L"STATIC", L"",
-        WS_CHILD | SS_LEFT,
-        20, 52, 410, 24, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-    // Starting a split session belongs to the validated Games -> Play path.
-    // This secondary surface retains only recovery/reconfiguration controls so
-    // it cannot bypass provider plan/preflight.
-    m_stopSessionBtn = CreateWindowExW(
-        0, L"BUTTON", returnToWindows.c_str(),
-        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-        450, 50, 210, 28, m_hwnd, (HMENU)ID_BTN_STOP_SESSION, GetModuleHandle(NULL), NULL);
-    m_reconfigureBtn = CreateWindowExW(
-        0, L"BUTTON", reconfigure.c_str(),
-        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-        670, 50, 120, 28, m_hwnd, (HMENU)ID_BTN_RECONFIGURE, GetModuleHandle(NULL), NULL);
-    SendMessageW(m_runtimeStatusLabel, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_stopSessionBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_reconfigureBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-
-    m_selectedDeviceLabel = CreateWindowExW(
-        0, L"STATIC", hardwareHint.c_str(),
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, 108, 920, 20, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-    m_assignSeat1Btn = CreateWindowExW(
-        0, L"BUTTON", assignSeat1.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        20, 132, 150, 30, m_hwnd, (HMENU)ID_BTN_ASSIGN_SEAT1, GetModuleHandle(NULL), NULL);
-    m_assignSeat2Btn = CreateWindowExW(
-        0, L"BUTTON", assignSeat2.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        180, 132, 150, 30, m_hwnd, (HMENU)ID_BTN_ASSIGN_SEAT2, GetModuleHandle(NULL), NULL);
-    m_unassignDeviceBtn = CreateWindowExW(
-        0, L"BUTTON", unassignDevice.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        340, 132, 150, 30, m_hwnd, (HMENU)ID_BTN_UNASSIGN_DEVICE,
-        GetModuleHandle(NULL), NULL);
-    m_identifyKeyboardBtn = CreateWindowExW(
-        0, L"BUTTON", identifyKeyboard.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        500, 132, 205, 30, m_hwnd, (HMENU)ID_BTN_IDENTIFY_KEYBOARD,
-        GetModuleHandle(NULL), NULL);
-    m_identifyMouseBtn = CreateWindowExW(
-        0, L"BUTTON", identifyMouse.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        715, 132, 215, 30, m_hwnd, (HMENU)ID_BTN_IDENTIFY_MOUSE,
-        GetModuleHandle(NULL), NULL);
-    SendMessageW(m_selectedDeviceLabel, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_assignSeat1Btn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_assignSeat2Btn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_unassignDeviceBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_identifyKeyboardBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_identifyMouseBtn, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-
-    m_poolGroup = CreateWindowExW(0, L"BUTTON", availableHardware.c_str(),
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        20, 172, 290, 448, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-
-    m_p1Group = CreateWindowExW(0, L"BUTTON", seat1Hardware.c_str(),
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        330, 172, 290, 448, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-
-    m_p2Group = CreateWindowExW(0, L"BUTTON", seat2Hardware.c_str(),
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        640, 172, 290, 448, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-
-    HFONT hFontBold = CreateFontW(15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
-        DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    SendMessageW(m_poolGroup, WM_SETFONT, (WPARAM)hFontBold, TRUE);
-    SendMessageW(m_p1Group, WM_SETFONT, (WPARAM)hFontBold, TRUE);
-    SendMessageW(m_p2Group, WM_SETFONT, (WPARAM)hFontBold, TRUE);
+    m_poolGroup = create(L"BUTTON", text(ui::TextId::AvailableHardware), BS_GROUPBOX, 0);
+    m_p1Group = create(L"BUTTON", ui::formatOne(ui::TextId::SeatHardwareLabel, locale, L"1"),
+                       BS_GROUPBOX, 0);
+    m_p2Group = create(L"BUTTON", ui::formatOne(ui::TextId::SeatHardwareLabel, locale, L"2"),
+                       BS_GROUPBOX, 0);
 
     layoutHardwareSetup();
-
+    updateDeviceAssignmentUi();
 }
 
 void Win32App::layoutHardwareSetup() {
@@ -1107,12 +702,12 @@ void Win32App::layoutHardwareSetup() {
     MoveWindow(m_deviceStatusLabel, margin, 80, width - margin * 2, 24, TRUE);
     MoveWindow(m_selectedDeviceLabel, margin, 106, width - margin * 2, 24, TRUE);
 
-    const int actionCount = 5;
+    const int actionCount = 6;
     const int actionWidth = std::max(80, (width - margin * 2 - gap * (actionCount - 1)) /
                                              actionCount);
     const HWND actions[actionCount] = {m_assignSeat1Btn, m_assignSeat2Btn,
-                                       m_unassignDeviceBtn, m_identifyKeyboardBtn,
-                                       m_identifyMouseBtn};
+                                       m_unassignDeviceBtn, m_makePrimaryDisplayBtn,
+                                       m_identifyKeyboardBtn, m_identifyMouseBtn};
     for (int index = 0; index < actionCount; ++index) {
         MoveWindow(actions[index], margin + index * (actionWidth + gap), 134,
                    actionWidth, 38, TRUE);
@@ -1130,60 +725,20 @@ void Win32App::layoutHardwareSetup() {
 }
 
 void Win32App::layoutDeviceTiles() {
-    auto layoutPartition = [this](PartitionOwner owner, HWND group) {
-        constexpr int kInnerX = 15;
-        constexpr int kDisplayHeight = 64;
-        constexpr int kDeviceHeight = 54;
-        constexpr int kGap = 8;
+    const auto layoutPartition = [this](PartitionOwner owner, HWND group) {
+        constexpr int kInner = 12;
+        constexpr int kRowHeight = 30;
+        constexpr int kGap = 6;
         RECT groupRect{};
         if (group == nullptr || !GetWindowRect(group, &groupRect)) return;
         POINT origin{groupRect.left, groupRect.top};
         ScreenToClient(m_hwnd, &origin);
-        const int startX = origin.x;
-        const int top = origin.y + 30;
-        const int wideWidth = std::max(
-            80, static_cast<int>(groupRect.right - groupRect.left) - kInnerX * 2);
-        const int poolNarrowWidth = std::max(60, (wideWidth - kGap) / 2);
-
-        int y = top;
-        for (auto& tilePtr : m_deviceTiles) {
-            if (!tilePtr || !tilePtr->hwndControl || tilePtr->owner != owner ||
-                tilePtr->type != DeviceCategory::Display) {
-                continue;
-            }
-            SetWindowPos(tilePtr->hwndControl, nullptr, startX + kInnerX, y,
-                         wideWidth, kDisplayHeight,
-                         SWP_NOZORDER | SWP_SHOWWINDOW);
-            y += kDisplayHeight + kGap;
-            InvalidateRect(tilePtr->hwndControl, nullptr, TRUE);
-        }
-
-        int poolColumn = 0;
-        for (auto& tilePtr : m_deviceTiles) {
-            if (!tilePtr || !tilePtr->hwndControl || tilePtr->owner != owner ||
-                tilePtr->type == DeviceCategory::Display) {
-                continue;
-            }
-
-            int x = startX + kInnerX;
-            int width = wideWidth;
-            if (owner == PartitionOwner::Pool) {
-                x += poolColumn * (poolNarrowWidth + kGap);
-                width = poolNarrowWidth;
-            }
-            SetWindowPos(tilePtr->hwndControl, nullptr, x, y, width, kDeviceHeight,
-                         SWP_NOZORDER | SWP_SHOWWINDOW);
-            InvalidateRect(tilePtr->hwndControl, nullptr, TRUE);
-
-            if (owner == PartitionOwner::Pool) {
-                poolColumn = (poolColumn + 1) % 2;
-                if (poolColumn == 0) y += kDeviceHeight + kGap;
-            } else {
-                y += kDeviceHeight + kGap;
-            }
-        }
-        if (owner == PartitionOwner::Pool && poolColumn != 0) {
-            y += kDeviceHeight + kGap;
+        const int width = std::max(80, static_cast<int>(groupRect.right - groupRect.left) - kInner * 2);
+        int y = origin.y + 24;
+        for (auto& tile : m_deviceTiles) {
+            if (!tile || tile->hwndControl == nullptr || tile->owner != owner) continue;
+            MoveWindow(tile->hwndControl, origin.x + kInner, y, width, kRowHeight, TRUE);
+            y += kRowHeight + kGap;
         }
     };
 
@@ -1222,7 +777,6 @@ void Win32App::refreshHardware(bool preserveIdentification) {
         }
     }
     m_deviceTiles.clear();
-    m_handleToTileIndex.clear();
 
     // Displays (Default to Pool)
     for (size_t i = 0; i < m_displays.size(); ++i) {
@@ -1236,11 +790,10 @@ void Win32App::refreshHardware(bool preserveIdentification) {
         tile->devicePath = m_displays[i].devicePath;
         tile->owner = PartitionOwner::Pool;
 
-        tile->hwndControl = CreateWindowExW(0, L"HydraSeatDeviceTileClass", L"",
+        tile->hwndControl = CreateWindowExW(0, L"BUTTON", L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             0, 0, 260, 64, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
-        SetWindowLongPtrW(tile->hwndControl, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(tile.get()));
         updateTileAccessibleName(*tile);
         m_deviceTiles.push_back(std::move(tile));
     }
@@ -1257,16 +810,12 @@ void Win32App::refreshHardware(bool preserveIdentification) {
         tile->devicePath = m_keyboards[i].devicePath;
         tile->owner = PartitionOwner::Pool;
 
-        tile->hwndControl = CreateWindowExW(0, L"HydraSeatDeviceTileClass", L"",
+        tile->hwndControl = CreateWindowExW(0, L"BUTTON", L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             0, 0, 126, 54, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
-        SetWindowLongPtrW(tile->hwndControl, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(tile.get()));
         updateTileAccessibleName(*tile);
-        size_t idx = m_deviceTiles.size();
-        uintptr_t handle = tile->nativeHandle;
         m_deviceTiles.push_back(std::move(tile));
-        if (handle != 0) m_handleToTileIndex[handle] = idx;
     }
 
     // Mice / Touchpads (Default to Pool)
@@ -1292,16 +841,12 @@ void Win32App::refreshHardware(bool preserveIdentification) {
         tile->devicePath = m_mice[i].devicePath;
         tile->owner = PartitionOwner::Pool;
 
-        tile->hwndControl = CreateWindowExW(0, L"HydraSeatDeviceTileClass", L"",
+        tile->hwndControl = CreateWindowExW(0, L"BUTTON", L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             0, 0, 126, 54, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
 
-        SetWindowLongPtrW(tile->hwndControl, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(tile.get()));
         updateTileAccessibleName(*tile);
-        size_t idx = m_deviceTiles.size();
-        uintptr_t handle = tile->nativeHandle;
         m_deviceTiles.push_back(std::move(tile));
-        if (handle != 0) m_handleToTileIndex[handle] = idx;
     }
 
     // Controllers remain optional Seat hardware, but they use the same explicit
@@ -1317,118 +862,11 @@ void Win32App::refreshHardware(bool preserveIdentification) {
         tile->devicePath = m_controllers[i].devicePath;
         tile->owner = PartitionOwner::Pool;
         tile->hwndControl = CreateWindowExW(
-            0, L"HydraSeatDeviceTileClass", L"",
+            0, L"BUTTON", L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             0, 0, 126, 54, m_hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
-        SetWindowLongPtrW(tile->hwndControl, GWLP_USERDATA,
-                          reinterpret_cast<LONG_PTR>(tile.get()));
         updateTileAccessibleName(*tile);
         m_deviceTiles.push_back(std::move(tile));
-    }
-
-    // ================================================================
-    // Map every Raw Input handle to the matching physical input tile. Composite
-    // collection paths are correlated through SetupAPI/ConfigMgr identities.
-    // ================================================================
-    if (g_diagLog.is_open()) {
-        g_diagLog << L"\n=== TILE REGISTRY ===" << std::endl;
-        for (size_t i = 0; i < m_deviceTiles.size(); i++) {
-            if (!m_deviceTiles[i]) continue;
-            const wchar_t* catStr = (m_deviceTiles[i]->type == DeviceCategory::Display) ? L"DISPLAY" :
-                                    (m_deviceTiles[i]->type == DeviceCategory::Keyboard) ? L"KEYBOARD" :
-                                    (m_deviceTiles[i]->type == DeviceCategory::Mouse) ? L"MOUSE" :
-                                    (m_deviceTiles[i]->type == DeviceCategory::Touchpad) ? L"TOUCHPAD" : L"OTHER";
-            g_diagLog << L"  tile[" << i << L"] " << m_deviceTiles[i]->displayLabel
-                      << L" cat=" << catStr << std::endl;
-        }
-    }
-
-    const auto allRawDevices = win32::enumerateRawInputDevices();
-    if (allRawDevices) {
-        if (g_diagLog.is_open()) {
-            g_diagLog << L"\n=== ALL RAW INPUT DEVICE HANDLES ("
-                      << allRawDevices.devices.size() << L") ===" << std::endl;
-        }
-        for (const auto& rawDev : allRawDevices.devices) {
-            if (rawDev.dwType == RIM_TYPEHID) {
-                const auto details = win32::rawInputDeviceInfo(rawDev.hDevice);
-                if (!details || details->dwType != RIM_TYPEHID ||
-                    !hid::isMouseLikeCollection(
-                        details->hid.usUsagePage, details->hid.usUsage)) {
-                    continue;
-                }
-            }
-            uintptr_t rawHandle = reinterpret_cast<uintptr_t>(rawDev.hDevice);
-
-            const auto rawPath = win32::rawInputDeviceName(rawDev.hDevice);
-            if (!rawPath) {
-                continue;
-            }
-
-            const wchar_t* typeStr = (rawDev.dwType == RIM_TYPEKEYBOARD) ? L"KBD" :
-                                     (rawDev.dwType == RIM_TYPEMOUSE) ? L"MOUSE" :
-                                     (rawDev.dwType == RIM_TYPEHID) ? L"HID" : L"UNK";
-
-            // Skip if already mapped
-            if (m_handleToTileIndex.count(rawHandle) > 0) {
-                if (g_diagLog.is_open()) {
-                    size_t tIdx = m_handleToTileIndex[rawHandle];
-                    g_diagLog << L"  type=" << typeStr
-                              << L" ALREADY -> tile[" << tIdx << L"]";
-                    if (tIdx < m_deviceTiles.size() && m_deviceTiles[tIdx]) {
-                        g_diagLog << L" " << m_deviceTiles[tIdx]->displayLabel;
-                    }
-                    g_diagLog << std::endl;
-                }
-                continue;
-            }
-
-            const auto category = stableIdCategory(rawDev.dwType);
-            const auto rawStableId = category.empty()
-                                         ? std::wstring{}
-                                         : win32::makeStableRawInputDeviceId(category, *rawPath);
-            if (rawStableId.empty()) continue;
-
-            // Find the matching tile by resolved identity and compatible type.
-            bool mapped = false;
-            for (size_t tIdx = 0; tIdx < m_deviceTiles.size(); tIdx++) {
-                auto& tile = m_deviceTiles[tIdx];
-                if (!tile || tile->devicePath.empty()) continue;
-
-                // TYPE CHECK: Only map to tiles compatible with the raw device type
-                if (!isTypeCompatible(rawDev.dwType, tile->type)) continue;
-
-                if (tile->deviceId == rawStableId) {
-                    m_handleToTileIndex[rawHandle] = tIdx;
-                    mapped = true;
-                    if (g_diagLog.is_open()) {
-                        g_diagLog << L"  type=" << typeStr
-                                  << L" MAPPED -> tile[" << tIdx << L"] "
-                                  << tile->displayLabel << std::endl;
-                    }
-                    break;
-                }
-            }
-            if (!mapped && g_diagLog.is_open()) {
-                g_diagLog << L"  type=" << typeStr << L" UNMAPPED" << std::endl;
-            }
-        }
-    } else if (g_diagLog.is_open()) {
-        g_diagLog << L"Raw Input enumeration failed with Win32 error "
-                  << allRawDevices.error << std::endl;
-    }
-
-    if (g_diagLog.is_open()) {
-        g_diagLog << L"\n=== FINAL HANDLE MAP (" << m_handleToTileIndex.size() << L" entries) ===" << std::endl;
-        for (auto& [h, idx] : m_handleToTileIndex) {
-            if (idx < m_deviceTiles.size() && m_deviceTiles[idx]) {
-                (void)h;
-                g_diagLog << L"  mapped -> tile[" << idx << L"] "
-                          << m_deviceTiles[idx]->displayLabel << std::endl;
-            }
-        }
-        g_diagLog << L"\n=== READY FOR INPUT ===" << std::endl;
-        g_diagLog.flush();
     }
 
     if (restorePendingProfile) {
@@ -1822,8 +1260,8 @@ void Win32App::applyManagementSeatPlacement() {
     const auto layouts = display::buildSeatDisplayLayouts(topology, requests);
     control::ManagementSeatConfig placementConfig;
     placementConfig.managementSeatId = state.managementSeatId;
-    placementConfig.preferredWidth = 980;
-    placementConfig.preferredHeight = 750;
+    placementConfig.preferredWidth = 860;
+    placementConfig.preferredHeight = 620;
     const auto placement = control::resolveControlSurfacePlacement(
         placementConfig, layouts.groups, topology);
     if (!placement.valid) return;
@@ -2274,8 +1712,8 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
         auto* limits = reinterpret_cast<MINMAXINFO*>(lParam);
         UINT dpi = GetDpiForWindow(hwnd);
         if (dpi == 0u) dpi = 96u;
-        limits->ptMinTrackSize.x = MulDiv(980, static_cast<int>(dpi), 96);
-        limits->ptMinTrackSize.y = MulDiv(750, static_cast<int>(dpi), 96);
+        limits->ptMinTrackSize.x = MulDiv(860, static_cast<int>(dpi), 96);
+        limits->ptMinTrackSize.y = MulDiv(620, static_cast<int>(dpi), 96);
         return 0;
     }
     if (uMsg == WM_INPUT && g_appInstance) {
@@ -2293,24 +1731,8 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
             g_appInstance->updateDeviceAssignmentUi();
             return 0;
         }
-        // Fallback for injected/synthetic keys (like Asus Gaming Keyboards) that bypass WM_INPUT
-        uint64_t now = GetTickCount64();
-        for (auto& tilePtr : g_appInstance->m_deviceTiles) {
-            if (tilePtr && tilePtr->type == DeviceCategory::Keyboard) {
-                tilePtr->flashUntil = now + 250;
-                InvalidateRect(tilePtr->hwndControl, NULL, FALSE);
-                break; // Flash the first keyboard (usually laptop) and stop
-            }
-        }
         return DefWindowProcW(hwnd, uMsg, wParam, lParam);
-    } else if (uMsg == WM_TIMER && wParam == TIMER_FLASH_RESET && g_appInstance) {
-        uint64_t now = GetTickCount64();
-        for (auto& tilePtr : g_appInstance->m_deviceTiles) {
-            if (tilePtr && tilePtr->flashUntil > 0 && now >= tilePtr->flashUntil) {
-                tilePtr->flashUntil = 0;
-                InvalidateRect(tilePtr->hwndControl, NULL, FALSE);
-            }
-        }
+    } else if (uMsg == WM_TIMER && wParam == TIMER_IDENTIFICATION && g_appInstance) {
         const auto steadyNow = std::chrono::steady_clock::now().time_since_epoch();
         const auto identificationStateBefore =
             g_appInstance->m_identificationCapture.snapshot().state;
@@ -2329,7 +1751,17 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
         g_appInstance->layoutHardwareSetup();
         return 0;
     } else if (uMsg == WM_COMMAND) {
-        int wmId = LOWORD(wParam);
+        const int wmId = LOWORD(wParam);
+        if (g_appInstance && HIWORD(wParam) == BN_CLICKED && lParam != 0) {
+            HWND source = reinterpret_cast<HWND>(lParam);
+            const auto selected = std::find_if(
+                g_appInstance->m_deviceTiles.begin(), g_appInstance->m_deviceTiles.end(),
+                [source](const auto& tile) { return tile && tile->hwndControl == source; });
+            if (selected != g_appInstance->m_deviceTiles.end()) {
+                g_appInstance->selectDeviceTile(selected->get());
+                return 0;
+            }
+        }
         if (wmId == ID_BTN_REFRESH && g_appInstance) {
             g_appInstance->refreshHardware();
         } else if (wmId == ID_BTN_SAVE_PROF && g_appInstance) {
@@ -2363,6 +1795,8 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
             g_appInstance->assignSelectedDevice(PartitionOwner::Player2);
         } else if (wmId == ID_BTN_UNASSIGN_DEVICE && g_appInstance) {
             g_appInstance->assignSelectedDevice(PartitionOwner::Pool);
+        } else if (wmId == ID_BTN_MAKE_PRIMARY && g_appInstance) {
+            g_appInstance->makeSelectedDisplayPrimary();
         } else if (wmId == ID_BTN_IDENTIFY_KEYBOARD && g_appInstance) {
             if (g_appInstance->m_identificationCapture.snapshot().state ==
                 InputIdentificationState::Waiting) {
@@ -2375,7 +1809,7 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
             g_appInstance->beginInputIdentification(InputIdentificationKind::Mouse);
         }
     } else if (uMsg == WM_DESTROY) {
-        KillTimer(hwnd, TIMER_FLASH_RESET);
+        KillTimer(hwnd, TIMER_IDENTIFICATION);
         KillTimer(hwnd, TIMER_HOST_REFRESH);
         if (g_appInstance) g_appInstance->m_hostClient.close();
         PostQuitMessage(0);

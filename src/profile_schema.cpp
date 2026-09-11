@@ -988,10 +988,6 @@ SchemaDiagnostic validateRuntimeSessionSelection(
 
 SchemaDiagnostic makePersistedSeatConfig(const SeatConfig& runtime,
                                          PersistedSeatConfig& persisted) {
-    if (runtime.targetHwnd != 0u) {
-        return diagnostic(SchemaResult::RuntimeOnlyStatePresent,
-                          "legacy SeatConfig contains transient targetHwnd");
-    }
     PersistedSeatConfig candidate;
     candidate.seatId = runtime.seatId;
     candidate.name = runtime.name;
@@ -1023,7 +1019,6 @@ SeatConfig makeRuntimeSeatConfig(const PersistedSeatConfig& persisted) {
     runtime.controllerIds = persisted.controllerIds;
     runtime.audioOutputEndpointId = persisted.audioOutputEndpointId;
     runtime.audioInputEndpointId = persisted.audioInputEndpointId;
-    runtime.targetHwnd = 0u;
     runtime.active = persisted.active;
     return runtime;
 }

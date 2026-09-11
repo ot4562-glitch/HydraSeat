@@ -24,9 +24,6 @@ struct SeatConfig {
     std::vector<std::wstring> controllerIds;
     std::optional<std::wstring> audioOutputEndpointId;
     std::optional<std::wstring> audioInputEndpointId;
-    // Runtime-only window association. Legacy schema v2 keeps a target_hwnd field
-    // for compatibility, but persistence must write zero and loading must discard it.
-    std::uint64_t targetHwnd{0};
     bool active{true};
 
     bool operator==(const SeatConfig&) const = default;
@@ -58,7 +55,6 @@ public:
     bool assignAudioInput(SeatId seatId, const std::wstring& endpointId,
                           bool shareable = false);
     bool unassignAudioInput(SeatId seatId);
-    bool assignTargetWindow(SeatId seatId, std::uint64_t hwnd);
     bool setActive(SeatId seatId, bool active);
 
     // The visible whole-machine control plane belongs to one Management Seat.

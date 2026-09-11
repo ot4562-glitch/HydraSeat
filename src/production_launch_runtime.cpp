@@ -13,6 +13,7 @@
 #include <exception>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -262,7 +263,6 @@ launch::SeatActivationPlan makeActivationPlan(
     launch::SeatActivationPlan result;
     result.seatId = entry.seatId;
     result.seat = seatConfig;
-    result.seat.targetHwnd = 0;
     result.target.gameId = seatPlan.gameId;
     result.target.process.seatId = entry.seatId;
     result.target.process.executablePath = seatPlan.launchRequest.target;
@@ -1381,11 +1381,14 @@ HostProviderPlanRegistry::HostProviderPlanRegistry(
     std::shared_ptr<materialization::ITrustedMaterializationDecisionSource>
         trustedMaterializations,
     std::filesystem::path materializationInstancesRoot)
-    : resources_(resources ? std::move(resources)
-                           : makeProductionSeatActivationResourceFactory()),
+    : resources_(std::move(resources)),
       trustedRequirements_(std::move(trustedRequirements)),
       trustedMaterializations_(std::move(trustedMaterializations)),
       materializationInstancesRoot_(std::move(materializationInstancesRoot)) {
+    if (!resources_) {
+        throw std::invalid_argument(
+            "production activation resource factory must be provided explicitly");
+    }
     if (trustedRequirements_) {
         if (!trustedMaterializations_) {
             trustedMaterializations_ =
@@ -1404,21 +1407,10 @@ HostProviderPlanRegistry::HostProviderPlanRegistry(
     std::shared_ptr<materialization::ITrustedMaterializationDecisionSource>
         trustedMaterializations,
     std::filesystem::path materializationInstancesRoot)
-    : resources_(makeProductionSeatActivationResourceFactory(std::move(services))),
-      trustedRequirements_(std::move(trustedRequirements)),
-      trustedMaterializations_(std::move(trustedMaterializations)),
-      materializationInstancesRoot_(std::move(materializationInstancesRoot)) {
-    if (trustedRequirements_) {
-        if (!trustedMaterializations_) {
-            trustedMaterializations_ =
-                trustedRequirements_->trustedMaterializationDecisionSource();
-        }
-        if (materializationInstancesRoot_.empty()) {
-            materializationInstancesRoot_ =
-                trustedRequirements_->trustedMaterializationInstancesRoot();
-        }
-    }
-}
+    : HostProviderPlanRegistry(
+          makeProductionSeatActivationResourceFactory(std::move(services)),
+          std::move(trustedRequirements), std::move(trustedMaterializations),
+          std::move(materializationInstancesRoot)) {}
 
 void HostProviderPlanRegistry::resetContext(
     std::uint64_t profileFingerprint,
@@ -1610,7 +1602,6 @@ ProviderPlanInstallResult HostProviderPlanRegistry::install(
     stored.providerPlan = request.plan;
     stored.seatPlan = *selected;
     stored.seatConfig = *configured;
-    stored.seatConfig.targetHwnd = 0;
     stored.entry.seatId = request.seatId;
     stored.entry.planFingerprint = request.planFingerprint;
     stored.entry.planRevision = request.planRevision;
@@ -1709,10 +1700,6 @@ HostProviderPlanRegistry::createForBinding(
     }
 
     std::lock_guard lock(mutex_);
-    if (!resources_) {
-        error = "internal invariant violation: production activation resource factory registration is missing";
-        return {};
-    }
     const auto found = std::find_if(plans_.begin(), plans_.end(),
                                     [&](const StoredPlan& stored) {
                                         return stored.entry.seatId == seatId;

@@ -495,12 +495,6 @@ bool WorkspaceManager::unassignAudioInput(SeatId id) {
     return true;
 }
 
-bool WorkspaceManager::assignTargetWindow(SeatId id, std::uint64_t hwnd) {
-    auto it = m_seats.find(id);
-    if (it == m_seats.end()) return false;
-    it->second.targetHwnd = hwnd;
-    return true;
-}
 bool WorkspaceManager::setActive(SeatId id, bool active) {
     auto it = m_seats.find(id);
     if (it == m_seats.end()) return false;
@@ -651,10 +645,9 @@ bool WorkspaceManager::loadFromFile(const std::filesystem::path& filePath) {
             seat.name = fromUtf8(stringOf(required(o, "name")));
             if (seat.name.empty()) throw std::runtime_error("seat name must not be empty");
             seat.active = boolOf(required(o, "active"));
-            // Parse the legacy field to keep schema-v2 compatibility, but never
-            // restore a persisted HWND into live runtime ownership state.
+            // Keep accepting the legacy schema-v2 field, but runtime window
+            // ownership no longer belongs to SeatConfig.
             (void)uintOf(required(o, "target_hwnd"));
-            seat.targetHwnd = 0u;
             seat.displayIds = readStringArray(required(o, "displays"));
             if (const auto& p = required(o, "primary_display"); !std::holds_alternative<std::nullptr_t>(p.value))
                 seat.primaryDisplayId = fromUtf8(stringOf(p));
@@ -678,7 +671,6 @@ bool WorkspaceManager::loadFromFile(const std::filesystem::path& filePath) {
             dest.seatId = id;
             dest.name = seat.name;
             dest.active = seat.active;
-            dest.targetHwnd = seat.targetHwnd;
             for (const auto& d : seat.displayIds)
                 if (!temp.assignDisplay(id, d, seat.primaryDisplayId && normalizeId(*seat.primaryDisplayId) == normalizeId(d)))
                     throw std::runtime_error("display is exclusively owned by another seat");

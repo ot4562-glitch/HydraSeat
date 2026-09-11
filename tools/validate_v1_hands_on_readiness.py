@@ -27,7 +27,7 @@ SIGNAL_IDS = (
     "player_role_contract",
     "durable_persistence_authority",
     "launcher_persistence_wiring",
-    "localized_critical_geometry",
+    "plain_native_management_surface",
     "display_human_identity",
     "intentional_input_identification",
     "steam_non_game_filtering",
@@ -130,7 +130,6 @@ def player_one_guarded(function_text: str) -> bool:
 
 def analyze_repository(root: pathlib.Path) -> list[Check]:
     launcher = read_text(root, "src/launcher_win32.cpp")
-    launcher_layout = read_text(root, "include/hydra/launcher_layout.hpp")
     accessibility_test = read_text(root, "tests/test_ui_accessibility.cpp")
     user_state_header = read_text(root, "include/hydra/launcher_user_state.hpp")
     user_state_source = read_text(root, "src/launcher_user_state.cpp")
@@ -215,26 +214,24 @@ def analyze_repository(root: pathlib.Path) -> list[Check]:
         token in launcher for token in legacy_persistence_tokens
     )
 
-    localized_critical_geometry = (
-        contains_all(launcher_layout, (
-            "struct LauncherTextMeasurements",
-            "struct LauncherTextRequirements",
-            "heroTitleHeight",
-            "heroStatusHeight",
-            "playerLabelWidth",
-            "playerStatusHeight",
-            "launchReasonHeight",
-        )) and
+    plain_native_management_surface = (
         contains_all(launcher, (
-            "measuredTextWidth",
-            "measuredWrappedTextHeight",
-            "launcherTextRequirements",
+            "GetStockObject(DEFAULT_GUI_FONT)",
+            "LBS_NOTIFY | LBS_NOINTEGRALHEIGHT",
+            "BS_DEFPUSHBUTTON | WS_TABSTOP",
+            "MulDiv(720",
+            "MulDiv(500",
         )) and
+        "BS_OWNERDRAW" not in create_controls and
+        "launcherThemeMetrics" not in launcher and
+        "computeLauncherLayout" not in launcher and
         contains_all(accessibility_test, (
             "Locale::EnglishUnitedStates",
             "Locale::KoreanKorea",
             "Locale::ChineseSimplified",
-            "96u, 120u, 144u, 192u",
+            "FocusAction::HardwareSetup",
+            "FocusAction::GameList",
+            "FocusAction::Play",
         ))
     )
 
@@ -354,9 +351,9 @@ def analyze_repository(root: pathlib.Path) -> list[Check]:
             launcher_persistence_wiring,
             "launcher uses launcher_user_state rather than ad-hoc combo/file persistence",
         ),
-        "localized_critical_geometry": (
-            localized_critical_geometry,
-            "critical localized text drives measured width/height geometry across shipped locale/DPI tests",
+        "plain_native_management_surface": (
+            plain_native_management_surface,
+            "management launcher uses native controls and a small functional minimum instead of a custom theme/layout engine",
         ),
         "display_human_identity": (
             display_human_identity,

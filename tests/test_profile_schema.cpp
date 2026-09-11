@@ -174,7 +174,7 @@ void testRoundTripsAndConceptIsolation() {
           "two different Players can bind the same Game through separate setup instances");
 }
 
-void testLegacyRuntimeStateCannotBecomeStableSeatIdentity() {
+void testRuntimeSeatConversionContainsOnlyStableSeatState() {
     SeatConfig runtime;
     runtime.seatId = 1u;
     runtime.name = L"Seat 1";
@@ -183,16 +183,11 @@ void testLegacyRuntimeStateCannotBecomeStableSeatIdentity() {
 
     PersistedSeatConfig persisted;
     check(makePersistedSeatConfig(runtime, persisted).succeeded(),
-          "legacy runtime Seat converts only when transient target HWND is absent");
+          "runtime Seat converts to stable persisted Seat state");
     const auto restored = makeRuntimeSeatConfig(persisted);
-    check(restored.targetHwnd == 0u && restored.seatId == runtime.seatId &&
+    check(restored.seatId == runtime.seatId &&
               restored.displayIds == runtime.displayIds,
-          "persisted Seat restores hardware state with targetHwnd forced to zero");
-
-    runtime.targetHwnd = 0x12345678u;
-    const auto rejected = makePersistedSeatConfig(runtime, persisted);
-    check(rejected.result == SchemaResult::RuntimeOnlyStatePresent,
-          "runtime Seat with targetHwnd fails closed instead of persisting a window identity");
+          "persisted Seat restores stable hardware state without runtime window identity");
 }
 
 void testUnknownSensitiveAndRuntimeFieldsFailClosed() {
@@ -421,7 +416,7 @@ void testDeviceAndGameValidation() {
 
 int main() {
     testRoundTripsAndConceptIsolation();
-    testLegacyRuntimeStateCannotBecomeStableSeatIdentity();
+    testRuntimeSeatConversionContainsOnlyStableSeatState();
     testUnknownSensitiveAndRuntimeFieldsFailClosed();
     testParserAndVersionFailuresAreTransactional();
     testBounds();

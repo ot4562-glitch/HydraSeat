@@ -1,8 +1,6 @@
 #include "hydra/ui_accessibility.hpp"
-#include "hydra/launcher_layout.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 
 namespace hydra::ui {
@@ -55,19 +53,17 @@ LayoutAssessment assessLayout(const LayoutRequest& request) {
     std::uint32_t logicalHeight = 0;
     switch (request.surface) {
         case Surface::ManagementGames:
-            logicalWidth = 860u;
-            logicalHeight = 640u;
+            logicalWidth = 720u;
+            logicalHeight = 500u;
             result.focusOrder = {
-                FocusAction::GameList,
-                FocusAction::AddExecutable,
                 FocusAction::PlayerName,
                 FocusAction::AddPlayer,
-                FocusAction::PlayerRoster,
+                FocusAction::HardwareSetup,
                 FocusAction::Seat1Player,
-                FocusAction::Seat1Game,
                 FocusAction::Seat2Player,
-                FocusAction::Seat2Game,
-                FocusAction::TwoPlayerSetup,
+                FocusAction::GameList,
+                FocusAction::Refresh,
+                FocusAction::AddExecutable,
                 FocusAction::Play,
             };
             break;
@@ -95,46 +91,8 @@ LayoutAssessment assessLayout(const LayoutRequest& request) {
         addIssue(result, AccessibilityIssue::NoInputModality);
     }
 
-    if (request.surface == Surface::ManagementGames &&
-        request.widthPx <= static_cast<std::uint32_t>(INT32_MAX) &&
-        request.heightPx <= static_cast<std::uint32_t>(INT32_MAX)) {
-        const auto layout = computeLauncherLayout(
-            static_cast<int>(request.widthPx), static_cast<int>(request.heightPx), request.dpi);
-        if (!layout.valid ||
-            !rectFitsClient(layout.play, static_cast<int>(request.widthPx),
-                            static_cast<int>(request.heightPx)) ||
-            !rectFitsClient(layout.seat1Player, static_cast<int>(request.widthPx),
-                            static_cast<int>(request.heightPx)) ||
-            !rectFitsClient(layout.seat2Player, static_cast<int>(request.widthPx),
-                            static_cast<int>(request.heightPx))) {
-            addIssue(result, AccessibilityIssue::ViewportOverflow);
-        }
-        const auto metrics = launcherThemeMetrics(request.dpi);
-        if (layout.play.height < metrics.minimumTarget ||
-            layout.refresh.height < metrics.minimumTarget ||
-            layout.addExecutable.height < metrics.minimumTarget) {
-            addIssue(result, AccessibilityIssue::HitTargetTooSmall);
-        }
-    }
-
     if (request.surface != Surface::SeatLauncherCompact) {
         appendSafetyActions(request, result);
-    }
-
-    const std::array<std::pair<FocusAction, TextId>, 6> criticalLabels{{
-        {FocusAction::Play, TextId::Play},
-        {FocusAction::EndPlaying, TextId::EndPlaying},
-        {FocusAction::Reconnect, TextId::Reconnect},
-        {FocusAction::TwoPlayerSetup, TextId::CreateTwoPlayerSetup},
-        {FocusAction::ProtectionConfirmation, TextId::ProtectedExperimentConfirmation},
-        {FocusAction::Recovery, TextId::RecoveryAction},
-    }};
-    for (const auto& [action, label] : criticalLabels) {
-        if (std::find(result.focusOrder.begin(), result.focusOrder.end(), action) !=
-                result.focusOrder.end() &&
-            !actionLabelFits(label, request.locale)) {
-            addIssue(result, AccessibilityIssue::LocalizedActionTooLong);
-        }
     }
 
     result.usable = result.issues.empty();
@@ -143,16 +101,14 @@ LayoutAssessment assessLayout(const LayoutRequest& request) {
 
 std::string_view focusActionName(FocusAction action) noexcept {
     switch (action) {
-        case FocusAction::GameList: return "GameList";
-        case FocusAction::AddExecutable: return "AddExecutable";
         case FocusAction::PlayerName: return "PlayerName";
         case FocusAction::AddPlayer: return "AddPlayer";
-        case FocusAction::PlayerRoster: return "PlayerRoster";
+        case FocusAction::HardwareSetup: return "HardwareSetup";
         case FocusAction::Seat1Player: return "Seat1Player";
-        case FocusAction::Seat1Game: return "Seat1Game";
         case FocusAction::Seat2Player: return "Seat2Player";
-        case FocusAction::Seat2Game: return "Seat2Game";
-        case FocusAction::TwoPlayerSetup: return "TwoPlayerSetup";
+        case FocusAction::GameList: return "GameList";
+        case FocusAction::Refresh: return "Refresh";
+        case FocusAction::AddExecutable: return "AddExecutable";
         case FocusAction::Play: return "Play";
         case FocusAction::EndPlaying: return "EndPlaying";
         case FocusAction::Reconnect: return "Reconnect";
@@ -169,8 +125,6 @@ std::string_view accessibilityIssueName(AccessibilityIssue issue) noexcept {
         case AccessibilityIssue::NoInputModality: return "NoInputModality";
         case AccessibilityIssue::CriticalActionHidden: return "CriticalActionHidden";
         case AccessibilityIssue::LocalizedActionTooLong: return "LocalizedActionTooLong";
-        case AccessibilityIssue::ViewportOverflow: return "ViewportOverflow";
-        case AccessibilityIssue::HitTargetTooSmall: return "HitTargetTooSmall";
     }
     return "Unknown";
 }

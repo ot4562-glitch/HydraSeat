@@ -248,26 +248,18 @@ void testWorkspaceManager() {
 
     check(mgr.assignAudioOutput(seat1, L"Audio:Headset"), "audio output assignment succeeds");
     check(mgr.assignAudioInput(seat1, L"Audio:Mic"), "audio input assignment succeeds");
-    check(mgr.assignTargetWindow(seat1, 0x12345678u),
-          "runtime target window can be associated before persistence");
 
     const auto* config = mgr.getSeat(seat1);
     check(config != nullptr, "created seat can be retrieved");
     check(config->displayIds.size() == 2, "seat retains multiple displays");
     check(config->primaryDisplayId && *config->primaryDisplayId == L"Display:Samsung",
           "explicit primary display is retained");
-    check(config->targetHwnd == 0x12345678u,
-          "runtime target window remains available before persistence");
 
     check(mgr.saveToFile(roundTripPath), "seat profile saves as JSON");
     hydra::WorkspaceManager loaded;
     check(loaded.loadFromFile(roundTripPath), "saved seat profile loads successfully");
-    auto expectedPersistedSeats = mgr.getAllSeats();
-    for (auto& seat : expectedPersistedSeats) seat.targetHwnd = 0u;
-    check(loaded.getAllSeats() == expectedPersistedSeats,
-          "save/load preserves stable seat configuration while discarding runtime HWND identity");
-    check(loaded.getSeat(seat1) != nullptr && loaded.getSeat(seat1)->targetHwnd == 0u,
-          "saved runtime target HWND is never restored from the profile");
+    check(loaded.getAllSeats() == mgr.getAllSeats(),
+          "save/load preserves stable seat configuration without runtime window state");
     check(loaded.managementSeatId() == seat2,
           "save/load preserves the explicit Management Seat");
     check(loaded.isDeviceShareable(hydra::SeatDeviceType::Keyboard, L"Keyboard:Shared"),
@@ -300,8 +292,9 @@ void testWorkspaceManager() {
     hydra::WorkspaceManager legacyLoaded;
     check(legacyLoaded.loadFromFile(legacyRuntimePath),
           "historical schema-v2 profile with a nonzero HWND still parses");
-    check(legacyLoaded.getSeat(1) != nullptr && legacyLoaded.getSeat(1)->targetHwnd == 0u,
-          "historical persisted HWND is discarded instead of becoming live ownership state");
+    check(legacyLoaded.getSeat(1) != nullptr &&
+              legacyLoaded.getSeat(1)->name == L"Legacy Seat",
+          "historical persisted HWND is ignored while stable Seat data is restored");
 
     const auto beforeMalformed = loaded.getAllSeats();
     {
