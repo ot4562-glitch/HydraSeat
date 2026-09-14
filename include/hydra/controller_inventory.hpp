@@ -36,6 +36,8 @@ enum class PairingStatus : std::uint8_t {
     RuntimeSlotOutOfRange = 5,
     RuntimeSourceNotFound = 6,
     RuntimeSourceDisconnected = 7,
+    PairingGestureNotDetected = 8,
+    PairingGestureAmbiguous = 9,
 };
 
 struct PairingResult {
@@ -53,12 +55,8 @@ private:
     std::array<std::uint64_t, kXInputSlotCount> generations_{};
 };
 
-// Stateless convenience scan. Runtime code that needs reconnect generations
-// should keep one ControllerInventory instance alive and call scan().
 InventorySnapshot scanControllerSources() noexcept;
 
-// Explicitly pairs one selected stable physical identity with one current XInput
-// slot. No physical-to-XInput inference is performed.
 PairingResult pairPhysicalControllerToXInput(
     std::uint32_t seatId,
     const std::wstring& persistentControllerId,
