@@ -85,6 +85,7 @@ add_executable(hydra_tests
     tests/test_hydra.cpp
     tests/test_controller_identity.cpp
     tests/test_controller_pairing.cpp
+    tests/test_controller_virtual_xinput.cpp
     ${HYDRA_SOURCES}
     ${HYDRA_HEADERS}
 )
