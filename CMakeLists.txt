@@ -41,6 +41,7 @@ set(HYDRA_SOURCES
     src/controller_identity.cpp
     src/controller_inventory.cpp
     src/controller_io.cpp
+    src/controller_pairing.cpp
     src/game_launcher.cpp
     src/gui_win32.cpp
     ${UI_SOURCES}
@@ -55,6 +56,7 @@ set(HYDRA_HEADERS
     include/hydra/controller_identity.hpp
     include/hydra/controller_inventory.hpp
     include/hydra/controller_io.hpp
+    include/hydra/controller_pairing.hpp
     include/hydra/game_launcher.hpp
     include/hydra/gui_win32.hpp
     ${UI_HEADERS}
