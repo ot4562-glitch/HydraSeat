@@ -145,6 +145,23 @@ if(WIN32)
     set_target_properties(
         hydra_xinput_adapter PROPERTIES OUTPUT_NAME "hydra_xinput_adapter")
     add_dependencies(xinput_adapter_exports hydra_xinput_adapter)
+
+    add_executable(game_launcher_child
+        tests/game_launcher_child.cpp
+        src/xinput_adapter_session.cpp
+    )
+
+    add_executable(game_launcher_process_test
+        tests/test_game_launcher_process.cpp
+        src/game_launcher.cpp
+        src/runtime_authority.cpp
+        src/controller_identity.cpp
+        src/controller_inventory.cpp
+        src/controller_io.cpp
+        src/controller_virtual_xinput.cpp
+    )
+    target_link_libraries(game_launcher_process_test PRIVATE ${WIN32_LIBS})
+    add_dependencies(game_launcher_process_test game_launcher_child)
 endif()
 
 # Test Suite Executable Target
@@ -212,5 +229,9 @@ if(WIN32)
         COMMAND xinput_adapter_process_isolation
                 $<TARGET_FILE:xinput_abi_probe_game>
                 $<TARGET_FILE:hydra_xinput_adapter>
+    )
+    add_test(
+        NAME GameLauncherProcessOwnership
+        COMMAND game_launcher_process_test $<TARGET_FILE:game_launcher_child>
     )
 endif()
