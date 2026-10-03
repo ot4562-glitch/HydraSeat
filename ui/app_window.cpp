@@ -28,6 +28,8 @@ AppWindow::AppWindow(QWidget* parent)
     setupUi();
 
     QTimer::singleShot(0, this, [this]() {
+        std::string hostError;
+        (void)m_hostControl->ensureConnected(&hostError);
         m_enginePoller->startPolling(2000);
     });
 }

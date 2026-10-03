@@ -142,8 +142,8 @@ void SeatsPage::updateState(const EngineStatePayload& payload) {
     m_lastPayload = payload;
     updateSeatData(1, m_seat1);
     updateSeatData(2, m_seat2);
-    populateCombos(m_seat1);
-    populateCombos(m_seat2);
+    populateCombos(1, m_seat1);
+    populateCombos(2, m_seat2);
 }
 
 void SeatsPage::updateSeatData(std::uint32_t seatId, SeatWidgets& w) {
@@ -187,11 +187,59 @@ void SeatsPage::updateSeatData(std::uint32_t seatId, SeatWidgets& w) {
     }
 }
 
-void SeatsPage::populateCombos(SeatWidgets& w) {
-    if (w.displayCombo->count() == 0) w.displayCombo->addItem("Missing Host Capability");
-    if (w.keyboardCombo->count() == 0) w.keyboardCombo->addItem("Missing Host Capability");
-    if (w.mouseCombo->count() == 0) w.mouseCombo->addItem("Missing Host Capability");
-    if (w.audioCombo->count() == 0) w.audioCombo->addItem("Missing Host Capability");
+void SeatsPage::populateCombos(
+    std::uint32_t seatId,
+    SeatWidgets& w) {
+    const auto assigned =
+        seatId > 0 && seatId <= m_lastPayload.seatHardware.size()
+            ? m_lastPayload.seatHardware[seatId - 1u]
+            : std::nullopt;
+
+    const auto populateDeviceCombo =
+        [](QComboBox* combo,
+           const std::vector<hydra::DeviceInfo>& devices,
+           const std::string& assignedIdUtf8) {
+            if (!combo || combo->hasFocus()) return;
+
+            const QString previous = combo->currentData().toString();
+            const QString assignedId =
+                QString::fromUtf8(
+                    assignedIdUtf8.data(),
+                    static_cast<qsizetype>(assignedIdUtf8.size()));
+
+            combo->blockSignals(true);
+            combo->clear();
+            combo->addItem("-- None --", QString());
+            for (const auto& device : devices) {
+                combo->addItem(
+                    QString::fromStdWString(device.name),
+                    QString::fromStdWString(device.id));
+            }
+
+            const QString desired =
+                !assignedId.isEmpty() ? assignedId : previous;
+            const int index = combo->findData(desired);
+            combo->setCurrentIndex(index >= 0 ? index : 0);
+            combo->blockSignals(false);
+        };
+
+    populateDeviceCombo(
+        w.displayCombo,
+        m_lastPayload.displays,
+        assigned ? assigned->displayIdUtf8 : std::string{});
+    populateDeviceCombo(
+        w.keyboardCombo,
+        m_lastPayload.keyboards,
+        assigned ? assigned->keyboardIdUtf8 : std::string{});
+    populateDeviceCombo(
+        w.mouseCombo,
+        m_lastPayload.mice,
+        assigned ? assigned->mouseIdUtf8 : std::string{});
+
+    if (w.audioCombo->count() == 0) {
+        w.audioCombo->addItem("Manage in Audio Routing");
+        w.audioCombo->setDisabled(true);
+    }
 
     if (w.ctrlPhysCombo->hasFocus() || w.ctrlSrcCombo->hasFocus()) return;
 
@@ -204,21 +252,29 @@ void SeatsPage::populateCombos(SeatWidgets& w) {
     w.ctrlSrcCombo->clear();
 
     w.ctrlPhysCombo->addItem("-- None --", QString());
-    for (const auto& phys : m_lastPayload.controllerInventory.physicalControllers) {
-        w.ctrlPhysCombo->addItem(QString::fromStdWString(phys.displayName), QString::fromStdWString(phys.persistentId));
+    for (const auto& phys :
+         m_lastPayload.controllerInventory.physicalControllers) {
+        w.ctrlPhysCombo->addItem(
+            QString::fromStdWString(phys.displayName),
+            QString::fromStdWString(phys.persistentId));
     }
 
     w.ctrlSrcCombo->addItem("-- None --", QVariant());
     for (const auto& src : m_lastPayload.controllerInventory.sources) {
         if (!src.connected || !src.runtimeXInputSlot) continue;
-        w.ctrlSrcCombo->addItem(QString("%1 (XInput %2)").arg(QString::fromStdWString(src.displayName)).arg(static_cast<int>(*src.runtimeXInputSlot)), QVariant::fromValue(static_cast<int>(*src.runtimeXInputSlot)));
+        w.ctrlSrcCombo->addItem(
+            QString("%1 (XInput %2)")
+                .arg(QString::fromStdWString(src.displayName))
+                .arg(static_cast<int>(*src.runtimeXInputSlot)),
+            QVariant::fromValue(
+                static_cast<int>(*src.runtimeXInputSlot)));
     }
 
     const int pIdx = w.ctrlPhysCombo->findData(prevPhys);
-    if (pIdx > 0) w.ctrlPhysCombo->setCurrentIndex(pIdx);
+    if (pIdx >= 0) w.ctrlPhysCombo->setCurrentIndex(pIdx);
 
     const int sIdx = w.ctrlSrcCombo->findData(prevSrc);
-    if (sIdx > 0) w.ctrlSrcCombo->setCurrentIndex(sIdx);
+    if (sIdx >= 0) w.ctrlSrcCombo->setCurrentIndex(sIdx);
 
     w.ctrlPhysCombo->blockSignals(false);
     w.ctrlSrcCombo->blockSignals(false);
@@ -234,28 +290,67 @@ void SeatsPage::onConfigureRequested(std::uint32_t seatId) {
         return;
     }
 
-    const QString physId = w.ctrlPhysCombo->currentData().toString();
-    bool slotOk = false;
-    const int slot = w.ctrlSrcCombo->currentData().toInt(&slotOk);
+    const auto utf8Data = [](QComboBox* combo) {
+        return combo->currentData().toString().toUtf8().toStdString();
+    };
 
-    if (physId.isEmpty() || !slotOk || slot < 0 || slot >= 4) {
-        w.feedbackLabel->setText("Select both a physical controller and a connected XInput source.");
-        w.feedbackLabel->setStyleSheet("font-size: 12px; color: #B5B5B5; border: none;");
+    std::string error;
+    const auto hardware = m_hostControl->assignSeatHardware(
+        seatId,
+        utf8Data(w.displayCombo),
+        utf8Data(w.keyboardCombo),
+        utf8Data(w.mouseCombo),
+        &error);
+    if (!hardware) {
+        w.feedbackLabel->setText(
+            QString("Hardware assignment failed: %1")
+                .arg(QString::fromStdString(error)));
+        w.feedbackLabel->setStyleSheet(
+            "font-size: 12px; color: #E10600; border: none;");
         w.feedbackLabel->setVisible(true);
         return;
     }
 
-    const QByteArray latinId = physId.toLatin1();
-    std::string error;
-    const auto result = m_hostControl->pairController(seatId, latinId.toStdString(), static_cast<std::uint8_t>(slot), &error);
-    
-    if (!result) {
-        w.feedbackLabel->setText(QString("Pairing failed: %1").arg(QString::fromStdString(error)));
-        w.feedbackLabel->setStyleSheet("font-size: 12px; color: #E10600; border: none;");
-    } else {
-        w.feedbackLabel->setText("Controller paired. Other hardware assignments require backend capabilities not currently exposed.");
-        w.feedbackLabel->setStyleSheet("font-size: 12px; color: #B5B5B5; border: none;");
+    const QString physId = w.ctrlPhysCombo->currentData().toString();
+    const QVariant slotData = w.ctrlSrcCombo->currentData();
+    const bool wantsController =
+        !physId.isEmpty() || slotData.isValid();
+
+    if (wantsController) {
+        bool slotOk = false;
+        const int slot = slotData.toInt(&slotOk);
+        if (physId.isEmpty() || !slotOk || slot < 0 || slot >= 4) {
+            w.feedbackLabel->setText(
+                "Seat hardware saved. Select both controller fields to pair a controller.");
+            w.feedbackLabel->setStyleSheet(
+                "font-size: 12px; color: #B5B5B5; border: none;");
+            w.feedbackLabel->setVisible(true);
+            return;
+        }
+
+        const auto controllerId = physId.toUtf8().toStdString();
+        const auto paired = m_hostControl->pairController(
+            seatId,
+            controllerId,
+            static_cast<std::uint8_t>(slot),
+            &error);
+        if (!paired) {
+            w.feedbackLabel->setText(
+                QString("Seat hardware saved, but controller pairing failed: %1")
+                    .arg(QString::fromStdString(error)));
+            w.feedbackLabel->setStyleSheet(
+                "font-size: 12px; color: #E10600; border: none;");
+            w.feedbackLabel->setVisible(true);
+            return;
+        }
     }
+
+    w.feedbackLabel->setText(
+        wantsController
+            ? "Seat hardware saved and controller paired."
+            : "Seat hardware saved.");
+    w.feedbackLabel->setStyleSheet(
+        "font-size: 12px; color: #B5B5B5; border: none;");
     w.feedbackLabel->setVisible(true);
 }
 

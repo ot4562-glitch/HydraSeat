@@ -34,6 +34,17 @@ public:
     std::optional<hostipc::HostSnapshot> releaseUiLease(
         std::uint32_t seatId,
         std::string* error = nullptr);
+    std::optional<hostipc::HardwareInventory> hardwareInventory(
+        std::string* error = nullptr);
+    std::optional<hostipc::SeatHardwareAssignment> seatHardware(
+        std::uint32_t seatId,
+        std::string* error = nullptr);
+    std::optional<hostipc::SeatHardwareAssignment> assignSeatHardware(
+        std::uint32_t seatId,
+        const std::string& displayIdUtf8,
+        const std::string& keyboardIdUtf8,
+        const std::string& mouseIdUtf8,
+        std::string* error = nullptr);
     std::optional<hostipc::HostSnapshot> pairController(
         std::uint32_t seatId,
         const std::string& persistentControllerId,

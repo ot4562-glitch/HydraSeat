@@ -408,6 +408,17 @@ add_executable(startup_policy_tests tests/test_startup_policy.cpp)
 target_link_libraries(startup_policy_tests PRIVATE hydra_recovery_core)
 add_test(NAME StartupPolicyTests COMMAND startup_policy_tests)
 
+# Canonical persisted Seat/profile schema is shared by the host configuration
+# store and the broader provider/profile foundation. Keep one implementation
+# target so schema validation/encoding cannot drift between those consumers.
+add_library(hydra_profile_schema STATIC
+    src/profile_schema.cpp
+)
+target_include_directories(hydra_profile_schema PUBLIC include)
+if(WIN32)
+    target_link_libraries(hydra_profile_schema PUBLIC ${WIN32_LIBS})
+endif()
+
 # Canonical host authority boundary. This target owns SessionController behind a
 # pointer-free, bounded protocol model; transport and launch mutation land in
 # dependent backend PRs.
@@ -419,8 +430,11 @@ add_library(hydra_host_authority STATIC
     src/controller_inventory.cpp
     src/controller_io.cpp
     src/controller_virtual_xinput.cpp
+    src/hardware_detector.cpp
+    src/seat_hardware_store.cpp
 )
 target_include_directories(hydra_host_authority PUBLIC include)
+target_link_libraries(hydra_host_authority PUBLIC hydra_profile_schema)
 if(WIN32)
     target_link_libraries(hydra_host_authority PUBLIC ${WIN32_LIBS})
 endif()
@@ -436,6 +450,10 @@ add_test(NAME RuntimeHostV1Tests COMMAND runtime_host_v1_tests)
 add_executable(runtime_lease_authority_tests tests/test_runtime_leases.cpp)
 target_link_libraries(runtime_lease_authority_tests PRIVATE hydra_host_authority)
 add_test(NAME RuntimeLeaseAuthorityTests COMMAND runtime_lease_authority_tests)
+
+add_executable(seat_hardware_store_tests tests/test_seat_hardware_store.cpp)
+target_link_libraries(seat_hardware_store_tests PRIVATE hydra_host_authority)
+add_test(NAME SeatHardwareStoreTests COMMAND seat_hardware_store_tests)
 
 # Host-owned process launch boundary. GameLauncher delegates every runtime
 # mutation to RuntimeHost in production, while retaining a narrow
@@ -567,13 +585,13 @@ add_test(NAME AudioRoutingContractTests COMMAND audio_routing_contract_tests)
 # Canonical Seat/profile/provider foundation. This activates the previously
 # preserved backend schema/provider code without changing the legacy UI model.
 add_library(hydra_profile_provider_foundation STATIC
-    src/profile_schema.cpp
     src/game_catalog.cpp
     src/provider_adapter.cpp
     src/custom_executable_provider.cpp
     src/steam_provider.cpp
 )
 target_include_directories(hydra_profile_provider_foundation PUBLIC include)
+target_link_libraries(hydra_profile_provider_foundation PUBLIC hydra_profile_schema)
 if(WIN32)
     target_link_libraries(hydra_profile_provider_foundation PUBLIC ${WIN32_LIBS})
 endif()
@@ -1108,7 +1126,6 @@ add_test(NAME SetupPackageBackendTests COMMAND setup_package_backend_tests)
 
 add_executable(hydra_hardware_detect
     src/hardware_detect_cli.cpp
-    src/hardware_detector.cpp
 )
 target_include_directories(hydra_hardware_detect PRIVATE include)
 target_link_libraries(hydra_hardware_detect PRIVATE

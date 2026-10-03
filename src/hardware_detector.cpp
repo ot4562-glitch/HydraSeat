@@ -1,5 +1,6 @@
 #include "hydra/hardware_detector.hpp"
 #include "hydra/controller_inventory.hpp"
+#include "hydra/hardware_identity.hpp"
 
 #include <iostream>
 #include <vector>
@@ -55,7 +56,11 @@ std::vector<DeviceInfo> HardwareDetector::detectDisplays() {
     while (EnumDisplayDevicesW(NULL, deviceNum, &dd, 0)) {
         if (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) {
             DeviceInfo info;
-            info.id = dd.DeviceName;
+            info.id = hardware::makeStableDeviceId(
+                L"display", L"", L"", dd.DeviceID);
+            if (info.id.empty()) {
+                info.id = L"display:" + hardware::normalizeDevicePath(dd.DeviceName);
+            }
             info.name = dd.DeviceString;
             info.devicePath = dd.DeviceID;
             info.type = DeviceType::Display;
@@ -84,10 +89,12 @@ std::vector<DeviceInfo> HardwareDetector::detectKeyboards() {
 
     std::unordered_set<std::wstring> seenBaseIDs;
 
-    // First pass: collect base IDs of all MOUSE/HID devices to detect combo devices
+    // Generic HID collections include consumer-control interfaces on many real
+    // keyboards. Only actual Raw Input mouse collections participate in the
+    // combo-device filter; otherwise legitimate external keyboards disappear.
     std::unordered_set<std::wstring> mouseBaseIDs;
     for (const auto& dev : rawList) {
-        if (dev.dwType == RIM_TYPEMOUSE || dev.dwType == RIM_TYPEHID) {
+        if (dev.dwType == RIM_TYPEMOUSE) {
             std::wstring devPath;
             UINT nameSize = 0;
             GetRawInputDeviceInfoW(dev.hDevice, RIDI_DEVICENAME, NULL, &nameSize);
@@ -149,6 +156,9 @@ std::vector<DeviceInfo> HardwareDetector::detectKeyboards() {
             info.type = DeviceType::Keyboard;
             info.nativeHandle = reinterpret_cast<uintptr_t>(dev.hDevice);
             info.devicePath = devPath;
+            info.id = hardware::makeStableDeviceId(
+                L"keyboard", L"", L"", devPath);
+            if (info.id.empty()) continue;
 
             if (pathUpper.find(L"ACPI") != std::wstring::npos || pathUpper.find(L"MSFT0001") != std::wstring::npos || pathUpper.find(L"I8042PRT") != std::wstring::npos) {
                 info.name = L"Laptop Internal Keyboard";
@@ -158,7 +168,6 @@ std::vector<DeviceInfo> HardwareDetector::detectKeyboards() {
                 info.name = L"Keyboard";
             }
 
-            info.id = L"Keyboard_unsorted";
             result.push_back(info);
         }
     }
@@ -182,7 +191,6 @@ std::vector<DeviceInfo> HardwareDetector::detectKeyboards() {
         } else {
             info.name = L"Keyboard #" + std::to_wstring(kbdCount);
         }
-        info.id = L"Keyboard_" + std::to_wstring(kbdCount);
     }
 #endif
 
@@ -207,7 +215,7 @@ std::vector<DeviceInfo> HardwareDetector::detectMice() {
     int padCount = 0;
 
     for (const auto& dev : rawList) {
-        if (dev.dwType == RIM_TYPEMOUSE || dev.dwType == RIM_TYPEHID) {
+        if (dev.dwType == RIM_TYPEMOUSE) {
             std::wstring devPath;
             UINT nameSize = 0;
             GetRawInputDeviceInfoW(dev.hDevice, RIDI_DEVICENAME, NULL, &nameSize);
@@ -252,13 +260,14 @@ std::vector<DeviceInfo> HardwareDetector::detectMice() {
             info.type = DeviceType::Mouse;
             info.nativeHandle = reinterpret_cast<uintptr_t>(dev.hDevice);
             info.devicePath = devPath;
+            info.id = hardware::makeStableDeviceId(
+                L"mouse", L"", L"", devPath);
+            if (info.id.empty()) continue;
 
             if (isTouchpad) {
                 info.name = L"Laptop Touchpad";
-                info.id = L"Touchpad_unsorted";
             } else {
                 info.name = L"USB External Mouse";
-                info.id = L"Mouse_unsorted";
             }
 
             result.push_back(info);
@@ -280,11 +289,9 @@ std::vector<DeviceInfo> HardwareDetector::detectMice() {
         if (info.name.find(L"Touchpad") != std::wstring::npos) {
             padCount++;
             info.name = L"Laptop Touchpad";
-            info.id = L"Touchpad_" + std::to_wstring(padCount);
         } else {
             mouseCount++;
             info.name = L"USB External Mouse #" + std::to_wstring(mouseCount);
-            info.id = L"Mouse_" + std::to_wstring(mouseCount);
         }
     }
 #endif

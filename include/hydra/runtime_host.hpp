@@ -2,12 +2,18 @@
 
 #include "hydra/audio_router.hpp"
 #include "hydra/host_protocol.hpp"
+#include "hydra/hardware_detector.hpp"
 #include "hydra/runtime_authority.hpp"
+#include "hydra/seat_hardware_configuration.hpp"
+#include "hydra/seat_hardware_store.hpp"
 
+#include <array>
 #include <cstdint>
+#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace hydra::runtime {
 
@@ -17,7 +23,10 @@ namespace hydra::runtime {
 // cross-Seat serialization remain coherent.
 class RuntimeHost final {
 public:
-    RuntimeHost() noexcept = default;
+    RuntimeHost() = default;
+    explicit RuntimeHost(std::filesystem::path seatConfigPath);
+
+    bool loadPersistentSeatHardware(std::string* error = nullptr);
 
     RuntimeHost(const RuntimeHost&) = delete;
     RuntimeHost& operator=(const RuntimeHost&) = delete;
@@ -25,6 +34,13 @@ public:
     hostipc::HostSnapshot snapshot() const noexcept;
     std::optional<SeatRuntimeSnapshot> seatSnapshot(std::uint32_t seatId) const noexcept;
     controller::InventorySnapshot controllerInventorySnapshot() noexcept;
+    std::vector<DeviceInfo> hardwareInventory();
+    std::optional<SeatHardwareConfiguration> seatHardwareConfiguration(
+        std::uint32_t seatId) const;
+    bool configureSeatHardware(
+        const ActivationToken& uiLease,
+        const SeatHardwareConfiguration& configuration,
+        std::string* error = nullptr);
     std::optional<std::uint32_t> seatForProcess(
         const ProcessIdentity& process) const noexcept;
 
@@ -68,6 +84,12 @@ private:
     mutable std::mutex mutex_;
     SessionController controller_;
     controller::ControllerInventory controllerInventory_;
+    HardwareDetector hardwareDetector_;
+    SeatHardwareConfigurations hardwareConfigurations_{{
+        SeatHardwareConfiguration{1},
+        SeatHardwareConfiguration{2},
+    }};
+    std::optional<SeatHardwareStore> seatHardwareStore_;
     std::uint64_t authorityRevision_{1};
 };
 

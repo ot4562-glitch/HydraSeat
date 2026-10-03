@@ -55,7 +55,7 @@ private:
     void updateSeatData(
         std::uint32_t seatId,
         SeatWidgets& widgets);
-    void populateCombos(SeatWidgets& widgets);
+    void populateCombos(std::uint32_t seatId, SeatWidgets& widgets);
     const hydra::hostipc::SeatSnapshot* seatSnapshot(
         std::uint32_t seatId) const noexcept;
 };

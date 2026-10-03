@@ -1,5 +1,8 @@
 #include "hydra/runtime_host.hpp"
 
+#include <iterator>
+#include <utility>
+
 namespace hydra::runtime {
 
 namespace {
@@ -22,6 +25,23 @@ hostipc::SeatSnapshot toHostSnapshot(const SeatRuntimeSnapshot& snapshot) noexce
 
 } // namespace
 
+RuntimeHost::RuntimeHost(std::filesystem::path seatConfigPath) {
+    seatHardwareStore_.emplace(std::move(seatConfigPath));
+}
+
+bool RuntimeHost::loadPersistentSeatHardware(std::string* error) {
+    std::lock_guard lock(mutex_);
+    if (!seatHardwareStore_) return true;
+
+    auto candidate = hardwareConfigurations_;
+    if (!seatHardwareStore_->load(candidate, error)) {
+        return false;
+    }
+
+    hardwareConfigurations_ = std::move(candidate);
+    return true;
+}
+
 hostipc::HostSnapshot RuntimeHost::snapshot() const noexcept {
     std::lock_guard lock(mutex_);
     hostipc::HostSnapshot result;
@@ -42,6 +62,113 @@ std::optional<SeatRuntimeSnapshot> RuntimeHost::seatSnapshot(
 controller::InventorySnapshot RuntimeHost::controllerInventorySnapshot() noexcept {
     std::lock_guard lock(mutex_);
     return controllerInventory_.scan();
+}
+
+std::vector<DeviceInfo> RuntimeHost::hardwareInventory() {
+    std::lock_guard lock(mutex_);
+
+    std::vector<DeviceInfo> result;
+    const auto append = [&result](std::vector<DeviceInfo> devices) {
+        result.insert(
+            result.end(),
+            std::make_move_iterator(devices.begin()),
+            std::make_move_iterator(devices.end()));
+    };
+
+    append(hardwareDetector_.detectDisplays());
+    append(hardwareDetector_.detectKeyboards());
+    append(hardwareDetector_.detectMice());
+    append(hardwareDetector_.detectControllers());
+    return result;
+}
+
+std::optional<SeatHardwareConfiguration>
+RuntimeHost::seatHardwareConfiguration(std::uint32_t seatId) const {
+    if (seatId == 0 || seatId > hardwareConfigurations_.size()) {
+        return std::nullopt;
+    }
+    std::lock_guard lock(mutex_);
+    return hardwareConfigurations_[seatId - 1u];
+}
+
+bool RuntimeHost::configureSeatHardware(
+    const ActivationToken& uiLease,
+    const SeatHardwareConfiguration& configuration,
+    std::string* error) {
+    const auto fail = [error](std::string message) {
+        if (error) *error = std::move(message);
+        return false;
+    };
+
+    if (uiLease.leaseClass != LeaseClass::UiConfiguration ||
+        configuration.seatId != uiLease.seatId ||
+        configuration.seatId == 0 ||
+        configuration.seatId > hardwareConfigurations_.size()) {
+        return fail("invalid Seat hardware mutation authority");
+    }
+
+    std::lock_guard lock(mutex_);
+    const auto seat = controller_.snapshot(uiLease.seatId);
+    if (!seat || !seat->uiLeaseActive ||
+        seat->generation != uiLease.generation) {
+        return fail("Seat UI lease is stale or no longer owned");
+    }
+
+    const auto displays = hardwareDetector_.detectDisplays();
+    const auto keyboards = hardwareDetector_.detectKeyboards();
+    const auto mice = hardwareDetector_.detectMice();
+
+    const auto contains = [](const std::vector<DeviceInfo>& devices,
+                             const std::wstring& stableId) {
+        if (stableId.empty()) return true;
+        for (const auto& device : devices) {
+            if (device.id == stableId) return true;
+        }
+        return false;
+    };
+
+    if (!contains(displays, configuration.displayId)) {
+        return fail("selected display is no longer connected");
+    }
+    if (!contains(keyboards, configuration.keyboardId)) {
+        return fail("selected keyboard is no longer connected");
+    }
+    if (!contains(mice, configuration.mouseId)) {
+        return fail("selected mouse is no longer connected");
+    }
+
+    const auto otherIndex = configuration.seatId == 1u ? 1u : 0u;
+    const auto& other = hardwareConfigurations_[otherIndex];
+    const auto conflicts = [](const std::wstring& requested,
+                              const std::wstring& existing) {
+        return !requested.empty() && requested == existing;
+    };
+    if (conflicts(configuration.displayId, other.displayId)) {
+        return fail("selected display already belongs to the other Seat");
+    }
+    if (conflicts(configuration.keyboardId, other.keyboardId)) {
+        return fail("selected keyboard already belongs to the other Seat");
+    }
+    if (conflicts(configuration.mouseId, other.mouseId)) {
+        return fail("selected mouse already belongs to the other Seat");
+    }
+
+    const auto index = configuration.seatId - 1u;
+    if (hardwareConfigurations_[index] == configuration) return true;
+
+    auto candidate = hardwareConfigurations_;
+    candidate[index] = configuration;
+
+    // Persist before publishing the new in-memory state. A failed disk write
+    // must not leave the live authority ahead of the last durable config.
+    if (seatHardwareStore_ &&
+        !seatHardwareStore_->save(candidate, error)) {
+        return false;
+    }
+
+    hardwareConfigurations_ = std::move(candidate);
+    noteMutationLocked(true);
+    return true;
 }
 
 std::optional<std::uint32_t> RuntimeHost::seatForProcess(

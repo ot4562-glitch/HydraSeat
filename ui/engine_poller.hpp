@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QThread>
 #include <QTimer>
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,6 +26,8 @@ struct EngineStatePayload {
     std::vector<hydra::windows::AudioSessionObservation> audioSessions;
     hydra::controller::InventorySnapshot controllerInventory;
     std::optional<hydra::hostipc::HostSnapshot> hostSnapshot;
+    std::array<std::optional<hydra::hostipc::SeatHardwareAssignment>,
+               hydra::hostipc::kHostSeatCount> seatHardware{};
     std::string hostError;
     bool hostConnected{false};
     bool hardwareError{false};

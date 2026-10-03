@@ -75,6 +75,17 @@ public:
         std::uint32_t seatId,
         std::uint32_t timeoutMs = kDefaultHostPipeTimeoutMs,
         std::string* error = nullptr);
+    std::optional<HardwareInventory> getHardwareInventory(
+        std::uint32_t timeoutMs = kDefaultHostPipeTimeoutMs,
+        std::string* error = nullptr);
+    std::optional<SeatHardwareAssignment> getSeatHardware(
+        std::uint32_t seatId,
+        std::uint32_t timeoutMs = kDefaultHostPipeTimeoutMs,
+        std::string* error = nullptr);
+    std::optional<SeatHardwareAssignment> assignSeatHardware(
+        const SeatHardwareAssignment& assignment,
+        std::uint32_t timeoutMs = kDefaultHostPipeTimeoutMs,
+        std::string* error = nullptr);
     std::optional<HostSnapshot> pairController(
         std::uint32_t seatId,
         const std::string& persistentControllerId,

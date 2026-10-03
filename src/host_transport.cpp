@@ -46,6 +46,20 @@ std::wstring widenAscii(std::string_view value) {
     return std::wstring(value.begin(), value.end());
 }
 
+HardwareDeviceKind toProtocolHardwareKind(DeviceType type) noexcept {
+    switch (type) {
+    case DeviceType::Display:
+        return HardwareDeviceKind::Display;
+    case DeviceType::Keyboard:
+        return HardwareDeviceKind::Keyboard;
+    case DeviceType::Mouse:
+        return HardwareDeviceKind::Mouse;
+    case DeviceType::Controller:
+        return HardwareDeviceKind::Controller;
+    }
+    return HardwareDeviceKind::Keyboard;
+}
+
 #if defined(_WIN32)
 std::optional<std::wstring> utf8ToWide(std::string_view value) {
     if (value.empty()) return std::wstring{};
@@ -69,6 +83,26 @@ std::optional<std::wstring> utf8ToWide(std::string_view value) {
     return result;
 }
 
+std::optional<std::string> wideToUtf8(std::wstring_view value) {
+    if (value.empty()) return std::string{};
+    if (value.size() >
+        static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+        return std::nullopt;
+    }
+    const int sourceLength = static_cast<int>(value.size());
+    const int required = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), sourceLength,
+        nullptr, 0, nullptr, nullptr);
+    if (required <= 0) return std::nullopt;
+
+    std::string result(static_cast<std::size_t>(required), '\0');
+    const int written = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), sourceLength,
+        result.data(), required, nullptr, nullptr);
+    if (written != required) return std::nullopt;
+    return result;
+}
+
 bool experimentalAudioPolicyEnabled() noexcept {
     wchar_t value[8]{};
     const DWORD length = GetEnvironmentVariableW(
@@ -76,7 +110,76 @@ bool experimentalAudioPolicyEnabled() noexcept {
         static_cast<DWORD>(std::size(value)));
     return length == 1 && value[0] == L'1';
 }
+#else
+std::optional<std::wstring> utf8ToWide(std::string_view value) {
+    std::wstring result;
+    result.reserve(value.size());
+    for (const unsigned char ch : value) {
+        if (ch > 0x7fu) return std::nullopt;
+        result.push_back(static_cast<wchar_t>(ch));
+    }
+    return result;
+}
+
+std::optional<std::string> wideToUtf8(std::wstring_view value) {
+    std::string result;
+    result.reserve(value.size());
+    for (const wchar_t ch : value) {
+        if (ch < 0 || ch > 0x7f) return std::nullopt;
+        result.push_back(static_cast<char>(ch));
+    }
+    return result;
+}
 #endif
+
+std::optional<HardwareInventory> toProtocolHardwareInventory(
+    std::vector<DeviceInfo> devices) {
+    if (devices.size() > kHostProtocolMaxHardwareDevices) return std::nullopt;
+
+    HardwareInventory result;
+    result.devices.reserve(devices.size());
+    for (const auto& device : devices) {
+        const auto stableId = wideToUtf8(device.id);
+        const auto displayName = wideToUtf8(device.name);
+        if (!stableId || stableId->empty() || !displayName) {
+            return std::nullopt;
+        }
+        result.devices.push_back(HardwareDeviceRecord{
+            toProtocolHardwareKind(device.type),
+            *stableId,
+            *displayName,
+        });
+    }
+    return result;
+}
+
+std::optional<SeatHardwareAssignment> toProtocolSeatHardware(
+    const runtime::SeatHardwareConfiguration& configuration) {
+    const auto displayId = wideToUtf8(configuration.displayId);
+    const auto keyboardId = wideToUtf8(configuration.keyboardId);
+    const auto mouseId = wideToUtf8(configuration.mouseId);
+    if (!displayId || !keyboardId || !mouseId) return std::nullopt;
+    return SeatHardwareAssignment{
+        configuration.seatId,
+        *displayId,
+        *keyboardId,
+        *mouseId,
+    };
+}
+
+std::optional<runtime::SeatHardwareConfiguration> toRuntimeSeatHardware(
+    const SeatHardwareAssignment& assignment) {
+    const auto displayId = utf8ToWide(assignment.displayIdUtf8);
+    const auto keyboardId = utf8ToWide(assignment.keyboardIdUtf8);
+    const auto mouseId = utf8ToWide(assignment.mouseIdUtf8);
+    if (!displayId || !keyboardId || !mouseId) return std::nullopt;
+    return runtime::SeatHardwareConfiguration{
+        assignment.seatId,
+        *displayId,
+        *keyboardId,
+        *mouseId,
+    };
+}
 
 } // namespace
 
@@ -180,6 +283,66 @@ Frame HostConnectionSession::handle(const Frame& request) {
         return response;
     }
 
+    case MessageType::GetHardwareInventory: {
+        if (!request.payload.empty()) {
+            return error(
+                request.correlationId,
+                ErrorCode::Malformed,
+                "hardware inventory request payload must be empty");
+        }
+        const auto inventory =
+            toProtocolHardwareInventory(host_.hardwareInventory());
+        if (!inventory) {
+            return error(
+                request.correlationId,
+                ErrorCode::InternalError,
+                "hardware inventory could not be encoded safely");
+        }
+        Frame response;
+        response.type = MessageType::HardwareInventory;
+        response.correlationId = request.correlationId;
+        response.payload = encodeHardwareInventory(*inventory);
+        if (response.payload.empty() && !inventory->devices.empty()) {
+            return error(
+                request.correlationId,
+                ErrorCode::InternalError,
+                "hardware inventory exceeded protocol bounds");
+        }
+        return response;
+    }
+
+    case MessageType::GetSeatHardware: {
+        const auto seatRequest = decodeSeatRequest(request.payload);
+        if (!seatRequest) {
+            return error(
+                request.correlationId,
+                ErrorCode::Malformed,
+                "invalid Seat hardware query payload");
+        }
+        const auto configuration =
+            host_.seatHardwareConfiguration(seatRequest->seatId);
+        if (!configuration) {
+            return error(
+                request.correlationId,
+                ErrorCode::InvalidState,
+                "Seat hardware configuration is unavailable");
+        }
+        const auto protocolConfiguration =
+            toProtocolSeatHardware(*configuration);
+        if (!protocolConfiguration) {
+            return error(
+                request.correlationId,
+                ErrorCode::InternalError,
+                "Seat hardware configuration could not be encoded");
+        }
+        Frame response;
+        response.type = MessageType::SeatHardware;
+        response.correlationId = request.correlationId;
+        response.payload =
+            encodeSeatHardwareAssignment(*protocolConfiguration);
+        return response;
+    }
+
     case MessageType::Ping: {
         const auto nonce = decodePing(request.payload);
         if (!nonce) {
@@ -247,6 +410,65 @@ Frame HostConnectionSession::handle(const Frame& request) {
         response.type = MessageType::ReleaseUiLeaseResult;
         response.correlationId = request.correlationId;
         response.payload = encodeSnapshot(host_.snapshot());
+        return response;
+    }
+
+    case MessageType::AssignSeatHardware: {
+        const auto assignment =
+            decodeSeatHardwareAssignment(request.payload);
+        if (!assignment) {
+            return error(
+                request.correlationId,
+                ErrorCode::Malformed,
+                "invalid Seat hardware assignment payload");
+        }
+        const auto* lease = uiLease(assignment->seatId);
+        if (lease == nullptr) {
+            return error(
+                request.correlationId,
+                ErrorCode::InvalidState,
+                "hardware assignment requires this connection's Seat UI lease");
+        }
+        const auto runtimeAssignment =
+            toRuntimeSeatHardware(*assignment);
+        if (!runtimeAssignment) {
+            return error(
+                request.correlationId,
+                ErrorCode::Malformed,
+                "Seat hardware identifiers are not valid UTF-8");
+        }
+        std::string configurationError;
+        if (!host_.configureSeatHardware(
+                *lease,
+                *runtimeAssignment,
+                &configurationError)) {
+            return error(
+                request.correlationId,
+                ErrorCode::InvalidState,
+                configurationError.empty()
+                    ? "current hardware inventory or cross-Seat ownership rejected the assignment"
+                    : configurationError);
+        }
+        const auto current =
+            host_.seatHardwareConfiguration(assignment->seatId);
+        if (!current) {
+            return error(
+                request.correlationId,
+                ErrorCode::InternalError,
+                "Seat hardware assignment disappeared after commit");
+        }
+        const auto protocolCurrent = toProtocolSeatHardware(*current);
+        if (!protocolCurrent) {
+            return error(
+                request.correlationId,
+                ErrorCode::InternalError,
+                "Seat hardware assignment could not be encoded");
+        }
+
+        Frame response;
+        response.type = MessageType::AssignSeatHardwareResult;
+        response.correlationId = request.correlationId;
+        response.payload = encodeSeatHardwareAssignment(*protocolCurrent);
         return response;
     }
 
@@ -887,6 +1109,84 @@ std::optional<HostSnapshot> HostPipeClient::releaseUiLease(
     const auto snapshot = decodeSnapshot(response->payload);
     if (!snapshot) setError(error, "invalid UI lease release snapshot");
     return snapshot;
+}
+
+std::optional<HardwareInventory> HostPipeClient::getHardwareInventory(
+    std::uint32_t timeoutMs,
+    std::string* error) {
+    if (!impl_) return std::nullopt;
+    const auto response = impl_->transact(
+        MessageType::GetHardwareInventory, {}, timeoutMs, error);
+    if (!response) return std::nullopt;
+    if (response->type == MessageType::Error) {
+        const auto protocolError = decodeError(response->payload);
+        setError(error, protocolError ? protocolError->diagnostic
+                                      : "host returned malformed error response");
+        return std::nullopt;
+    }
+    if (response->type != MessageType::HardwareInventory) {
+        setError(error, "unexpected hardware inventory response");
+        return std::nullopt;
+    }
+    const auto inventory = decodeHardwareInventory(response->payload);
+    if (!inventory) setError(error, "invalid hardware inventory payload");
+    return inventory;
+}
+
+std::optional<SeatHardwareAssignment> HostPipeClient::getSeatHardware(
+    std::uint32_t seatId,
+    std::uint32_t timeoutMs,
+    std::string* error) {
+    if (!impl_) return std::nullopt;
+    const auto payload = encodeSeatRequest(SeatRequest{seatId});
+    if (payload.empty()) {
+        setError(error, "invalid Seat id for hardware query");
+        return std::nullopt;
+    }
+    const auto response = impl_->transact(
+        MessageType::GetSeatHardware, payload, timeoutMs, error);
+    if (!response) return std::nullopt;
+    if (response->type == MessageType::Error) {
+        const auto protocolError = decodeError(response->payload);
+        setError(error, protocolError ? protocolError->diagnostic
+                                      : "host returned malformed error response");
+        return std::nullopt;
+    }
+    if (response->type != MessageType::SeatHardware) {
+        setError(error, "unexpected Seat hardware response");
+        return std::nullopt;
+    }
+    const auto assignment = decodeSeatHardwareAssignment(response->payload);
+    if (!assignment) setError(error, "invalid Seat hardware payload");
+    return assignment;
+}
+
+std::optional<SeatHardwareAssignment> HostPipeClient::assignSeatHardware(
+    const SeatHardwareAssignment& assignment,
+    std::uint32_t timeoutMs,
+    std::string* error) {
+    if (!impl_) return std::nullopt;
+    const auto payload = encodeSeatHardwareAssignment(assignment);
+    if (payload.empty()) {
+        setError(error, "invalid Seat hardware assignment");
+        return std::nullopt;
+    }
+    const auto response = impl_->transact(
+        MessageType::AssignSeatHardware, payload, timeoutMs, error);
+    if (!response) return std::nullopt;
+    if (response->type == MessageType::Error) {
+        const auto protocolError = decodeError(response->payload);
+        setError(error, protocolError ? protocolError->diagnostic
+                                      : "host returned malformed error response");
+        return std::nullopt;
+    }
+    if (response->type != MessageType::AssignSeatHardwareResult) {
+        setError(error, "unexpected Seat hardware assignment response");
+        return std::nullopt;
+    }
+    const auto current = decodeSeatHardwareAssignment(response->payload);
+    if (!current) setError(error, "invalid Seat hardware assignment payload");
+    return current;
 }
 
 std::optional<HostSnapshot> HostPipeClient::pairController(
