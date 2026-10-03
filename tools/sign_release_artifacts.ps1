@@ -54,7 +54,9 @@ function Assert-ReviewedSigningManifest {
     $expected = @{
         "main-ui" = @{ kind = "cmake-executable"; target = "HydraSeat"; fileName = "HydraSeat.exe" }
         "host" = @{ kind = "cmake-executable"; target = "hydra_host"; fileName = "hydra_host.exe" }
-        "seat-ui" = @{ kind = "cmake-executable"; target = "hydra_seat_ui"; fileName = "hydra_seat_ui.exe" }
+        "gate-c-adapter" = @{ kind = "cmake-shared-library"; target = "hydra_gate_c_adapter"; fileName = "hydra_gate_c_adapter.dll" }
+        "gate-c-shim" = @{ kind = "cmake-shared-library"; target = "hydra_gate_c_shim"; fileName = "hydra_gate_c_shim.dll" }
+        "gate-c-external-bridge" = @{ kind = "cmake-shared-library"; target = "hydra_gate_c_external_bridge"; fileName = "hydra_gate_c_external_bridge.dll" }
         "watchdog" = @{ kind = "cmake-executable"; target = "hydra_watchdog"; fileName = "hydra_watchdog.exe" }
         "reset" = @{ kind = "cmake-executable"; target = "hydra_reset"; fileName = "hydra_reset.exe" }
         "profile-cli" = @{ kind = "cmake-executable"; target = "hydraseat_profilectl"; fileName = "hydraseat_profilectl.exe" }
@@ -78,7 +80,7 @@ function Assert-ReviewedSigningManifest {
             [string]$artifact.fileName -ne [string]$reviewed.fileName) {
             throw "Signing manifest artifact kind/fileName differs from the reviewed allowlist"
         }
-        if ([string]$artifact.kind -eq "cmake-executable") {
+        if ([string]$artifact.kind -in @("cmake-executable", "cmake-shared-library")) {
             if ([string]$artifact.target -ne [string]$reviewed.target) {
                 throw "Signing manifest CMake target differs from the reviewed allowlist"
             }
@@ -252,7 +254,7 @@ $BuildX64 = [System.IO.Path]::GetFullPath($BuildX64)
 Assert-ReviewedBuildRoot -BuildRoot $BuildX64 -RepositoryRoot $repositoryRoot
 $cmake = Get-CMake
 $reviewedTargets = @($manifest.artifacts | Where-Object {
-    [string]$_.kind -eq "cmake-executable"
+    [string]$_.kind -in @("cmake-executable", "cmake-shared-library")
 } | ForEach-Object {
     [string]$_.target
 })
@@ -281,8 +283,13 @@ foreach ($artifact in $manifest.artifacts) {
     $sourceKind = ""
     $targetName = ""
 
-    if ($kind -eq "cmake-executable") {
-        Assert-SafeBasename -FileName $fileName -ExtensionPattern '^[A-Za-z0-9._-]+\.exe$'
+    if ($kind -in @("cmake-executable", "cmake-shared-library")) {
+        $extensionPattern = if ($kind -eq "cmake-shared-library") {
+            '^[A-Za-z0-9._-]+\.dll$'
+        } else {
+            '^[A-Za-z0-9._-]+\.exe$'
+        }
+        Assert-SafeBasename -FileName $fileName -ExtensionPattern $extensionPattern
         if (-not ($artifact.PSObject.Properties.Name -contains "target")) {
             throw "CMake signing artifact is missing target"
         }
@@ -321,7 +328,7 @@ foreach ($artifact in $manifest.artifacts) {
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
             throw "Missing release artifact: $($artifact.id) $architecture"
         }
-        if ($kind -eq "cmake-executable") {
+        if ($kind -in @("cmake-executable", "cmake-shared-library")) {
             Assert-X64PortableExecutable -Path $source
             $sourceSignature = Get-AuthenticodeSignature -LiteralPath $source
             if ($sourceSignature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned) {
@@ -335,7 +342,7 @@ foreach ($artifact in $manifest.artifacts) {
         Copy-Item -LiteralPath $source -Destination $destination -Force
 
         $unsignedHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($kind -eq "cmake-executable") {
+        if ($kind -in @("cmake-executable", "cmake-shared-library")) {
             & $signTool sign /fd SHA256 /sha1 $normalizedThumbprint /tr $TimestampUrl /td SHA256 $destination | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 throw "signtool sign failed for $($artifact.id) $architecture"

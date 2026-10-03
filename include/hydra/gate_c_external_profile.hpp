@@ -28,6 +28,11 @@ inline constexpr std::uint32_t kP3EGlfwRequiredApiMask = 0x0000b93au;
 inline constexpr std::uint32_t kExternalBridgeConfigMagic = 0x31453350u; // P3E1
 inline constexpr std::uint32_t kExternalBridgeConfigVersion = 1u;
 inline constexpr std::size_t kExternalBridgePipeNameChars = 256u;
+// The all-bits value is reserved as an external-bridge request to discover the
+// target executable's actually imported supported APIs before installing the
+// process-local shim. Explicit measured profiles continue to pass an exact mask.
+inline constexpr std::uint32_t kExternalBridgeAutoDetectApiMask =
+    HYDRA_GATE_C_SHIM_ALL_API_MASK;
 
 constexpr bool validProfiledShimMask(std::uint32_t mask) noexcept {
     return mask != 0u &&

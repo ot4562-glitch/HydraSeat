@@ -1,10 +1,13 @@
 #include "hydra/host_transport.hpp"
 
 #include "hydra/game_launcher.hpp"
+#include "hydra/input_router.hpp"
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <limits>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -609,9 +612,13 @@ Frame HostConnectionSession::handle(const Frame& request) {
         WorkspaceConfig workspace{};
         workspace.workspaceId = launch->seatId;
         if (!gameLauncher_->launchGameForWorkspace(profile, workspace)) {
+            const auto diagnostic = gameLauncher_->lastError();
             return error(
-                request.correlationId, ErrorCode::InvalidState,
-                "game launch failed or Seat game authority is unavailable");
+                request.correlationId,
+                ErrorCode::InvalidState,
+                diagnostic.empty()
+                    ? "game launch failed or Seat game authority is unavailable"
+                    : diagnostic);
         }
 
         Frame response;
@@ -1373,18 +1380,72 @@ bool HostPipeClient::ping(
 
 class HostPipeServer::Impl final {
 public:
-    explicit Impl(runtime::RuntimeHost& hostValue) noexcept
-        : host(hostValue), gameLauncher(hostValue) {}
+    explicit Impl(runtime::RuntimeHost& hostValue)
+        : host(hostValue), gameLauncher(hostValue) {
+#if defined(_WIN32)
+        inputThread = std::jthread([this](std::stop_token stopToken) {
+            InputRouter router;
+            router.setIsolationMode(true);
+            router.setGlobalCallback([this](const RawInputEvent& event) {
+                (void)gameLauncher.routePhysicalInput(event);
+            });
+
+            const bool initialized = router.initialize();
+            {
+                std::lock_guard lock(inputStartupMutex);
+                inputStartupComplete = true;
+                inputStartupOk = initialized;
+                inputStartupError = initialized
+                    ? std::string{}
+                    : "failed to initialize the host Raw Input router";
+            }
+            inputStartupCv.notify_all();
+            if (!initialized) return;
+
+            while (!stopToken.stop_requested()) {
+                router.processMessages();
+                Sleep(1);
+            }
+            router.stop();
+        });
+
+        std::unique_lock lock(inputStartupMutex);
+        if (!inputStartupCv.wait_for(
+                lock,
+                std::chrono::seconds(3),
+                [this] { return inputStartupComplete; })) {
+            inputStartupError = "timed out initializing the host Raw Input router";
+        }
+#endif
+    }
 
     runtime::RuntimeHost& host;
     GameLauncher gameLauncher;
 #if defined(_WIN32)
     windows::WindowsAudioRouter audioRouter;
+    std::mutex inputStartupMutex;
+    std::condition_variable inputStartupCv;
+    bool inputStartupComplete{false};
+    bool inputStartupOk{false};
+    std::string inputStartupError;
+    std::jthread inputThread;
 #endif
     std::atomic<bool> stopRequested{false};
 
     bool serveOne(std::uint32_t timeoutMs, std::string* error) {
 #if defined(_WIN32)
+        {
+            std::lock_guard lock(inputStartupMutex);
+            if (!inputStartupComplete || !inputStartupOk) {
+                setError(
+                    error,
+                    inputStartupError.empty()
+                        ? "host Raw Input router is unavailable"
+                        : inputStartupError);
+                return false;
+            }
+        }
+
         const auto endpoint = currentHostPipeName();
         if (endpoint.empty()) {
             setError(error, "unable to resolve current Windows session");
@@ -1498,6 +1559,9 @@ bool HostPipeServer::serve(std::string* error) {
 void HostPipeServer::requestStop() noexcept {
     if (impl_) {
         impl_->stopRequested.store(true, std::memory_order_release);
+#if defined(_WIN32)
+        impl_->inputThread.request_stop();
+#endif
     }
 }
 

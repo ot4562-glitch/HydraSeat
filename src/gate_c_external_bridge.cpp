@@ -4,6 +4,7 @@
 #include "hydra/gate_c_protocol.hpp"
 #include "hydra/gate_c_shim_api.h"
 #include "hydra/gate_c_transport.hpp"
+#include "hydra/win32_iat_patch.hpp"
 
 #ifdef _WIN32
 
@@ -14,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -70,6 +72,53 @@ HWND findApplicationWindow(HWND bootstrap) {
     (void)EnumWindows(findWindowCallback,
                       reinterpret_cast<LPARAM>(&search));
     return search.found;
+}
+
+std::uint32_t detectSupportedApiMask() {
+    const auto replacement =
+        reinterpret_cast<std::uintptr_t>(&bridgeWindowProc);
+
+    std::uint32_t mask = 0u;
+
+    const std::array<std::uintptr_t, hydra::gatec::kPollingImportCount>
+        pollingReplacements{replacement, replacement, replacement};
+    for (std::uint32_t bit = 0u;
+         bit < hydra::gatec::kPollingImportCount;
+         ++bit) {
+        std::vector<hydra::gatec::PollingIatSlot> slots;
+        const auto report =
+            hydra::gatec::discoverCurrentProcessPollingImports(
+                pollingReplacements, 1u << bit, slots);
+        if (report) mask |= 1u << bit;
+    }
+
+    const std::array<std::uintptr_t, hydra::gatec::kCursorFocusImportCount>
+        cursorReplacements{
+            replacement, replacement, replacement, replacement, replacement,
+            replacement, replacement, replacement, replacement, replacement};
+    for (std::uint32_t bit = 0u;
+         bit < hydra::gatec::kCursorFocusImportCount;
+         ++bit) {
+        std::vector<hydra::gatec::CursorFocusIatSlot> slots;
+        const auto report =
+            hydra::gatec::discoverCurrentProcessCursorFocusImports(
+                cursorReplacements, 1u << bit, slots);
+        if (report) mask |= 1u << (bit + 3u);
+    }
+
+    const std::array<std::uintptr_t, hydra::gatec::kRawInputImportCount>
+        rawReplacements{replacement, replacement, replacement, replacement};
+    for (std::uint32_t bit = 0u;
+         bit < hydra::gatec::kRawInputImportCount;
+         ++bit) {
+        std::vector<hydra::gatec::RawInputIatSlot> slots;
+        const auto report =
+            hydra::gatec::discoverCurrentProcessRawInputImports(
+                rawReplacements, 1u << bit, slots);
+        if (report) mask |= 1u << (bit + 13u);
+    }
+
+    return mask;
 }
 
 bool readConfig(ExternalBridgeConfigV1& config) {
@@ -218,17 +267,28 @@ DWORD WINAPI bridgeWorker(void*) {
         return 12;
     }
 
+    std::uint32_t requiredApiMask = config.requiredApiMask;
+    if (requiredApiMask ==
+        hydra::gatec::kExternalBridgeAutoDetectApiMask) {
+        requiredApiMask = detectSupportedApiMask();
+    }
+    if (!hydra::gatec::validProfiledShimMask(requiredApiMask)) {
+        hydra_gate_c_adapter_destroy(adapter);
+        DestroyWindow(bootstrap);
+        return 18;
+    }
+
     HydraGateCShimConfigV3 shim{};
     shim.struct_size = sizeof(shim);
     shim.api_version = HYDRA_GATE_C_SHIM_API_VERSION;
     shim.seat_id = config.seatId;
     shim.process_id = GetCurrentProcessId();
-    shim.required_api_mask = config.requiredApiMask;
+    shim.required_api_mask = requiredApiMask;
     shim.target_window = reinterpret_cast<std::uint64_t>(bootstrap);
-    if ((config.requiredApiMask & HYDRA_GATE_C_SHIM_CURSOR_FOCUS_API_MASK) != 0) {
+    if ((requiredApiMask & HYDRA_GATE_C_SHIM_CURSOR_FOCUS_API_MASK) != 0) {
         shim.flags |= HYDRA_GATE_C_SHIM_ENABLE_CURSOR_FOCUS;
     }
-    if ((config.requiredApiMask & HYDRA_GATE_C_SHIM_RAW_INPUT_API_MASK) != 0) {
+    if ((requiredApiMask & HYDRA_GATE_C_SHIM_RAW_INPUT_API_MASK) != 0) {
         shim.flags |= HYDRA_GATE_C_SHIM_ENABLE_RAW_INPUT;
     }
 
@@ -305,7 +365,7 @@ DWORD WINAPI bridgeWorker(void*) {
                 HYDRA_GATE_C_ADAPTER_OK) {
                 break;
             }
-            if ((config.requiredApiMask & HYDRA_GATE_C_SHIM_RAW_INPUT_API_MASK) != 0) {
+            if ((requiredApiMask & HYDRA_GATE_C_SHIM_RAW_INPUT_API_MASK) != 0) {
                 if (!rawDiagnosticWritten &&
                     input.kind == hydra::gatec::InputKind::Mouse) {
                     std::uint32_t registrationCount = 0;

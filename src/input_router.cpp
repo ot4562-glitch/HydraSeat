@@ -1,5 +1,6 @@
 #include "hydra/input_router.hpp"
 
+#include <chrono>
 #include <iostream>
 
 namespace hydra {
@@ -65,6 +66,10 @@ void InputRouter::handleRawInput(HRAWINPUT hRawInput) {
     RawInputEvent event{};
     event.deviceHandle = reinterpret_cast<uintptr_t>(raw->header.hDevice);
     event.rawDevType = raw->header.dwType;
+    event.timestampMicros = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
 
     if (raw->header.hDevice != NULL) {
         UINT nameSize = 0;
@@ -80,6 +85,8 @@ void InputRouter::handleRawInput(HRAWINPUT hRawInput) {
     if (raw->header.dwType == RIM_TYPEKEYBOARD) {
         event.messageType = raw->data.keyboard.Message;
         event.vkey = raw->data.keyboard.VKey;
+        event.scanCode = raw->data.keyboard.MakeCode;
+        event.keyboardFlags = raw->data.keyboard.Flags;
         if (event.vkey == 0) {
             event.vkey = raw->data.keyboard.MakeCode;
         }
@@ -87,7 +94,13 @@ void InputRouter::handleRawInput(HRAWINPUT hRawInput) {
         event.messageType = WM_MOUSEMOVE;
         event.deltaX = raw->data.mouse.lLastX;
         event.deltaY = raw->data.mouse.lLastY;
+        event.mouseButtonFlags = raw->data.mouse.usButtonFlags;
         event.mouseButtons = raw->data.mouse.usButtonFlags;
+        if ((raw->data.mouse.usButtonFlags &
+             (RI_MOUSE_WHEEL | RI_MOUSE_HWHEEL)) != 0) {
+            event.wheelDelta =
+                static_cast<std::int16_t>(raw->data.mouse.usButtonData);
+        }
 
         // Detect if this mouse event is actually from a touchpad
         // Windows Precision Touchpads route motion through RIM_TYPEMOUSE

@@ -17,10 +17,24 @@
       "architectures": ["x64"]
     },
     {
-      "id": "seat-ui",
-      "kind": "cmake-executable",
-      "target": "hydra_seat_ui",
-      "fileName": "hydra_seat_ui.exe",
+      "id": "gate-c-adapter",
+      "kind": "cmake-shared-library",
+      "target": "hydra_gate_c_adapter",
+      "fileName": "hydra_gate_c_adapter.dll",
+      "architectures": ["x64"]
+    },
+    {
+      "id": "gate-c-shim",
+      "kind": "cmake-shared-library",
+      "target": "hydra_gate_c_shim",
+      "fileName": "hydra_gate_c_shim.dll",
+      "architectures": ["x64"]
+    },
+    {
+      "id": "gate-c-external-bridge",
+      "kind": "cmake-shared-library",
+      "target": "hydra_gate_c_external_bridge",
+      "fileName": "hydra_gate_c_external_bridge.dll",
       "architectures": ["x64"]
     },
     {

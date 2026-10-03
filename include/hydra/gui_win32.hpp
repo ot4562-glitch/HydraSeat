@@ -3,6 +3,8 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <commctrl.h>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -11,6 +13,7 @@
 #include "hydra/hardware_detector.hpp"
 #include "hydra/workspace_manager.hpp"
 #include "hydra/input_router.hpp"
+#include "ui/host_control_client.hpp"
 
 namespace hydra {
 namespace gui {
@@ -32,6 +35,7 @@ enum class DeviceCategory {
 struct VisualDeviceTile {
     HWND hwndControl{nullptr};
     std::wstring name;
+    std::wstring stableId;
     std::wstring displayLabel; // e.g. "1.1", "1.2", "KBD 1", "MOU 1"
     DeviceCategory type{DeviceCategory::Keyboard};
     uintptr_t nativeHandle{0};
@@ -61,8 +65,10 @@ private:
     void layoutDeviceTiles();
     void saveWorkspaceProfile();
     void loadWorkspaceProfile();
-    void toggleIsolationMode();
-    void launchMultiseat();
+    bool applySeatAssignment(std::uint32_t seatId, std::string* error);
+    bool commitAssignments(std::string* error);
+    void toggleSeatGame(std::uint32_t seatId);
+    std::optional<std::wstring> chooseExecutable(std::uint32_t seatId);
 
     HWND m_hwnd{nullptr};
     HWND m_poolGroup{nullptr};
@@ -74,6 +80,8 @@ private:
     HWND m_refreshBtn{nullptr};
     HWND m_isolationBtn{nullptr};
     HWND m_launchBtn{nullptr};
+    HWND m_p1ControllerSlotCombo{nullptr};
+    HWND m_p2ControllerSlotCombo{nullptr};
     HWND m_deviceStatusLabel{nullptr};
 
     std::vector<std::unique_ptr<VisualDeviceTile>> m_deviceTiles;
@@ -82,6 +90,7 @@ private:
     HardwareDetector m_hardwareDetector;
     WorkspaceManager m_workspaceManager;
     InputRouter m_inputRouter;
+    hydra::ui::HostControlClient m_hostControl;
 
     std::vector<DeviceInfo> m_displays;
     std::vector<DeviceInfo> m_keyboards;

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "productVersion": "v1",
-  "scopeDate": "2026-08-29",
+  "scopeDate": "2026-10-04",
   "scopeSemantics": {
     "release-target": "Inside the HydraSeat v1 release qualification matrix; not a support claim until required validation passes.",
     "experimental": "May be exercised only with explicit warning/opt-in and is not part of the normal v1 support promise.",
@@ -20,7 +20,7 @@
   "hostPlatform": {
     "operatingSystem": "Windows",
     "hostArchitecture": "x64",
-    "targetProcessArchitectures": ["x64", "x86"],
+    "targetProcessArchitectures": ["x64"],
     "windowsBuildFamilies": [
       {
         "id": "windows-11-24h2",
@@ -178,7 +178,7 @@
       "id": "microsoft-windows-client-supported-versions",
       "classification": "official-platform-documentation",
       "url": "https://learn.microsoft.com/en-us/windows/release-health/supported-versions-windows-client",
-      "consultedOn": "2026-08-29",
+      "consultedOn": "2026-10-04",
       "use": "Release-target Windows build-family snapshot only; no source code copied or adapted."
     }
   ]

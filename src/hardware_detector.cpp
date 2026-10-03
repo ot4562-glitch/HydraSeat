@@ -62,7 +62,10 @@ std::vector<DeviceInfo> HardwareDetector::detectDisplays() {
                 info.id = L"display:" + hardware::normalizeDevicePath(dd.DeviceName);
             }
             info.name = dd.DeviceString;
-            info.devicePath = dd.DeviceID;
+            // Stable identity is derived from DeviceID above; devicePath keeps
+            // the current GDI display name so launch-time placement can resolve
+            // the durable ID back to live desktop coordinates.
+            info.devicePath = dd.DeviceName;
             info.type = DeviceType::Display;
             result.push_back(info);
         }

@@ -62,6 +62,24 @@ bool SeatRuntime::bindTargetWindow(const ActivationToken& token,
     return true;
 }
 
+bool SeatRuntime::clearTargetWindow(
+    const ActivationToken& token,
+    const ProcessIdentity& owner,
+    std::uintptr_t expectedHwnd) noexcept {
+    if (!owner.valid() || expectedHwnd == 0) return false;
+
+    std::lock_guard lock(mutex_);
+    if (!ownsTokenLocked(token) ||
+        token.leaseClass != LeaseClass::GameProcess ||
+        !process_ || *process_ != owner ||
+        targetHwnd_ != expectedHwnd) {
+        return false;
+    }
+
+    targetHwnd_ = 0;
+    return true;
+}
+
 bool SeatRuntime::bindController(const ActivationToken& token,
                                  const controller::SeatBinding& binding) noexcept {
     if (binding.seatId != seatId_ || binding.runtimeKey.empty()) return false;
@@ -157,6 +175,18 @@ bool SessionController::bindTargetWindow(const ActivationToken& token,
     if (otherSnapshot.active && otherSnapshot.targetHwnd == hwnd) return false;
 
     return runtime->bindTargetWindow(token, owner, hwnd);
+}
+
+bool SessionController::clearTargetWindow(
+    const ActivationToken& token,
+    const ProcessIdentity& owner,
+    std::uintptr_t expectedHwnd) noexcept {
+    if (!owner.valid() || expectedHwnd == 0) return false;
+
+    std::lock_guard lock(mutex_);
+    const auto runtime = seat(token.seatId);
+    if (!runtime) return false;
+    return runtime->clearTargetWindow(token, owner, expectedHwnd);
 }
 
 bool SessionController::bindController(

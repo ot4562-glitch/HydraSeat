@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -15,7 +16,13 @@ namespace hydra::runtime {
 class RuntimeHost;
 }
 
+namespace hydra::gatec {
+class ExternalInputSession;
+}
+
 namespace hydra {
+
+struct RawInputEvent;
 
 enum class GamePlatform {
     Steam,
@@ -66,10 +73,13 @@ public:
         std::wstring xinputPipeEndpoint);
 
     bool stopWorkspaceGame(uint32_t workspaceId);
-    bool hasWorkspaceGame(uint32_t workspaceId) const noexcept;
+    bool hasWorkspaceGame(uint32_t workspaceId) const;
+    bool routePhysicalInput(const RawInputEvent& event);
+    std::string lastError() const;
 
 private:
     struct ControllerPipeRuntime;
+    struct SeatWindowRuntime;
 
     struct SeatProcess {
         std::uintptr_t processHandle{0};
@@ -77,6 +87,10 @@ private:
         runtime::ActivationToken token{};
         runtime::ProcessIdentity identity{};
         std::shared_ptr<ControllerPipeRuntime> controllerPipe;
+        std::shared_ptr<SeatWindowRuntime> windowRuntime;
+        std::uintptr_t keyboardHandle{0};
+        std::uintptr_t mouseHandle{0};
+        std::shared_ptr<gatec::ExternalInputSession> inputSession;
     };
 
     static std::optional<std::size_t> seatIndex(
@@ -94,6 +108,14 @@ private:
     bool publishProcess(
         const runtime::ActivationToken& token,
         const runtime::ProcessIdentity& process) noexcept;
+    bool bindTargetWindow(
+        const runtime::ActivationToken& token,
+        const runtime::ProcessIdentity& process,
+        std::uintptr_t hwnd) noexcept;
+    bool clearTargetWindow(
+        const runtime::ActivationToken& token,
+        const runtime::ProcessIdentity& process,
+        std::uintptr_t expectedHwnd) noexcept;
     bool bindController(
         const runtime::ActivationToken& token,
         const controller::SeatBinding& binding,
@@ -102,10 +124,13 @@ private:
         const runtime::ActivationToken& token) const noexcept;
     bool endSeatActivation(
         const runtime::ActivationToken& token) noexcept;
+    void setLastError(std::string message);
 
     runtime::SessionController* controller_{nullptr};
     runtime::RuntimeHost* host_{nullptr};
+    mutable std::recursive_mutex processMutex_;
     std::array<std::optional<SeatProcess>, 2> seatProcesses_{};
+    std::string lastError_;
 };
 
 } // namespace hydra

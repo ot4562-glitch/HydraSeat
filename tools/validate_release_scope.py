@@ -180,8 +180,8 @@ def validate_host_platform(value: Any) -> None:
     if host["hostArchitecture"] != "x64":
         fail("v1 GA host architecture is frozen to x64")
     architectures = host["targetProcessArchitectures"]
-    if not isinstance(architectures, list) or architectures != ["x64", "x86"]:
-        fail("targetProcessArchitectures must be the canonical [x64, x86] compatibility order")
+    if not isinstance(architectures, list) or architectures != ["x64"]:
+        fail("targetProcessArchitectures must be the reviewed x64-only v1 compatibility scope")
     require_text(host["cpuBaseline"], "hostPlatform.cpuBaseline", maximum=512)
     require_text(host["gpuBaseline"], "hostPlatform.gpuBaseline", maximum=512)
 

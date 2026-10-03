@@ -43,7 +43,6 @@ SAFE_TARGET = re.compile(r"^[A-Za-z0-9_]{1,96}$")
 COMPONENT_ROLES = {
     "ApplicationUI",
     "AuthoritativeHost",
-    "SeatUI",
     "RecoveryWatchdog",
     "RecoveryReset",
     "ProfileCLI",
@@ -60,6 +59,7 @@ SIGNING_STATES = {
 }
 QUALIFICATION_MODES = {"Controlled", "ReleaseCandidate"}
 INPUT_MODES = {"BuildRoot", "PackageRoot"}
+CMAKE_PE_KINDS = {"cmake-executable", "cmake-shared-library"}
 ALLOWED_PACKAGE_METADATA = {"signing-provenance.json", "signing-provenance.json.p7s"}
 POLICY_KEYS = {
     "schemaVersion", "product", "architecture", "releaseSigningManifestPath",
@@ -357,7 +357,7 @@ def _validate_policy(policy: dict, repo_root: Path) -> tuple[dict, dict]:
         _ = role
         if PurePosixPath(package_path).name != file_name:
             raise ArtifactManifestError("preflight packagePath basename differs from signing manifest fileName")
-        if kind == "cmake-executable":
+        if kind in CMAKE_PE_KINDS:
             target = signing.get("target")
             if not isinstance(target, str) or not SAFE_TARGET.fullmatch(target):
                 raise ArtifactManifestError("release executable has invalid CMake target")
@@ -546,7 +546,7 @@ def _artifact_source_map(
         if input_mode == "PackageRoot":
             source_locator = declared["packagePath"]
             source = _resolve_under(package_root, source_locator, "package artifact path")
-        elif signing["kind"] == "cmake-executable":
+        elif signing["kind"] in CMAKE_PE_KINDS:
             relative = f"{configuration}/{file_name}" if cache_info["multiConfig"] else file_name
             source_locator = relative.replace("\\", "/")
             source = _resolve_under(build_root, source_locator, "build artifact path")
@@ -685,11 +685,11 @@ def inspect_release_inputs(
     for record in records:
         artifact_id = record["declared"]["id"]
         report["expected"].append(artifact_id)
-        if record["signing"]["kind"] == "cmake-executable":
+        if record["signing"]["kind"] in CMAKE_PE_KINDS:
             allowed_build_names.add(record["signing"]["fileName"].casefold())
         try:
             _assert_regular(record["path"], f"expected release artifact {artifact_id}", max_artifact)
-            if record["signing"]["kind"] == "cmake-executable":
+            if record["signing"]["kind"] in CMAKE_PE_KINDS:
                 _, signed = _pe_observation(record["path"], max_artifact)
             else:
                 signed = _script_signature_observation(record["path"], max_artifact)
@@ -785,7 +785,7 @@ def generate_release_bundle(
     for record in records:
         artifact_id = record["declared"]["id"]
         digest, size = _sha256_file(record["path"], f"release artifact {artifact_id}", max_artifact)
-        if record["signing"]["kind"] == "cmake-executable":
+        if record["signing"]["kind"] in CMAKE_PE_KINDS:
             architecture, signed_material = _pe_observation(record["path"], max_artifact)
         else:
             architecture = "x64"
@@ -1187,7 +1187,7 @@ def validate_release_bundle(
             raise ArtifactManifestError(f"artifact bytes changed after manifest generation: {item['id']}")
         if size != item["bytes"]:
             raise ArtifactManifestError(f"artifact size changed after manifest generation: {item['id']}")
-        if item["kind"] == "cmake-executable":
+        if item["kind"] in CMAKE_PE_KINDS:
             architecture, signature_present = _pe_observation(path, max_artifact)
             if architecture != item["architecture"]:
                 raise ArtifactManifestError(f"artifact architecture changed: {item['id']}")
@@ -1257,7 +1257,9 @@ def _fixture_repo(root: Path) -> tuple[Path, Path, str]:
     artifact_specs = [
         ("main-ui", "HydraSeat", "HydraSeat.exe", "ApplicationUI"),
         ("host", "hydra_host", "hydra_host.exe", "AuthoritativeHost"),
-        ("seat-ui", "hydra_seat_ui", "hydra_seat_ui.exe", "SeatUI"),
+        ("gate-c-adapter", "hydra_gate_c_adapter", "hydra_gate_c_adapter.dll", "RuntimeComponent"),
+        ("gate-c-shim", "hydra_gate_c_shim", "hydra_gate_c_shim.dll", "RuntimeComponent"),
+        ("gate-c-external-bridge", "hydra_gate_c_external_bridge", "hydra_gate_c_external_bridge.dll", "RuntimeComponent"),
         ("watchdog", "hydra_watchdog", "hydra_watchdog.exe", "RecoveryWatchdog"),
         ("reset", "hydra_reset", "hydra_reset.exe", "RecoveryReset"),
         ("profile-cli", "hydraseat_profilectl", "hydraseat_profilectl.exe", "ProfileCLI"),
@@ -1269,7 +1271,7 @@ def _fixture_repo(root: Path) -> tuple[Path, Path, str]:
     for index, (artifact_id, target, file_name, role) in enumerate(artifact_specs):
         signing["artifacts"].append({
             "id": artifact_id,
-            "kind": "cmake-executable",
+            "kind": "cmake-shared-library" if file_name.endswith(".dll") else "cmake-executable",
             "target": target,
             "fileName": file_name,
             "architectures": ["x64"],
@@ -1331,7 +1333,7 @@ def _make_package(repo: Path, build: Path, package: Path) -> None:
     (package / "x64").mkdir(parents=True)
     for signing in inputs["signing"]["artifacts"]:
         destination = package / "x64" / signing["fileName"]
-        if signing["kind"] == "cmake-executable":
+        if signing["kind"] in CMAKE_PE_KINDS:
             source = build / "Release" / signing["fileName"]
         else:
             source = repo / signing["sourcePath"]
@@ -1467,7 +1469,7 @@ def self_test() -> None:
         policy_path.write_bytes(original_policy_bytes)
 
         # 10 wrong PE architecture.
-        wrong_arch = build / "Release" / "hydra_seat_ui.exe"
+        wrong_arch = build / "Release" / "HydraSeat.exe"
         right_arch_bytes = wrong_arch.read_bytes()
         wrong_arch.write_bytes(_make_fake_pe(machine=0x14C))
         _expect_error("wrong architecture", lambda: generate_release_bundle(

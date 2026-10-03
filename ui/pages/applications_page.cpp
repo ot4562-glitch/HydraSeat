@@ -6,6 +6,9 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
+
+#include "ui/ui_settings.hpp"
 
 #include <utility>
 
@@ -322,6 +325,21 @@ void ApplicationsPage::onStopRequested() {
     if (seatId == 0) {
         setLaunchFeedback("Select Seat 1 or Seat 2.", true);
         return;
+    }
+
+    if (UiSettings::load().confirmSeatStop) {
+        const auto answer = QMessageBox::question(
+            this,
+            "Stop Seat game?",
+            QString(
+                "Stop the host-owned process tree for Seat %1? "
+                "The other Seat will remain untouched.")
+                .arg(seatId),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
     }
 
     std::string error;

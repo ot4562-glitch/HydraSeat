@@ -301,6 +301,17 @@ bool RuntimeHost::bindTargetWindow(const ActivationToken& activation,
     return changed;
 }
 
+bool RuntimeHost::clearTargetWindow(
+    const ActivationToken& activation,
+    const ProcessIdentity& owner,
+    std::uintptr_t expectedHwnd) noexcept {
+    std::lock_guard lock(mutex_);
+    const bool changed =
+        controller_.clearTargetWindow(activation, owner, expectedHwnd);
+    noteMutationLocked(changed);
+    return changed;
+}
+
 bool RuntimeHost::bindController(
     const ActivationToken& activation,
     const controller::SeatBinding& binding,

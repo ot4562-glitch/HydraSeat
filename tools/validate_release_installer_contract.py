@@ -62,7 +62,7 @@ def validate_contract(manifest_data: object, signer_text: str, installer_text: s
     manifest_files: list[str] = []
     manifest_ids: dict[str, str] = {}
     script_entries = []
-    executable_entries = []
+    binary_entries = []
     for artifact in artifacts:
         if not isinstance(artifact, dict):
             fail("release signing artifact must be an object")
@@ -80,8 +80,8 @@ def validate_contract(manifest_data: object, signer_text: str, installer_text: s
         if not isinstance(architectures, list) or architectures != ["x64"]:
             fail(f"{file_name}: release host artifacts must target x64 exactly once")
         kind = artifact.get("kind")
-        if kind == "cmake-executable":
-            executable_entries.append(artifact)
+        if kind in ("cmake-executable", "cmake-shared-library"):
+            binary_entries.append(artifact)
         elif kind == "powershell-script":
             script_entries.append(artifact)
         else:
@@ -96,8 +96,8 @@ def validate_contract(manifest_data: object, signer_text: str, installer_text: s
         fail("PowerShell signing artifact must source tools/install_hydraseat.ps1")
     if installer_artifact.get("fileName") != "install_hydraseat.ps1":
         fail("PowerShell signing artifact must publish install_hydraseat.ps1")
-    if not executable_entries:
-        fail("release package must contain reviewed executable artifacts")
+    if not binary_entries:
+        fail("release package must contain reviewed PE artifacts")
 
     owned_files = extract_owned_files(installer_text)
     if owned_files != manifest_files:
@@ -112,7 +112,7 @@ def validate_contract(manifest_data: object, signer_text: str, installer_text: s
     # Signer invariants: executable and script artifacts take distinct reviewed paths,
     # then converge on the same Authenticode publisher/hash provenance checks.
     for needle in (
-        '$kind -eq "cmake-executable"',
+        '$kind -in @("cmake-executable", "cmake-shared-library")',
         '$kind -eq "powershell-script"',
         'Set-AuthenticodeSignature -LiteralPath $destination',
         '[string]$artifact.sourcePath -ne "tools/install_hydraseat.ps1"',

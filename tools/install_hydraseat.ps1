@@ -24,7 +24,9 @@ $Architecture = "x64"
 $OwnedFiles = @(
     "HydraSeat.exe",
     "hydra_host.exe",
-    "hydra_seat_ui.exe",
+    "hydra_gate_c_adapter.dll",
+    "hydra_gate_c_shim.dll",
+    "hydra_gate_c_external_bridge.dll",
     "hydra_watchdog.exe",
     "hydra_reset.exe",
     "hydraseat_profilectl.exe",
@@ -34,7 +36,9 @@ $OwnedFiles = @(
 $OwnedArtifactIds = @{
     "HydraSeat.exe" = "main-ui"
     "hydra_host.exe" = "host"
-    "hydra_seat_ui.exe" = "seat-ui"
+    "hydra_gate_c_adapter.dll" = "gate-c-adapter"
+    "hydra_gate_c_shim.dll" = "gate-c-shim"
+    "hydra_gate_c_external_bridge.dll" = "gate-c-external-bridge"
     "hydra_watchdog.exe" = "watchdog"
     "hydra_reset.exe" = "reset"
     "hydraseat_profilectl.exe" = "profile-cli"
@@ -212,6 +216,8 @@ function Get-ValidatedPackage {
         $seen[$fileName] = $true
         $expectedKind = if ($fileName.EndsWith(".ps1", [StringComparison]::OrdinalIgnoreCase)) {
             "powershell-script"
+        } elseif ($fileName.EndsWith(".dll", [StringComparison]::OrdinalIgnoreCase)) {
+            "cmake-shared-library"
         } else {
             "cmake-executable"
         }

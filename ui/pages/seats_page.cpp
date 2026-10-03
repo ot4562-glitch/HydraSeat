@@ -23,7 +23,7 @@ SeatsPage::SeatsPage(
     title->setStyleSheet("font-size: 28px; font-weight: bold; color: #F5F5F5; font-family: 'Segoe UI', sans-serif;");
     layout->addWidget(title);
 
-    auto* subtitle = new QLabel("Configure hardware assignments and application states", container);
+    auto* subtitle = new QLabel("Assign hardware to each Seat. Launch applications from the Applications page.", container);
     subtitle->setStyleSheet("font-size: 14px; color: #B5B5B5; font-family: 'Segoe UI', sans-serif; margin-bottom: 8px;");
     layout->addWidget(subtitle);
 
@@ -56,7 +56,7 @@ QWidget* SeatsPage::buildSeat(std::uint32_t seatId, SeatWidgets& w) {
     auto* headerLayout = new QHBoxLayout();
     auto* title = new QLabel(QString("SEAT %1").arg(seatId), frame);
     title->setStyleSheet("font-size: 16px; font-weight: bold; color: #F5F5F5; border: none;");
-    w.stateBadge = new QLabel("-? Available", frame);
+    w.stateBadge = new QLabel("Available", frame);
     w.stateBadge->setStyleSheet("font-size: 13px; font-weight: bold; color: #777777; border: none; margin-left: 12px;");
     headerLayout->addWidget(title);
     headerLayout->addWidget(w.stateBadge);
@@ -67,12 +67,13 @@ QWidget* SeatsPage::buildSeat(std::uint32_t seatId, SeatWidgets& w) {
         auto* l = new QLabel(labelText, frame);
         l->setStyleSheet("font-size: 11px; font-weight: bold; color: #777777; margin-bottom: 2px; border: none; text-transform: uppercase;");
         combo = new QComboBox(frame);
+        combo->setAccessibleName(
+            QString("Seat %1 %2").arg(seatId).arg(labelText.toLower()));
         combo->setStyleSheet("QComboBox { background-color: #0A0A0A; color: #F5F5F5; border: 1px solid #333333; border-radius: 4px; padding: 4px 8px; font-size: 13px; } QComboBox::drop-down { border: none; } QComboBox:disabled { color: #777777; background-color: #151515; }");
         layout->addWidget(l);
         layout->addWidget(combo);
     };
 
-    createRow("APPLICATION", w.appCombo);
     createRow("DISPLAY", w.displayCombo);
     createRow("KEYBOARD", w.keyboardCombo);
     createRow("MOUSE", w.mouseCombo);
@@ -84,30 +85,36 @@ QWidget* SeatsPage::buildSeat(std::uint32_t seatId, SeatWidgets& w) {
     auto* ctrlLayout = new QHBoxLayout();
     w.ctrlPhysCombo = new QComboBox(frame);
     w.ctrlSrcCombo = new QComboBox(frame);
+    w.ctrlPhysCombo->setAccessibleName(QString("Seat %1 physical controller").arg(seatId));
+    w.ctrlSrcCombo->setAccessibleName(QString("Seat %1 XInput source").arg(seatId));
     w.ctrlPhysCombo->setStyleSheet("QComboBox { background-color: #0A0A0A; color: #F5F5F5; border: 1px solid #333333; border-radius: 4px; padding: 4px 8px; font-size: 13px; } QComboBox::drop-down { border: none; } QComboBox:disabled { color: #777777; background-color: #151515; }");
     w.ctrlSrcCombo->setStyleSheet("QComboBox { background-color: #0A0A0A; color: #F5F5F5; border: 1px solid #333333; border-radius: 4px; padding: 4px 8px; font-size: 13px; } QComboBox::drop-down { border: none; } QComboBox:disabled { color: #777777; background-color: #151515; }");
     ctrlLayout->addWidget(w.ctrlPhysCombo);
     ctrlLayout->addWidget(w.ctrlSrcCombo);
     layout->addLayout(ctrlLayout);
 
-    createRow("AUDIO", w.audioCombo);
+    auto* workflowNote = new QLabel(
+        "Applications are launched from Applications. Audio routing is managed from Audio Routing.",
+        frame);
+    workflowNote->setWordWrap(true);
+    workflowNote->setStyleSheet("font-size: 12px; color: #8A8A8A; border: none;");
+    layout->addWidget(workflowNote);
 
     auto* btnLayout = new QHBoxLayout();
     
-    auto styleBtnPrimary = "QPushButton { background-color: #E10600; color: #F5F5F5; font-size: 14px; font-weight: bold; padding: 8px 16px; border-radius: 4px; border: none; } QPushButton:hover { background-color: #FF0A04; } QPushButton:disabled { background-color: #333333; color: #777777; }";
     auto styleBtnSecondary = "QPushButton { background-color: #292929; color: #F5F5F5; font-size: 14px; font-weight: bold; padding: 8px 16px; border-radius: 4px; border: 1px solid #333333; } QPushButton:hover { background-color: #333333; } QPushButton:disabled { background-color: #151515; color: #777777; border: 1px solid #222222; }";
 
-    w.configureBtn = new QPushButton("Configure Seat", frame);
+    w.configureBtn = new QPushButton("Save Seat", frame);
+    w.configureBtn->setAccessibleName(QString("Save Seat %1 hardware assignment").arg(seatId));
     w.configureBtn->setStyleSheet(styleBtnSecondary);
-    w.launchBtn = new QPushButton("Launch", frame);
-    w.launchBtn->setStyleSheet(styleBtnPrimary);
-    w.stopBtn = new QPushButton("Stop", frame);
+    w.stopBtn = new QPushButton("Stop Application", frame);
+    w.stopBtn->setAccessibleName(QString("Stop Seat %1 application").arg(seatId));
     w.stopBtn->setStyleSheet(styleBtnSecondary);
-    w.reconfigureBtn = new QPushButton("Reconfigure", frame);
+    w.reconfigureBtn = new QPushButton("Edit Assignment", frame);
+    w.reconfigureBtn->setAccessibleName(QString("Edit Seat %1 hardware assignment").arg(seatId));
     w.reconfigureBtn->setStyleSheet(styleBtnSecondary);
 
     btnLayout->addWidget(w.configureBtn);
-    btnLayout->addWidget(w.launchBtn);
     btnLayout->addWidget(w.stopBtn);
     btnLayout->addWidget(w.reconfigureBtn);
     layout->addLayout(btnLayout);
@@ -119,12 +126,8 @@ QWidget* SeatsPage::buildSeat(std::uint32_t seatId, SeatWidgets& w) {
     layout->addWidget(w.feedbackLabel);
 
     connect(w.configureBtn, &QPushButton::clicked, this, [this, seatId]() { onConfigureRequested(seatId); });
-    connect(w.launchBtn, &QPushButton::clicked, this, [this, seatId]() { onLaunchRequested(seatId); });
     connect(w.stopBtn, &QPushButton::clicked, this, [this, seatId]() { onStopRequested(seatId); });
     connect(w.reconfigureBtn, &QPushButton::clicked, this, [this, seatId]() { onConfigureRequested(seatId); });
-
-    w.appCombo->addItem("Antigravity IDE");
-    w.appCombo->addItem("Minecraft");
 
     return frame;
 }
@@ -149,41 +152,33 @@ void SeatsPage::updateState(const EngineStatePayload& payload) {
 void SeatsPage::updateSeatData(std::uint32_t seatId, SeatWidgets& w) {
     const auto* snapshot = seatSnapshot(seatId);
     if (!snapshot) {
-        w.stateBadge->setText("-? Host unavailable");
+        w.stateBadge->setText("Host unavailable");
         w.stateBadge->setStyleSheet("font-size: 13px; font-weight: bold; color: #777777; border: none; margin-left: 12px;");
         w.configureBtn->setDisabled(true);
-        w.launchBtn->setDisabled(true);
         w.stopBtn->setDisabled(true);
         w.reconfigureBtn->setDisabled(true);
         return;
     }
 
     if (snapshot->active && snapshot->processOwned) {
-        w.stateBadge->setText("-? Running");
+        w.stateBadge->setText("Running");
         w.stateBadge->setStyleSheet("font-size: 13px; font-weight: bold; color: #E10600; border: none; margin-left: 12px;");
         
         w.configureBtn->setVisible(false);
-        w.launchBtn->setVisible(false);
         w.stopBtn->setVisible(true);
         w.reconfigureBtn->setVisible(true);
         
         w.stopBtn->setDisabled(false);
         w.reconfigureBtn->setDisabled(false);
-        
-        w.appCombo->setDisabled(true);
     } else {
-        w.stateBadge->setText("-? Ready");
+        w.stateBadge->setText("Ready");
         w.stateBadge->setStyleSheet("font-size: 13px; font-weight: bold; color: #777777; border: none; margin-left: 12px;");
         
         w.configureBtn->setVisible(true);
-        w.launchBtn->setVisible(true);
         w.stopBtn->setVisible(false);
         w.reconfigureBtn->setVisible(false);
         
         w.configureBtn->setDisabled(false);
-        w.launchBtn->setDisabled(false);
-        
-        w.appCombo->setDisabled(false);
     }
 }
 
@@ -235,11 +230,6 @@ void SeatsPage::populateCombos(
         w.mouseCombo,
         m_lastPayload.mice,
         assigned ? assigned->mouseIdUtf8 : std::string{});
-
-    if (w.audioCombo->count() == 0) {
-        w.audioCombo->addItem("Manage in Audio Routing");
-        w.audioCombo->setDisabled(true);
-    }
 
     if (w.ctrlPhysCombo->hasFocus() || w.ctrlSrcCombo->hasFocus()) return;
 
@@ -352,33 +342,6 @@ void SeatsPage::onConfigureRequested(std::uint32_t seatId) {
     w.feedbackLabel->setStyleSheet(
         "font-size: 12px; color: #B5B5B5; border: none;");
     w.feedbackLabel->setVisible(true);
-}
-
-void SeatsPage::onLaunchRequested(std::uint32_t seatId) {
-    SeatWidgets& w = (seatId == 1u) ? m_seat1 : m_seat2;
-    w.feedbackLabel->setVisible(false);
-
-    if (!m_hostControl) {
-        w.feedbackLabel->setText("Canonical host control is unavailable.");
-        w.feedbackLabel->setVisible(true);
-        return;
-    }
-    
-    w.stateBadge->setText("-? Starting...");
-    w.stateBadge->setStyleSheet("font-size: 13px; font-weight: bold; color: #B5B5B5; border: none; margin-left: 12px;");
-
-    std::string title = w.appCombo->currentText().toStdString();
-    std::string error;
-    const auto result = m_hostControl->launchGame(seatId, title, "C:\\Windows\\System32\\notepad.exe", "", "C:\\", &error);
-    
-    if (!result) {
-        w.feedbackLabel->setText(QString("The application could not be launched. %1").arg(QString::fromStdString(error)));
-        w.feedbackLabel->setStyleSheet("font-size: 12px; color: #E10600; border: none;");
-        w.feedbackLabel->setVisible(true);
-        
-        w.stateBadge->setText("-? Ready");
-        w.stateBadge->setStyleSheet("font-size: 13px; font-weight: bold; color: #777777; border: none; margin-left: 12px;");
-    }
 }
 
 void SeatsPage::onStopRequested(std::uint32_t seatId) {

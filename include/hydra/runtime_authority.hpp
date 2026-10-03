@@ -57,6 +57,9 @@ public:
     bool bindTargetWindow(const ActivationToken& token,
                           const ProcessIdentity& owner,
                           std::uintptr_t hwnd) noexcept;
+    bool clearTargetWindow(const ActivationToken& token,
+                           const ProcessIdentity& owner,
+                           std::uintptr_t expectedHwnd) noexcept;
     bool bindController(const ActivationToken& token,
                         const controller::SeatBinding& binding) noexcept;
     bool releaseLease(const ActivationToken& token) noexcept;
@@ -92,6 +95,9 @@ public:
     bool bindTargetWindow(const ActivationToken& token,
                           const ProcessIdentity& owner,
                           std::uintptr_t hwnd) noexcept;
+    bool clearTargetWindow(const ActivationToken& token,
+                           const ProcessIdentity& owner,
+                           std::uintptr_t expectedHwnd) noexcept;
     bool bindController(const ActivationToken& token,
                         const controller::SeatBinding& binding,
                         const controller::InventorySnapshot& inventory) noexcept;

@@ -5,6 +5,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(
+    HYDRA_ENABLE_QT_UI
+    "Build the optional Qt development UI. The reviewed v1 release uses the dependency-free Win32 UI."
+    OFF
+)
+
 # Include directories
 include_directories(include .)
 
@@ -16,7 +22,15 @@ endif()
 # Windows system libraries for Win32 Raw Input, SetupAPI, DXGI, and Comctl32 GUI
 if(WIN32)
     add_compile_definitions(_UNICODE UNICODE WIN32_LEAN_AND_MEAN)
-    set(WIN32_LIBS User32.lib Cfgmgr32.lib Dxgi.lib Setupapi.lib Hid.lib Xinput.lib Comctl32.lib Ole32.lib Mmdevapi.lib runtimeobject.lib)
+    # XInput 9.1.0 ships with supported Windows releases and avoids requiring
+    # the legacy DirectX redistributable just to start HydraSeat on a clean PC.
+    # The native controller path only needs GetState/SetState.
+    set(WIN32_LIBS User32.lib Cfgmgr32.lib Dxgi.lib Setupapi.lib Hid.lib Xinput9_1_0.lib Comctl32.lib Comdlg32.lib Ole32.lib Mmdevapi.lib runtimeobject.lib)
+    if(MINGW)
+        # Release binaries/DLLs must run on a clean Windows machine without the
+        # developer's MinGW runtime directory on PATH.
+        add_link_options(-static -static-libgcc -static-libstdc++)
+    endif()
 
     # Check for PKEY_AudioEndpoint_StableId availability in the current SDK
     include(CheckCXXSourceCompiles)
@@ -35,8 +49,12 @@ if(WIN32)
     endif()
 endif()
 
-# Find Qt6 components if available
-find_package(Qt6 COMPONENTS Core Widgets QUIET)
+# Qt is deliberately opt-in. Auto-detecting it made the release payload depend on
+# whatever happened to be installed on the build machine, while the reviewed
+# installer does not redistribute Qt DLLs.
+if(HYDRA_ENABLE_QT_UI)
+    find_package(Qt6 COMPONENTS Core Widgets REQUIRED)
+endif()
 
 if(Qt6_FOUND)
     set(CMAKE_AUTOMOC ON)
@@ -45,11 +63,11 @@ if(Qt6_FOUND)
     set(UI_SOURCES
         ui/app_window.cpp
         ui/engine_poller.cpp
-        ui/host_control_client.cpp
         ui/routing_controller.cpp
+        ui/ui_settings.cpp
         ui/pages/dashboard_page.cpp
         ui/pages/seats_page.cpp
-    ui/pages/settings_page.cpp
+        ui/pages/settings_page.cpp
         ui/pages/applications_page.cpp
         ui/pages/audio_page.cpp
         ui/pages/hardware_page.cpp
@@ -58,10 +76,11 @@ if(Qt6_FOUND)
     set(UI_HEADERS
         ui/app_window.hpp
         ui/engine_poller.hpp
-        ui/host_control_client.hpp
         ui/routing_controller.hpp
+        ui/ui_settings.hpp
         ui/pages/dashboard_page.hpp
         ui/pages/seats_page.hpp
+        ui/pages/settings_page.hpp
         ui/pages/applications_page.hpp
         ui/pages/audio_page.hpp
         ui/pages/hardware_page.hpp
@@ -82,6 +101,7 @@ set(HYDRA_SOURCES
     src/controller_pairing.cpp
     src/controller_virtual_xinput.cpp
     src/gui_win32.cpp
+    ui/host_control_client.cpp
     ${UI_SOURCES}
 )
 
@@ -108,6 +128,7 @@ set(HYDRA_HEADERS
     include/hydra/gui_win32.hpp
     include/hydra/audio_endpoint_inventory.hpp
     include/hydra/audio_session_observer.hpp
+    ui/host_control_client.hpp
     ${UI_HEADERS}
 )
 
@@ -465,7 +486,10 @@ add_library(hydra_game_launcher STATIC
     src/virtual_xinput_pipe.cpp
 )
 target_include_directories(hydra_game_launcher PUBLIC include)
-target_link_libraries(hydra_game_launcher PUBLIC hydra_host_authority)
+target_link_libraries(hydra_game_launcher PUBLIC
+    hydra_host_authority
+    hydra_process_display
+)
 if(WIN32)
     target_link_libraries(hydra_game_launcher PUBLIC ${WIN32_LIBS})
 endif()
@@ -489,6 +513,16 @@ if(WIN32)
         COMMAND game_launcher_process_ownership $<TARGET_FILE:hydra_process_owner_child>
     )
 
+    add_executable(game_launcher_display_assignment
+        tests/test_game_launcher_display_assignment.cpp
+    )
+    target_link_libraries(game_launcher_display_assignment PRIVATE hydra_game_launcher)
+    add_dependencies(game_launcher_display_assignment hydra_window_test_app)
+    add_test(
+        NAME GameLauncherDisplayAssignment
+        COMMAND game_launcher_display_assignment $<TARGET_FILE:hydra_window_test_app>
+    )
+
     add_executable(game_launcher_xinput_integration
         tests/test_game_launcher_xinput_integration.cpp
     )
@@ -501,6 +535,14 @@ if(WIN32)
         NAME GameLauncherXInputIntegration
         COMMAND game_launcher_xinput_integration $<TARGET_FILE:hydra_process_owner_child>
     )
+endif()
+
+add_library(hydra_raw_input_router STATIC
+    src/input_router.cpp
+)
+target_include_directories(hydra_raw_input_router PUBLIC include)
+if(WIN32)
+    target_link_libraries(hydra_raw_input_router PUBLIC User32.lib)
 endif()
 
 if(WIN32)
@@ -518,7 +560,7 @@ add_library(hydra_host_transport STATIC
 target_include_directories(hydra_host_transport PUBLIC include)
 target_link_libraries(hydra_host_transport
     PUBLIC hydra_host_authority
-    PRIVATE hydra_game_launcher
+    PRIVATE hydra_game_launcher hydra_raw_input_router
 )
 if(WIN32)
     target_link_libraries(hydra_host_transport PUBLIC
@@ -527,12 +569,10 @@ if(WIN32)
     )
 endif()
 
-if(Qt6_FOUND)
-    # The GUI is an IPC client of the canonical host. It does not construct
-    # SessionController/RuntimeHost authority in-process.
-    target_link_libraries(HydraSeat PRIVATE hydra_host_transport)
-    target_link_libraries(hydra_tests PRIVATE hydra_host_transport)
-endif()
+# Every supported GUI is an IPC client of the canonical host. Neither the
+# Win32 release UI nor the optional Qt UI constructs runtime authority in-process.
+target_link_libraries(HydraSeat PRIVATE hydra_host_transport)
+target_link_libraries(hydra_tests PRIVATE hydra_host_transport)
 
 add_executable(host_transport_session_tests
     tests/test_host_transport_session.cpp
@@ -710,6 +750,10 @@ if(WIN32)
         HYDRA_GATE_C_ADAPTER_BUILD=1
     )
     target_include_directories(hydra_gate_c_adapter PUBLIC include)
+    set_target_properties(hydra_gate_c_adapter PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME hydra_gate_c_adapter
+    )
     target_link_libraries(hydra_gate_c_adapter PRIVATE
         hydra_virtual_input_core
     )
@@ -734,6 +778,7 @@ if(WIN32)
         User32.lib
     )
     set_target_properties(hydra_gate_c_shim PROPERTIES
+        PREFIX ""
         OUTPUT_NAME hydra_gate_c_shim
     )
 
@@ -769,9 +814,11 @@ if(WIN32)
         hydra_virtual_input_core
         hydra_gate_c_adapter
         hydra_gate_c_shim
+        hydra_gate_c_shim_support
         User32.lib
     )
     set_target_properties(hydra_gate_c_external_bridge PROPERTIES
+        PREFIX ""
         OUTPUT_NAME hydra_gate_c_external_bridge
     )
 
@@ -786,6 +833,24 @@ if(WIN32)
     if(MINGW)
         target_link_options(hydra_gate_c_external_harness PRIVATE -municode)
     endif()
+
+    add_library(hydra_gate_c_external_session STATIC
+        src/gate_c_external_session.cpp
+    )
+    target_include_directories(hydra_gate_c_external_session PUBLIC include)
+    target_link_libraries(hydra_gate_c_external_session PUBLIC
+        hydra_gate_c_architecture
+        hydra_virtual_input_core
+        User32.lib
+    )
+    target_link_libraries(hydra_game_launcher PUBLIC
+        hydra_gate_c_external_session
+    )
+    add_dependencies(hydra_host
+        hydra_gate_c_adapter
+        hydra_gate_c_shim
+        hydra_gate_c_external_bridge
+    )
 
     add_executable(gate_c_adapter_backend_tests
         tests/test_gate_c_adapter.cpp

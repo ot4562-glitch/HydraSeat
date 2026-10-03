@@ -23,7 +23,6 @@ public slots:
     void updateState(const EngineStatePayload& payload);
 
 private slots:
-    void onLaunchRequested(std::uint32_t seatId);
     void onStopRequested(std::uint32_t seatId);
     void onConfigureRequested(std::uint32_t seatId);
 
@@ -32,16 +31,13 @@ private:
         QLabel* stateBadge{nullptr};
         QLabel* feedbackLabel{nullptr};
 
-        QComboBox* appCombo{nullptr};
         QComboBox* displayCombo{nullptr};
         QComboBox* keyboardCombo{nullptr};
         QComboBox* mouseCombo{nullptr};
         QComboBox* ctrlPhysCombo{nullptr};
         QComboBox* ctrlSrcCombo{nullptr};
-        QComboBox* audioCombo{nullptr};
 
         QPushButton* configureBtn{nullptr};
-        QPushButton* launchBtn{nullptr};
         QPushButton* stopBtn{nullptr};
         QPushButton* reconfigureBtn{nullptr};
     };

@@ -1,6 +1,6 @@
 # HydraSeat Current Status
 
-Snapshot date: **2026-10-01**
+Snapshot date: **2026-10-04**
 
 This is a dated engineering snapshot of the canonical HydraSeat integration. It distinguishes implemented/automated evidence from physical or real-game acceptance evidence.
 
@@ -34,7 +34,10 @@ Implemented integration includes:
 - canonical host control authority and IPC protocol v2;
 - host-owned custom-executable launch/stop control with strict per-Seat Job ownership;
 - host-owned Windows audio routing integration;
-- signed installer bootstrap plus local compatibility evidence/runner and requirement-authority tooling activated in the build graph.
+- installer bootstrap/signing contract plus local compatibility evidence/runner and requirement-authority tooling activated in the build graph;
+- the dependency-free Win32 UI wired to canonical host IPC for stable hardware assignment, explicit XInput pairing, and per-Seat launch/stop;
+- x64 Gate-C external session/bridge activation integrated into the real game launch path;
+- MinGW release binaries linked without external MinGW runtime DLL dependencies.
 
 Legacy fork modules are not automatically treated as authority. In particular, duplicate controller runtime, launcher authority, or UI-owned runtime state is not reintroduced when the canonical ControllerInventory, SessionController, RuntimeHost, and host transport already own that responsibility.
 
@@ -90,7 +93,11 @@ The canonical backend stack has automated coverage for the authority boundary an
 - hydra_host.exe build;
 - hydraseat_hostctl.exe build;
 - HydraSeatSetup.exe build;
-- installer bootstrap, local compatibility evidence/runner, and runtime-requirement authority tests.
+- installer bootstrap, local compatibility evidence/runner, and runtime-requirement authority tests;
+- **103/103 CTest targets passing** on the 2026-10-04 release-candidate working tree;
+- live `hydra_host.exe` smoke test on Windows: named-pipe `ping` returned `pong`, authority snapshot returned two clean idle Seats, and host hardware inventory returned stable display/keyboard/mouse identities;
+- local hardware detector smoke test: one physical display, six keyboard endpoints, five mouse/touchpad endpoints, and no connected gamepad at test time;
+- PE dependency inspection confirming `HydraSeat.exe`, `hydra_host.exe`, and the Gate-C bridge do not depend on developer-local MinGW runtime DLLs.
 
 The current integration also fixes issues found while auditing the old fork:
 
@@ -131,6 +138,9 @@ The following remain unclaimed until the appropriate evidence is collected:
 - crash/reboot/watchdog/emergency recovery on a real Windows installation;
 - clean-machine install/update/uninstall;
 - production signing trust and verification on released artifacts;
+- MSVC/Visual Studio release-build qualification in addition to the currently validated MinGW-w64 build;
+- project license text confirmation/restoration: upstream has historically declared MIT in README, but no `LICENSE` file exists in repository history;
+- physical controller acceptance was not possible on the 2026-10-04 test machine because no gamepad was connected;
 - protected/anti-cheat scenarios refusing unsupported activation safely.
 
 ## Collaboration and repository state
