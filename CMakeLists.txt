@@ -43,8 +43,7 @@ if(WIN32)
     endif()
 endif()
 
-# Preserve Pranshu's UI ownership: when Qt is available, build the existing
-# Qt interface unchanged. Win32 remains only the original fallback path.
+# Find Qt6 components if available
 find_package(Qt6 COMPONENTS Core Widgets QUIET)
 
 if(Qt6_FOUND)
@@ -71,7 +70,6 @@ if(Qt6_FOUND)
         ui/routing_controller.hpp
         ui/pages/dashboard_page.hpp
         ui/pages/seats_page.hpp
-        ui/pages/settings_page.hpp
         ui/pages/applications_page.hpp
         ui/pages/audio_page.hpp
         ui/pages/hardware_page.hpp
