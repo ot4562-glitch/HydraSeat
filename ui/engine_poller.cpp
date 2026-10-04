@@ -27,16 +27,6 @@ void EnginePollerWorker::doPoll() {
         if (snapshot) {
             payload.hostConnected = true;
             payload.hostSnapshot = std::move(snapshot);
-            for (std::uint32_t seatId = 1;
-                 seatId <= hydra::hostipc::kHostSeatCount;
-                 ++seatId) {
-                std::string seatError;
-                payload.seatHardware[seatId - 1u] =
-                    m_hostClient.getSeatHardware(
-                        seatId,
-                        hydra::hostipc::kDefaultHostPipeTimeoutMs,
-                        &seatError);
-            }
         } else {
             payload.hostError = std::move(hostError);
             m_hostClient.close();

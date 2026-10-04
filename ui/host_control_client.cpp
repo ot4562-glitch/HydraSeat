@@ -1,11 +1,6 @@
 #include "ui/host_control_client.hpp"
 
-#include <array>
 #include <utility>
-
-#if defined(_WIN32)
-#include <windows.h>
-#endif
 
 namespace hydra::ui {
 namespace {
@@ -13,56 +8,6 @@ namespace {
 void setError(std::string* error, std::string message) {
     if (error) *error = std::move(message);
 }
-
-#if defined(_WIN32)
-bool launchSiblingHost(std::string* error) {
-    std::array<wchar_t, 32768> modulePath{};
-    const DWORD length = GetModuleFileNameW(
-        nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
-    if (length == 0 || length >= modulePath.size()) {
-        setError(error, "cannot resolve HydraSeat executable path");
-        return false;
-    }
-
-    std::wstring directory(modulePath.data(), length);
-    const auto separator = directory.find_last_of(L"\\/");
-    if (separator == std::wstring::npos) {
-        setError(error, "cannot resolve HydraSeat install directory");
-        return false;
-    }
-    directory.resize(separator);
-
-    const std::wstring hostPath = directory + L"\\hydra_host.exe";
-    const DWORD attributes = GetFileAttributesW(hostPath.c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES ||
-        (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-        setError(error, "hydra_host.exe is missing beside HydraSeat.exe");
-        return false;
-    }
-
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    PROCESS_INFORMATION process{};
-    if (!CreateProcessW(
-            hostPath.c_str(),
-            nullptr,
-            nullptr,
-            nullptr,
-            FALSE,
-            CREATE_NO_WINDOW,
-            nullptr,
-            directory.c_str(),
-            &startup,
-            &process)) {
-        setError(error, "failed to start hydra_host.exe");
-        return false;
-    }
-
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-    return true;
-}
-#endif
 
 } // namespace
 
@@ -74,45 +19,10 @@ bool HostControlClient::ensureConnected(std::string* error) {
     if (client_.connected()) return true;
 
     ownedUiLeases_.fill(false);
-
-#if defined(_WIN32)
-    std::string initialError;
-    if (client_.connect(hostipc::ClientRole::Control, 150, &initialError)) {
-        return true;
-    }
-    client_.close();
-
-    std::string launchError;
-    if (!launchSiblingHost(&launchError)) {
-        setError(
-            error,
-            launchError.empty()
-                ? "canonical host is unavailable"
-                : std::move(launchError));
-        return false;
-    }
-
-    // The GUI only bootstraps the sibling process. All Seat authority remains
-    // behind the named-pipe handshake; a concurrently running host simply wins
-    // the pipe race and this client connects to that canonical instance.
-    for (unsigned int attempt = 0; attempt < 25; ++attempt) {
-        Sleep(100);
-        std::string connectError;
-        if (client_.connect(
-                hostipc::ClientRole::Control, 100, &connectError)) {
-            return true;
-        }
-        client_.close();
-    }
-
-    setError(error, "hydra_host.exe started but canonical host IPC did not become ready");
-    return false;
-#else
     return client_.connect(
         hostipc::ClientRole::Control,
         hostipc::kDefaultHostPipeTimeoutMs,
         error);
-#endif
 }
 
 bool HostControlClient::connected() const noexcept {
@@ -170,46 +80,6 @@ std::optional<hostipc::HostSnapshot> HostControlClient::releaseUiLease(
         seatId, hostipc::kDefaultHostPipeTimeoutMs, error);
     if (result) ownedUiLeases_[seatId - 1u] = false;
     return result;
-}
-
-std::optional<hostipc::HardwareInventory>
-HostControlClient::hardwareInventory(std::string* error) {
-    if (!ensureConnected(error)) return std::nullopt;
-    return client_.getHardwareInventory(
-        hostipc::kDefaultHostPipeTimeoutMs, error);
-}
-
-std::optional<hostipc::SeatHardwareAssignment>
-HostControlClient::seatHardware(
-    std::uint32_t seatId,
-    std::string* error) {
-    if (seatId == 0 || seatId > ownedUiLeases_.size()) {
-        setError(error, "invalid Seat id");
-        return std::nullopt;
-    }
-    if (!ensureConnected(error)) return std::nullopt;
-    return client_.getSeatHardware(
-        seatId, hostipc::kDefaultHostPipeTimeoutMs, error);
-}
-
-std::optional<hostipc::SeatHardwareAssignment>
-HostControlClient::assignSeatHardware(
-    std::uint32_t seatId,
-    const std::string& displayIdUtf8,
-    const std::string& keyboardIdUtf8,
-    const std::string& mouseIdUtf8,
-    std::string* error) {
-    if (!ensureUiLeaseForSeat(seatId, error)) return std::nullopt;
-
-    return client_.assignSeatHardware(
-        hostipc::SeatHardwareAssignment{
-            seatId,
-            displayIdUtf8,
-            keyboardIdUtf8,
-            mouseIdUtf8,
-        },
-        hostipc::kDefaultHostPipeTimeoutMs,
-        error);
 }
 
 bool HostControlClient::ensureUiLeaseForSeat(

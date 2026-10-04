@@ -5,12 +5,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(
-    HYDRA_ENABLE_QT_UI
-    "Build the optional Qt development UI. The reviewed v1 release uses the dependency-free Win32 UI."
-    OFF
-)
-
 # Include directories
 include_directories(include .)
 
@@ -49,12 +43,9 @@ if(WIN32)
     endif()
 endif()
 
-# Qt is deliberately opt-in. Auto-detecting it made the release payload depend on
-# whatever happened to be installed on the build machine, while the reviewed
-# installer does not redistribute Qt DLLs.
-if(HYDRA_ENABLE_QT_UI)
-    find_package(Qt6 COMPONENTS Core Widgets REQUIRED)
-endif()
+# Preserve Pranshu's UI ownership: when Qt is available, build the existing
+# Qt interface unchanged. Win32 remains only the original fallback path.
+find_package(Qt6 COMPONENTS Core Widgets QUIET)
 
 if(Qt6_FOUND)
     set(CMAKE_AUTOMOC ON)
@@ -63,8 +54,8 @@ if(Qt6_FOUND)
     set(UI_SOURCES
         ui/app_window.cpp
         ui/engine_poller.cpp
+        ui/host_control_client.cpp
         ui/routing_controller.cpp
-        ui/ui_settings.cpp
         ui/pages/dashboard_page.cpp
         ui/pages/seats_page.cpp
         ui/pages/settings_page.cpp
@@ -76,8 +67,8 @@ if(Qt6_FOUND)
     set(UI_HEADERS
         ui/app_window.hpp
         ui/engine_poller.hpp
+        ui/host_control_client.hpp
         ui/routing_controller.hpp
-        ui/ui_settings.hpp
         ui/pages/dashboard_page.hpp
         ui/pages/seats_page.hpp
         ui/pages/settings_page.hpp
@@ -101,7 +92,6 @@ set(HYDRA_SOURCES
     src/controller_pairing.cpp
     src/controller_virtual_xinput.cpp
     src/gui_win32.cpp
-    ui/host_control_client.cpp
     ${UI_SOURCES}
 )
 
@@ -128,7 +118,6 @@ set(HYDRA_HEADERS
     include/hydra/gui_win32.hpp
     include/hydra/audio_endpoint_inventory.hpp
     include/hydra/audio_session_observer.hpp
-    ui/host_control_client.hpp
     ${UI_HEADERS}
 )
 

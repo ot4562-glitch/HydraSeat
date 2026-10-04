@@ -11,7 +11,6 @@
 #ifdef HYDRA_HAS_QT
 #include <QApplication>
 #include "ui/app_window.hpp"
-#include "ui/ui_settings.hpp"
 #endif
 
 #include <iostream>
@@ -23,15 +22,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
 #ifdef HYDRA_HAS_QT
     QApplication app(__argc, __argv);
-    QApplication::setOrganizationName("HydraSeat");
-    QApplication::setApplicationName("HydraSeat");
-
     hydra::ui::AppWindow window;
-    if (hydra::ui::UiSettings::load().startMinimized) {
-        window.showMinimized();
-    } else {
-        window.show();
-    }
+    window.show();
     return app.exec();
 #else
     hydra::gui::Win32App guiApp;

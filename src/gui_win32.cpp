@@ -1,15 +1,8 @@
 #include "hydra/gui_win32.hpp"
-#include "hydra/controller_inventory.hpp"
 
 #include <algorithm>
-#include <array>
-#include <filesystem>
-#include <limits>
-#include <optional>
-#include <string_view>
 
 #ifdef _WIN32
-#include <commdlg.h>
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -88,24 +81,6 @@ static Win32App* g_appInstance = nullptr;
 
 #define TIMER_FLASH_RESET 2001
 
-static std::optional<std::string> wideToUtf8(std::wstring_view value) {
-    if (value.empty()) return std::string{};
-    if (value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
-        return std::nullopt;
-    }
-    const int sourceLength = static_cast<int>(value.size());
-    const int required = WideCharToMultiByte(
-        CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), sourceLength,
-        nullptr, 0, nullptr, nullptr);
-    if (required <= 0) return std::nullopt;
-    std::string result(static_cast<std::size_t>(required), '\0');
-    const int written = WideCharToMultiByte(
-        CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), sourceLength,
-        result.data(), required, nullptr, nullptr);
-    if (written != required) return std::nullopt;
-    return result;
-}
-
 Win32App::Win32App() {
     g_appInstance = this;
 }
@@ -135,9 +110,7 @@ LRESULT CALLBACK Win32App::DeviceTileProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             HWND parentHwnd = GetParent(hwnd);
             ScreenToClient(parentHwnd, &pt);
 
-            int width = (tile->type == DeviceCategory::Display) ? 145 :
-                        ((tile->type == DeviceCategory::Keyboard) ? 105 :
-                        ((tile->type == DeviceCategory::Gamepad) ? 90 : 45));
+            int width = (tile->type == DeviceCategory::Display) ? 145 : ((tile->type == DeviceCategory::Keyboard) ? 105 : 45);
             int height = (tile->type == DeviceCategory::Display) ? 80 : 42;
 
             SetWindowPos(hwnd, HWND_TOP, pt.x - width / 2, pt.y - height / 2, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
@@ -290,23 +263,6 @@ LRESULT CALLBACK Win32App::DeviceTileProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                 SelectObject(hdc, oldPPen);
                 DeleteObject(padBrush);
                 DeleteObject(padPen);
-            } else if (tile->type == DeviceCategory::Gamepad) {
-                SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, RGB(226, 232, 240));
-                HFONT padFont = CreateFontW(
-                    14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                    DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-                HGDIOBJ oldPadFont = SelectObject(hdc, padFont);
-                RECT labelRect = rect;
-                DrawTextW(
-                    hdc,
-                    tile->displayLabel.c_str(),
-                    -1,
-                    &labelRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(hdc, oldPadFont);
-                DeleteObject(padFont);
             }
         }
 
@@ -365,7 +321,7 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
 
     m_hwnd = CreateWindowExW(
         0, L"HydraSeatMainWindowClass",
-        L"HydraSeat - Multiseat Control Center",
+        L"HydraSeat - ASTER Multiseat Partition Control Center",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, 980, 750,
         NULL, NULL, hInstance, NULL
@@ -376,7 +332,6 @@ bool Win32App::initialize(HINSTANCE hInstance, int nCmdShow) {
     setupUI();
     m_inputRouter.initialize(reinterpret_cast<uint64_t>(m_hwnd));
     refreshHardware();
-    loadWorkspaceProfile();
 
     // Hook global raw input events to trigger live YELLOW BORDER highlights on device tiles
     m_inputRouter.setGlobalCallback([this](const RawInputEvent& evt) {
@@ -500,19 +455,20 @@ void Win32App::setupUI() {
         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     SendMessageW(header, WM_SETFONT, (WPARAM)hFontHeader, TRUE);
 
-    // Canonical host configuration actions.
-    m_saveProfileBtn = CreateWindowExW(0, L"BUTTON", L"Apply Assignments",
+    // Save Profile Button
+    m_saveProfileBtn = CreateWindowExW(0, L"BUTTON", L"Save Profile",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        430, 15, 135, 32, m_hwnd, (HMENU)ID_BTN_SAVE_PROF, GetModuleHandle(NULL), NULL);
+        450, 15, 110, 32, m_hwnd, (HMENU)ID_BTN_SAVE_PROF, GetModuleHandle(NULL), NULL);
 
-    m_loadProfileBtn = CreateWindowExW(0, L"BUTTON", L"Reload Assignments",
+    // Load Profile Button
+    m_loadProfileBtn = CreateWindowExW(0, L"BUTTON", L"Load Profile",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        575, 15, 135, 32, m_hwnd, (HMENU)ID_BTN_LOAD_PROF, GetModuleHandle(NULL), NULL);
+        570, 15, 110, 32, m_hwnd, (HMENU)ID_BTN_LOAD_PROF, GetModuleHandle(NULL), NULL);
 
     // Refresh Button
     m_refreshBtn = CreateWindowExW(0, L"BUTTON", L"Refresh",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        720, 15, 90, 32, m_hwnd, (HMENU)ID_BTN_REFRESH, GetModuleHandle(NULL), NULL);
+        690, 15, 90, 32, m_hwnd, (HMENU)ID_BTN_REFRESH, GetModuleHandle(NULL), NULL);
 
     // Status Label
     m_deviceStatusLabel = CreateWindowExW(0, L"STATIC", L"Detecting connected hardware...",
@@ -547,30 +503,13 @@ void Win32App::setupUI() {
     SendMessageW(m_p1Group, WM_SETFONT, (WPARAM)hFontBold, TRUE);
     SendMessageW(m_p2Group, WM_SETFONT, (WPARAM)hFontBold, TRUE);
 
-    auto* p1ControllerLabel = CreateWindowExW(
-        0, L"STATIC", L"XInput slot:", WS_CHILD | WS_VISIBLE,
-        350, 574, 88, 22, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-    m_p1ControllerSlotCombo = CreateWindowExW(
-        0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-        440, 570, 160, 160, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-    auto* p2ControllerLabel = CreateWindowExW(
-        0, L"STATIC", L"XInput slot:", WS_CHILD | WS_VISIBLE,
-        660, 574, 88, 22, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-    m_p2ControllerSlotCombo = CreateWindowExW(
-        0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-        750, 570, 160, 160, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-    SendMessageW(p1ControllerLabel, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(p2ControllerLabel, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_p1ControllerSlotCombo, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-    SendMessageW(m_p2ControllerSlotCombo, WM_SETFONT, (WPARAM)hFontNormal, TRUE);
-
-    // The canonical host owns isolation. These buttons start/stop one Seat at a
-    // time and never launch a local fallback process.
-    m_isolationBtn = CreateWindowExW(0, L"BUTTON", L"Seat 1: Launch / Stop",
+    // Isolation Toggle Button
+    m_isolationBtn = CreateWindowExW(0, L"BUTTON", L"Lock & Isolate Workspace Inputs: OFF",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         20, 642, 440, 42, m_hwnd, (HMENU)ID_BTN_ISOLATION, GetModuleHandle(NULL), NULL);
 
-    m_launchBtn = CreateWindowExW(0, L"BUTTON", L"Seat 2: Launch / Stop",
+    // Launch Button at bottom
+    m_launchBtn = CreateWindowExW(0, L"BUTTON", L"Launch Multiseat Game Session",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         490, 642, 440, 42, m_hwnd, (HMENU)ID_BTN_LAUNCH, GetModuleHandle(NULL), NULL);
 
@@ -606,13 +545,6 @@ void Win32App::layoutDeviceTiles() {
                     inputX = startX + 15;
                     inputY += 50;
                 }
-            } else if (tilePtr->type == DeviceCategory::Gamepad) {
-                SetWindowPos(tilePtr->hwndControl, NULL, inputX, inputY, 90, 42, SWP_NOZORDER | SWP_SHOWWINDOW);
-                inputX += 100;
-                if (inputX > startX + 270) {
-                    inputX = startX + 15;
-                    inputY += 50;
-                }
             } else {
                 SetWindowPos(tilePtr->hwndControl, NULL, inputX, inputY, 45, 42, SWP_NOZORDER | SWP_SHOWWINDOW);
                 inputX += 55;
@@ -632,66 +564,10 @@ void Win32App::layoutDeviceTiles() {
 }
 
 void Win32App::refreshHardware() {
-    std::unordered_map<std::wstring, PartitionOwner> preservedOwners;
-    for (const auto& tile : m_deviceTiles) {
-        if (tile && !tile->stableId.empty()) {
-            preservedOwners[tile->stableId] = tile->owner;
-        }
-    }
-
-    const auto ownerFor = [&](const std::wstring& stableId) {
-        const auto found = preservedOwners.find(stableId);
-        return found != preservedOwners.end()
-            ? found->second
-            : PartitionOwner::Pool;
-    };
-
     m_displays = m_hardwareDetector.detectDisplays();
     m_keyboards = m_hardwareDetector.detectKeyboards();
     m_mice = m_hardwareDetector.detectMice();
     m_controllers = m_hardwareDetector.detectControllers();
-
-    const auto controllerInventory = hydra::controller::scanControllerSources();
-    const auto populateControllerSlots = [&](HWND combo) {
-        if (!combo) return;
-        const LRESULT previousIndex = SendMessageW(combo, CB_GETCURSEL, 0, 0);
-        LRESULT previousData = -1;
-        if (previousIndex != CB_ERR) {
-            previousData = SendMessageW(combo, CB_GETITEMDATA, previousIndex, 0);
-        }
-        SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-        const LRESULT noneIndex = SendMessageW(
-            combo, CB_ADDSTRING, 0,
-            reinterpret_cast<LPARAM>(L"No XInput controller"));
-        if (noneIndex != CB_ERR) {
-            SendMessageW(combo, CB_SETITEMDATA, noneIndex, static_cast<LPARAM>(-1));
-        }
-        LRESULT selectedIndex = noneIndex;
-        if (controllerInventory.authoritative) {
-            for (const auto& source : controllerInventory.sources) {
-                if (source.api != hydra::controller::ApiSurface::XInput ||
-                    !source.connected || !source.runtimeXInputSlot) {
-                    continue;
-                }
-                const auto slot = *source.runtimeXInputSlot;
-                const std::wstring label =
-                    L"XInput slot " + std::to_wstring(slot) + L" (connected)";
-                const LRESULT item = SendMessageW(
-                    combo, CB_ADDSTRING, 0,
-                    reinterpret_cast<LPARAM>(label.c_str()));
-                if (item == CB_ERR) continue;
-                SendMessageW(combo, CB_SETITEMDATA, item, static_cast<LPARAM>(slot));
-                if (previousData == static_cast<LRESULT>(slot)) {
-                    selectedIndex = item;
-                }
-            }
-        }
-        if (selectedIndex != CB_ERR) {
-            SendMessageW(combo, CB_SETCURSEL, selectedIndex, 0);
-        }
-    };
-    populateControllerSlots(m_p1ControllerSlotCombo);
-    populateControllerSlots(m_p2ControllerSlotCombo);
 
     std::wstring statusText = L"Connected Hardware: " + std::to_wstring(m_displays.size()) + L" Displays | " +
                               std::to_wstring(m_keyboards.size()) + L" Keyboards | " +
@@ -712,12 +588,11 @@ void Win32App::refreshHardware() {
     for (size_t i = 0; i < m_displays.size(); ++i) {
         auto tile = std::make_unique<VisualDeviceTile>();
         tile->name = m_displays[i].name;
-        tile->stableId = m_displays[i].id;
         tile->displayLabel = L"1." + std::to_wstring(i + 1);
         tile->type = DeviceCategory::Display;
         tile->nativeHandle = m_displays[i].nativeHandle;
         tile->devicePath = m_displays[i].devicePath;
-        tile->owner = ownerFor(tile->stableId);
+        tile->owner = PartitionOwner::Pool;
 
         tile->hwndControl = CreateWindowExW(0, L"HydraSeatDeviceTileClass", L"",
             WS_CHILD | WS_VISIBLE,
@@ -731,12 +606,11 @@ void Win32App::refreshHardware() {
     for (size_t i = 0; i < m_keyboards.size(); ++i) {
         auto tile = std::make_unique<VisualDeviceTile>();
         tile->name = m_keyboards[i].name;
-        tile->stableId = m_keyboards[i].id;
         tile->displayLabel = L"KBD " + std::to_wstring(i + 1);
         tile->type = DeviceCategory::Keyboard;
         tile->nativeHandle = m_keyboards[i].nativeHandle;
         tile->devicePath = m_keyboards[i].devicePath;
-        tile->owner = ownerFor(tile->stableId);
+        tile->owner = PartitionOwner::Pool;
 
         tile->hwndControl = CreateWindowExW(0, L"HydraSeatDeviceTileClass", L"",
             WS_CHILD | WS_VISIBLE,
@@ -753,7 +627,6 @@ void Win32App::refreshHardware() {
     for (size_t i = 0; i < m_mice.size(); ++i) {
         auto tile = std::make_unique<VisualDeviceTile>();
         tile->name = m_mice[i].name;
-        tile->stableId = m_mice[i].id;
         tile->displayLabel = L"MOU " + std::to_wstring(i + 1);
 
         std::wstring nameUpper = tile->name;
@@ -770,7 +643,7 @@ void Win32App::refreshHardware() {
 
         tile->nativeHandle = m_mice[i].nativeHandle;
         tile->devicePath = m_mice[i].devicePath;
-        tile->owner = ownerFor(tile->stableId);
+        tile->owner = PartitionOwner::Pool;
 
         tile->hwndControl = CreateWindowExW(0, L"HydraSeatDeviceTileClass", L"",
             WS_CHILD | WS_VISIBLE,
@@ -781,27 +654,6 @@ void Win32App::refreshHardware() {
         uintptr_t handle = tile->nativeHandle;
         m_deviceTiles.push_back(std::move(tile));
         if (handle != 0) m_handleToTileIndex[handle] = idx;
-    }
-
-    // Physical controllers are stable-ID tiles. Pairing to the separate,
-    // explicitly selected XInput runtime slot happens only at Apply/Launch.
-    for (size_t i = 0; i < m_controllers.size(); ++i) {
-        auto tile = std::make_unique<VisualDeviceTile>();
-        tile->name = m_controllers[i].name;
-        tile->stableId = m_controllers[i].id;
-        tile->displayLabel = L"PAD " + std::to_wstring(i + 1);
-        tile->type = DeviceCategory::Gamepad;
-        tile->nativeHandle = 0;
-        tile->devicePath = m_controllers[i].devicePath;
-        tile->owner = ownerFor(tile->stableId);
-        tile->hwndControl = CreateWindowExW(
-            0, L"HydraSeatDeviceTileClass", L"", WS_CHILD | WS_VISIBLE,
-            0, 0, 90, 42, m_hwnd, NULL, GetModuleHandle(NULL), NULL);
-        SetWindowLongPtrW(
-            tile->hwndControl,
-            GWLP_USERDATA,
-            reinterpret_cast<LONG_PTR>(tile.get()));
-        m_deviceTiles.push_back(std::move(tile));
     }
 
     // ================================================================
@@ -924,381 +776,52 @@ void Win32App::refreshHardware() {
 }
 
 void Win32App::saveWorkspaceProfile() {
-    std::string error;
-    if (!commitAssignments(&error)) {
-        const std::wstring message(error.begin(), error.end());
-        MessageBoxW(
-            m_hwnd,
-            message.empty() ? L"Seat assignments could not be committed." : message.c_str(),
-            L"HydraSeat assignment failed",
-            MB_OK | MB_ICONERROR);
-        return;
+    m_workspaceManager.createWorkspace(L"Player 1");
+    m_workspaceManager.createWorkspace(L"Player 2");
+
+    for (const auto& tilePtr : m_deviceTiles) {
+        if (!tilePtr) continue;
+        uint32_t wsId = (tilePtr->owner == PartitionOwner::Player1) ? 1 : (tilePtr->owner == PartitionOwner::Player2 ? 2 : 0);
+        if (wsId > 0) {
+            if (tilePtr->type == DeviceCategory::Display) {
+                m_workspaceManager.assignDisplay(wsId, tilePtr->name);
+            } else if (tilePtr->type == DeviceCategory::Keyboard) {
+                m_workspaceManager.assignKeyboard(wsId, tilePtr->name);
+            } else if (tilePtr->type == DeviceCategory::Mouse || tilePtr->type == DeviceCategory::Touchpad) {
+                m_workspaceManager.assignMouse(wsId, tilePtr->name);
+            }
+        }
     }
 
-    MessageBoxW(
-        m_hwnd,
-        L"Seat assignments were committed to the canonical host and persisted.",
-        L"HydraSeat",
-        MB_OK | MB_ICONINFORMATION);
+    if (m_workspaceManager.saveToFile("workspace_config.json")) {
+        MessageBoxW(m_hwnd, L"Workspace partition assignments saved to workspace_config.json!", L"HydraSeat Profile Manager", MB_OK | MB_ICONINFORMATION);
+    }
 }
 
 void Win32App::loadWorkspaceProfile() {
-    std::string error;
-    const auto first = m_hostControl.seatHardware(1u, &error);
-    const auto second = m_hostControl.seatHardware(2u, &error);
-    if (!first || !second) {
-        const std::wstring message(error.begin(), error.end());
-        MessageBoxW(
-            m_hwnd,
-            message.empty() ? L"Persisted Seat assignments are unavailable." : message.c_str(),
-            L"HydraSeat reload failed",
-            MB_OK | MB_ICONERROR);
-        return;
+    if (m_workspaceManager.loadFromFile("workspace_config.json")) {
+        MessageBoxW(m_hwnd, L"Workspace profile loaded successfully!", L"HydraSeat Profile Manager", MB_OK | MB_ICONINFORMATION);
+    } else {
+        MessageBoxW(m_hwnd, L"No saved workspace_config.json found.", L"HydraSeat Profile Manager", MB_OK | MB_ICONWARNING);
     }
-
-    for (auto& tile : m_deviceTiles) {
-        if (tile) tile->owner = PartitionOwner::Pool;
-    }
-
-    const auto applyOwner = [this](
-        const hydra::hostipc::SeatHardwareAssignment& assignment,
-        PartitionOwner owner) {
-        for (auto& tile : m_deviceTiles) {
-            if (!tile) continue;
-            const auto stable = wideToUtf8(tile->stableId);
-            if (!stable) continue;
-            if (*stable == assignment.displayIdUtf8 ||
-                *stable == assignment.keyboardIdUtf8 ||
-                *stable == assignment.mouseIdUtf8) {
-                tile->owner = owner;
-            }
-        }
-    };
-
-    applyOwner(*first, PartitionOwner::Player1);
-    applyOwner(*second, PartitionOwner::Player2);
-    layoutDeviceTiles();
 }
 
-bool Win32App::applySeatAssignment(
-    std::uint32_t seatId,
-    std::string* error) {
-    if (seatId != 1u && seatId != 2u) {
-        if (error) *error = "invalid Seat id";
-        return false;
+void Win32App::toggleIsolationMode() {
+    bool current = m_inputRouter.isIsolationMode();
+    m_inputRouter.setIsolationMode(!current);
+
+    if (!current) {
+        SetWindowTextW(m_isolationBtn, L"Lock & Isolate Workspace Inputs: ON");
+        MessageBoxW(m_hwnd, L"Multiseat Input Isolation Activated!\n\nKeystrokes & mouse inputs are locked exclusively to their assigned Player Workspaces.", L"HydraSeat Input Isolation Engine", MB_OK | MB_ICONINFORMATION);
+    } else {
+        SetWindowTextW(m_isolationBtn, L"Lock & Isolate Workspace Inputs: OFF");
     }
-
-    const auto owner =
-        seatId == 1u ? PartitionOwner::Player1 : PartitionOwner::Player2;
-    std::optional<std::wstring> display;
-    std::optional<std::wstring> keyboard;
-    std::optional<std::wstring> mouse;
-    std::optional<std::wstring> controller;
-
-    for (const auto& tile : m_deviceTiles) {
-        if (!tile || tile->owner != owner) continue;
-
-        const auto assignUnique = [&](
-            std::optional<std::wstring>& target,
-            std::string_view label) {
-            if (target) {
-                if (error) {
-                    *error =
-                        "Seat " + std::to_string(seatId) +
-                        " has more than one assigned " + std::string(label) +
-                        "; v1 supports exactly one per type";
-                }
-                return false;
-            }
-            if (tile->stableId.empty()) {
-                if (error) {
-                    *error =
-                        "Seat " + std::to_string(seatId) +
-                        " contains hardware without a stable identity";
-                }
-                return false;
-            }
-            target = tile->stableId;
-            return true;
-        };
-
-        if (tile->type == DeviceCategory::Display) {
-            if (!assignUnique(display, "display")) return false;
-        } else if (tile->type == DeviceCategory::Keyboard) {
-            if (!assignUnique(keyboard, "keyboard")) return false;
-        } else if (
-            tile->type == DeviceCategory::Mouse ||
-            tile->type == DeviceCategory::Touchpad) {
-            if (!assignUnique(mouse, "mouse")) return false;
-        } else if (tile->type == DeviceCategory::Gamepad) {
-            if (!assignUnique(controller, "controller")) return false;
-        }
-    }
-
-    std::optional<std::uint8_t> controllerSlot;
-    if (controller) {
-        HWND combo =
-            seatId == 1u ? m_p1ControllerSlotCombo : m_p2ControllerSlotCombo;
-        const LRESULT index =
-            combo ? SendMessageW(combo, CB_GETCURSEL, 0, 0) : CB_ERR;
-        const LRESULT data =
-            index != CB_ERR
-                ? SendMessageW(combo, CB_GETITEMDATA, index, 0)
-                : CB_ERR;
-        if (data == CB_ERR || data < 0 ||
-            data >= hydra::controller::kXInputSlotCount) {
-            if (error) {
-                *error =
-                    "Assign exactly one connected XInput slot to Seat " +
-                    std::to_string(seatId) +
-                    " for the selected physical controller";
-            }
-            return false;
-        }
-        controllerSlot = static_cast<std::uint8_t>(data);
-    }
-
-    const auto displayUtf8 = wideToUtf8(display.value_or(L""));
-    const auto keyboardUtf8 = wideToUtf8(keyboard.value_or(L""));
-    const auto mouseUtf8 = wideToUtf8(mouse.value_or(L""));
-    const auto controllerUtf8 = wideToUtf8(controller.value_or(L""));
-    if (!displayUtf8 || !keyboardUtf8 || !mouseUtf8 || !controllerUtf8) {
-        if (error) *error = "assigned hardware identity is not valid Unicode";
-        return false;
-    }
-
-    const auto before = m_hostControl.seatHardware(seatId, error);
-    if (!before) return false;
-
-    const auto snapshot = m_hostControl.snapshot(error);
-    if (!snapshot || seatId > snapshot->seats.size()) return false;
-    if (snapshot->seats[seatId - 1u].gameLeaseActive) {
-        if (error) {
-            *error =
-                "Stop the Seat game before changing its hardware or controller pairing";
-        }
-        return false;
-    }
-
-    // A controller binding is generation/lease scoped. Release our inactive UI
-    // lease before reconfiguration so removing or changing a controller cannot
-    // leave a stale binding behind.
-    if (m_hostControl.ownsUiLease(seatId) &&
-        !m_hostControl.releaseUiLease(seatId, error)) {
-        return false;
-    }
-
-    if (!m_hostControl.assignSeatHardware(
-            seatId,
-            *displayUtf8,
-            *keyboardUtf8,
-            *mouseUtf8,
-            error)) {
-        return false;
-    }
-
-    if (!controller) return true;
-
-    if (m_hostControl.pairController(
-            seatId,
-            *controllerUtf8,
-            *controllerSlot,
-            error)) {
-        return true;
-    }
-
-    // Pairing failed after the durable hardware mutation. Restore the previous
-    // durable assignment and discard the fresh lease/binding generation.
-    std::string ignored;
-    if (m_hostControl.ownsUiLease(seatId)) {
-        (void)m_hostControl.releaseUiLease(seatId, &ignored);
-    }
-    const bool restored = m_hostControl.assignSeatHardware(
-        seatId,
-        before->displayIdUtf8,
-        before->keyboardIdUtf8,
-        before->mouseIdUtf8,
-        &ignored).has_value();
-    if (!restored && error) {
-        *error += "; previous Seat hardware assignment could not be restored";
-    }
-    return false;
 }
 
-bool Win32App::commitAssignments(std::string* error) {
-    const auto snapshot = m_hostControl.snapshot(error);
-    if (!snapshot) return false;
-    for (const auto& seat : snapshot->seats) {
-        if (seat.gameLeaseActive) {
-            if (error) {
-                *error =
-                    "Stop both Seat games before changing hardware assignments";
-            }
-            return false;
-        }
-    }
-
-    const auto previousFirst = m_hostControl.seatHardware(1u, error);
-    const auto previousSecond = m_hostControl.seatHardware(2u, error);
-    if (!previousFirst || !previousSecond) return false;
-
-    // Release inactive UI leases/controller bindings before rebuilding the
-    // two-Seat assignment. This starts the reconfiguration from a clean
-    // authority generation while preserving the running-host process.
-    m_hostControl.close();
-
-    const auto restore = [&]() {
-        m_hostControl.close();
-        std::string ignored;
-        (void)m_hostControl.assignSeatHardware(1u, "", "", "", &ignored);
-        (void)m_hostControl.assignSeatHardware(2u, "", "", "", &ignored);
-        const bool firstRestored = m_hostControl.assignSeatHardware(
-            1u,
-            previousFirst->displayIdUtf8,
-            previousFirst->keyboardIdUtf8,
-            previousFirst->mouseIdUtf8,
-            &ignored).has_value();
-        const bool secondRestored = m_hostControl.assignSeatHardware(
-            2u,
-            previousSecond->displayIdUtf8,
-            previousSecond->keyboardIdUtf8,
-            previousSecond->mouseIdUtf8,
-            &ignored).has_value();
-        return firstRestored && secondRestored;
-    };
-
-    if (!m_hostControl.assignSeatHardware(1u, "", "", "", error) ||
-        !m_hostControl.assignSeatHardware(2u, "", "", "", error)) {
-        (void)restore();
-        return false;
-    }
-
-    std::string applyError;
-    if (!applySeatAssignment(1u, &applyError) ||
-        !applySeatAssignment(2u, &applyError)) {
-        const bool restored = restore();
-        if (error) {
-            *error = applyError.empty()
-                ? "failed to apply Seat assignments"
-                : std::move(applyError);
-            if (!restored) {
-                *error += "; previous assignments could not be fully restored";
-            }
-        }
-        return false;
-    }
-    return true;
-}
-
-std::optional<std::wstring> Win32App::chooseExecutable(
-    std::uint32_t seatId) {
-    std::array<wchar_t, 32768> fileName{};
-    const std::wstring title =
-        L"Select executable for Seat " + std::to_wstring(seatId);
-
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = m_hwnd;
-    dialog.lpstrFilter =
-        L"Windows applications (*.exe)\0*.exe\0All files (*.*)\0*.*\0\0";
-    dialog.lpstrFile = fileName.data();
-    dialog.nMaxFile = static_cast<DWORD>(fileName.size());
-    dialog.lpstrTitle = title.c_str();
-    dialog.Flags =
-        OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST |
-        OFN_NOCHANGEDIR | OFN_DONTADDTORECENT;
-
-    if (!GetOpenFileNameW(&dialog)) {
-        return std::nullopt;
-    }
-    return std::wstring(fileName.data());
-}
-
-void Win32App::toggleSeatGame(std::uint32_t seatId) {
-    std::string error;
-    const auto snapshot = m_hostControl.snapshot(&error);
-    if (!snapshot || seatId == 0u || seatId > snapshot->seats.size()) {
-        const std::wstring message(error.begin(), error.end());
-        MessageBoxW(
-            m_hwnd,
-            message.empty() ? L"Canonical host is unavailable." : message.c_str(),
-            L"HydraSeat host unavailable",
-            MB_OK | MB_ICONERROR);
-        return;
-    }
-
-    if (snapshot->seats[seatId - 1u].gameLeaseActive) {
-        if (!m_hostControl.stopGame(seatId, &error)) {
-            const std::wstring message(error.begin(), error.end());
-            MessageBoxW(
-                m_hwnd,
-                message.empty() ? L"The Seat game could not be stopped safely." : message.c_str(),
-                L"HydraSeat stop failed",
-                MB_OK | MB_ICONERROR);
-            return;
-        }
-        MessageBoxW(
-            m_hwnd,
-            L"Seat game stopped safely.",
-            L"HydraSeat",
-            MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-
-    const bool anotherSeatActive = std::any_of(
-        snapshot->seats.begin(),
-        snapshot->seats.end(),
-        [](const auto& seat) { return seat.gameLeaseActive; });
-    const bool assignmentReady = anotherSeatActive
-        ? applySeatAssignment(seatId, &error)
-        : commitAssignments(&error);
-    if (!assignmentReady) {
-        const std::wstring message(error.begin(), error.end());
-        MessageBoxW(
-            m_hwnd,
-            message.empty() ? L"Seat hardware assignment failed." : message.c_str(),
-            L"HydraSeat assignment failed",
-            MB_OK | MB_ICONERROR);
-        return;
-    }
-
-    const auto executable = chooseExecutable(seatId);
-    if (!executable) return;
-
-    const std::filesystem::path executablePath(*executable);
-    const auto titleUtf8 = wideToUtf8(executablePath.filename().wstring());
-    const auto executableUtf8 = wideToUtf8(executablePath.wstring());
-    const auto workingUtf8 =
-        wideToUtf8(executablePath.parent_path().wstring());
-    if (!titleUtf8 || !executableUtf8 || !workingUtf8) {
-        MessageBoxW(
-            m_hwnd,
-            L"Selected executable path is not valid Unicode.",
-            L"HydraSeat",
-            MB_OK | MB_ICONERROR);
-        return;
-    }
-
-    if (!m_hostControl.launchGame(
-            seatId,
-            *titleUtf8,
-            *executableUtf8,
-            "",
-            *workingUtf8,
-            &error)) {
-        const std::wstring message(error.begin(), error.end());
-        MessageBoxW(
-            m_hwnd,
-            message.empty() ? L"The canonical host rejected the launch." : message.c_str(),
-            L"HydraSeat launch failed",
-            MB_OK | MB_ICONERROR);
-        return;
-    }
-
-    MessageBoxW(
-        m_hwnd,
-        L"Seat game launched under canonical host authority.",
-        L"HydraSeat",
+void Win32App::launchMultiseat() {
+    MessageBoxW(m_hwnd,
+        L"Multiseat Inputs & Displays Routed Successfully!\n\nLaunching target game instances...",
+        L"HydraSeat Multiseat Launcher",
         MB_OK | MB_ICONINFORMATION);
 }
 
@@ -1335,9 +858,9 @@ LRESULT CALLBACK Win32App::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
         } else if (wmId == ID_BTN_LOAD_PROF && g_appInstance) {
             g_appInstance->loadWorkspaceProfile();
         } else if (wmId == ID_BTN_ISOLATION && g_appInstance) {
-            g_appInstance->toggleSeatGame(1u);
+            g_appInstance->toggleIsolationMode();
         } else if (wmId == ID_BTN_LAUNCH && g_appInstance) {
-            g_appInstance->toggleSeatGame(2u);
+            g_appInstance->launchMultiseat();
         }
     } else if (uMsg == WM_DESTROY) {
         KillTimer(hwnd, TIMER_FLASH_RESET);

@@ -9,7 +9,6 @@
 #include "ui/pages/hardware_page.hpp"
 #include "ui/pages/diagnostics_page.hpp"
 #include "ui/pages/settings_page.hpp"
-#include "ui/ui_settings.hpp"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -29,10 +28,7 @@ AppWindow::AppWindow(QWidget* parent)
     setupUi();
 
     QTimer::singleShot(0, this, [this]() {
-        std::string hostError;
-        (void)m_hostControl->ensureConnected(&hostError);
-        m_enginePoller->startPolling(
-            UiSettings::load().refreshIntervalMs);
+        m_enginePoller->startPolling(2000);
     });
 }
 
@@ -106,17 +102,6 @@ void AppWindow::setupUi() {
     auto* settingsPageNode = new SettingsPage(m_workspaceStack);
     m_workspaceStack->addWidget(settingsPageNode);
 
-    connect(
-        settingsPageNode,
-        &SettingsPage::preferencesChanged,
-        this,
-        [this]() {
-            if (m_enginePoller) {
-                m_enginePoller->startPolling(
-                    UiSettings::load().refreshIntervalMs);
-            }
-        });
-
     connect(m_enginePoller.get(), &EnginePoller::stateUpdated, dashboardPage, &DashboardPage::updateState);
     connect(m_enginePoller.get(), &EnginePoller::stateUpdated, seatsPage, &SeatsPage::updateState);
     connect(m_enginePoller.get(), &EnginePoller::stateUpdated, applicationsPage, &ApplicationsPage::updateState);
@@ -154,8 +139,7 @@ void AppWindow::setupUi() {
 
 void AppWindow::setupSidebar() {
     m_sidebar = new QListWidget();
-    m_sidebar->setAccessibleName("HydraSeat navigation");
-    m_sidebar->setFocusPolicy(Qt::StrongFocus);
+    m_sidebar->setFocusPolicy(Qt::NoFocus);
     m_sidebar->setStyleSheet(R"(
         QListWidget { background-color: transparent; border: none; outline: 0; }
         QListWidget::item { padding: 8px 12px; margin-bottom: 4px; border-radius: 6px; color: #B5B5B5; font-size: 13px; font-family: 'Segoe UI', sans-serif; }
