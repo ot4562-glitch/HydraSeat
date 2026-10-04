@@ -235,7 +235,8 @@ int runLaunch(
     request.executablePathUtf8 = *executableUtf8;
     request.launchArgumentsUtf8 = *argumentsUtf8;
 
-    const auto snapshot = client.launchGame(request, 5000, &error);
+    const auto snapshot = client.launchGame(
+        request, hydra::hostipc::kHostLaunchTimeoutMs, &error);
     if (!snapshot) {
         std::cerr << "launch failed: " << error << '\n';
         return 1;

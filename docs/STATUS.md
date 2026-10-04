@@ -35,7 +35,7 @@ Implemented integration includes:
 - host-owned custom-executable launch/stop control with strict per-Seat Job ownership;
 - host-owned Windows audio routing integration;
 - installer bootstrap/signing contract plus local compatibility evidence/runner and requirement-authority tooling activated in the build graph;
-- the dependency-free Win32 UI wired to canonical host IPC for stable hardware assignment, explicit XInput pairing, and per-Seat launch/stop;
+- Pranshu's Qt UI wired to canonical host IPC for stable hardware assignment, explicit XInput pairing, and per-Seat launch/stop without changing the established page/layout design;
 - x64 Gate-C external session/bridge activation integrated into the real game launch path;
 - MinGW release binaries linked without external MinGW runtime DLL dependencies.
 
@@ -94,10 +94,10 @@ The canonical backend stack has automated coverage for the authority boundary an
 - hydraseat_hostctl.exe build;
 - HydraSeatSetup.exe build;
 - installer bootstrap, local compatibility evidence/runner, and runtime-requirement authority tests;
-- **103/103 CTest targets passing** on the 2026-10-04 release-candidate working tree;
-- live `hydra_host.exe` smoke test on Windows: named-pipe `ping` returned `pong`, authority snapshot returned two clean idle Seats, and host hardware inventory returned stable display/keyboard/mouse identities;
-- local hardware detector smoke test: one physical display, six keyboard endpoints, five mouse/touchpad endpoints, and no connected gamepad at test time;
-- PE dependency inspection confirming `HydraSeat.exe`, `hydra_host.exe`, and the Gate-C bridge do not depend on developer-local MinGW runtime DLLs.
+- the previous 2026-10-04 RC baseline completed **103/103 CTest targets**, but that result predates the current real-use hardening pass and is not evidence for the unverified working tree;
+- the previous Windows host smoke returned `pong` and two idle Seats, but the current persistent/concurrent IPC and device-enumeration changes require a fresh native validation run after review;
+- the old raw hardware smoke count (six keyboard endpoints/five mouse endpoints on one PC) is explicitly rejected as physical-device evidence; the current implementation collapses Windows HID top-level collections by physical identity and filters synthetic/remote devices;
+- Qt is now the canonical Pranshu UI, so clean-machine release qualification additionally requires deployment of the matching Qt runtime/plugins rather than relying on a build-machine Qt installation.
 
 The current integration also fixes issues found while auditing the old fork:
 

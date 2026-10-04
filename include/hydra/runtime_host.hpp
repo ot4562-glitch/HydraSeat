@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace hydra::runtime {
@@ -35,6 +36,9 @@ public:
     std::optional<SeatRuntimeSnapshot> seatSnapshot(std::uint32_t seatId) const noexcept;
     controller::InventorySnapshot controllerInventorySnapshot() noexcept;
     std::vector<DeviceInfo> hardwareInventory();
+    void observePhysicalInput(
+        DeviceType type,
+        const std::wstring& devicePath);
     std::optional<SeatHardwareConfiguration> seatHardwareConfiguration(
         std::uint32_t seatId) const;
     bool configureSeatHardware(
@@ -85,9 +89,12 @@ private:
     void noteMutationLocked(bool changed) noexcept;
 
     mutable std::mutex mutex_;
+    mutable std::mutex controllerInventoryMutex_;
     SessionController controller_;
     controller::ControllerInventory controllerInventory_;
     HardwareDetector hardwareDetector_;
+    std::unordered_set<std::wstring> confirmedKeyboardIds_;
+    std::unordered_set<std::wstring> confirmedMouseIds_;
     SeatHardwareConfigurations hardwareConfigurations_{{
         SeatHardwareConfiguration{1},
         SeatHardwareConfiguration{2},

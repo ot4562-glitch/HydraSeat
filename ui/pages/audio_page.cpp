@@ -80,6 +80,17 @@ AudioPage::AudioPage(RoutingController* router, QWidget* parent)
 
     layout->addLayout(splitLayout);
 
+    connect(
+        m_searchBox,
+        &QLineEdit::textChanged,
+        this,
+        [this](const QString&) { updateState(m_lastPayload); });
+    connect(
+        m_filterCombo,
+        qOverload<int>(&QComboBox::currentIndexChanged),
+        this,
+        [this](int) { updateState(m_lastPayload); });
+
     if (m_router) {
         connect(m_router, &RoutingController::routingCompleted, this, &AudioPage::onRoutingCompleted);
         connect(m_router, &RoutingController::resetCompleted, this, &AudioPage::onResetCompleted);
@@ -193,8 +204,13 @@ void AudioPage::buildSessionCard(const hydra::windows::AudioSessionObservation& 
         if (m_router) m_router->requestReset(cpid, ccid);
     });
     connect(card.routeBtn, &QPushButton::clicked, [this, cpid, ccid, combo = card.routeCombo]() {
-        QString ep = combo->currentData().toString();
-        if (m_router) m_router->requestRoute(cpid, ccid, ep);
+        const QString endpointId = combo->currentData().toString();
+        if (!m_router) return;
+        if (endpointId.isEmpty()) {
+            m_router->requestReset(cpid, ccid);
+        } else {
+            m_router->requestRoute(cpid, ccid, endpointId);
+        }
     });
 
     m_sessionsLayout->insertWidget(m_sessionsLayout->count() - 1, card.frame);
@@ -208,7 +224,13 @@ bool AudioPage::tryUpdateExistingCard(const hydra::windows::AudioSessionObservat
             card.stateLabel->setStyleSheet(QString("font-size: 12px; font-weight: bold; color: %1; border: none;").arg(stateColor(session.state)));
             if (card.currentEndpointId != session.endpointId) {
                 card.currentEndpointId = session.endpointId;
-                card.currentOutputLabel->setText(QString("Current output: %1").arg(resolveEndpointFriendlyName(session.endpointId)));
+                card.currentOutputLabel->setText(
+                    QString("Current output: %1")
+                        .arg(resolveEndpointFriendlyName(session.endpointId)));
+                const int endpointIndex = card.routeCombo->findData(
+                    QString::fromStdWString(session.endpointId));
+                card.routeCombo->setCurrentIndex(
+                    endpointIndex >= 0 ? endpointIndex : 0);
             }
             return true;
         }

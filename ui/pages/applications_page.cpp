@@ -1,4 +1,6 @@
 #include "ui/pages/applications_page.hpp"
+#include "ui/application_library.hpp"
+#include "ui/ui_settings.hpp"
 
 #include <QByteArray>
 #include <QFileDialog>
@@ -6,6 +8,7 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
 
 #include <utility>
 
@@ -210,6 +213,16 @@ ApplicationsPage::ApplicationsPage(
     refreshLaunchControls();
 }
 
+void ApplicationsPage::selectSeat(std::uint32_t seatId) {
+    if (!m_seatCombo || seatId == 0) return;
+    const int index =
+        m_seatCombo->findData(QVariant::fromValue(seatId));
+    if (index >= 0) {
+        m_seatCombo->setCurrentIndex(index);
+        refreshLaunchControls();
+    }
+}
+
 std::uint32_t ApplicationsPage::selectedSeatId() const noexcept {
     if (!m_seatCombo) return 0;
     bool ok = false;
@@ -268,6 +281,14 @@ void ApplicationsPage::onBrowseExecutable() {
         "Windows applications (*.exe);;All files (*.*)");
     if (!selected.isEmpty()) {
         m_executableEdit->setText(selected);
+        const QFileInfo file(selected);
+        ApplicationLibrary::remember(ApplicationLaunchEntry{
+            file.completeBaseName(),
+            file.absoluteFilePath(),
+            m_argumentsEdit ? m_argumentsEdit->text() : QString{},
+            file.absolutePath(),
+        });
+        emit applicationLibraryChanged();
     }
 }
 
@@ -281,9 +302,10 @@ void ApplicationsPage::onLaunchRequested() {
     const QString path = m_executableEdit->text().trimmed();
     const QFileInfo file(path);
     if (seatId == 0 || path.isEmpty() || !file.isAbsolute() ||
-        !file.exists() || !file.isFile()) {
+        !file.exists() || !file.isFile() ||
+        file.suffix().compare(QStringLiteral("exe"), Qt::CaseInsensitive) != 0) {
         setLaunchFeedback(
-            "Select an existing absolute executable path before launching.",
+            "Select an existing absolute Windows .exe before launching.",
             true);
         return;
     }
@@ -306,6 +328,13 @@ void ApplicationsPage::onLaunchRequested() {
     }
 
     m_lastPayload.hostSnapshot = *result;
+    ApplicationLibrary::remember(ApplicationLaunchEntry{
+        file.completeBaseName(),
+        file.absoluteFilePath(),
+        m_argumentsEdit ? m_argumentsEdit->text() : QString{},
+        file.absolutePath(),
+    });
+    emit applicationLibraryChanged();
     setLaunchFeedback(
         QString("Seat %1 launch accepted by hydra_host.").arg(seatId),
         false);
@@ -322,6 +351,16 @@ void ApplicationsPage::onStopRequested() {
     if (seatId == 0) {
         setLaunchFeedback("Select Seat 1 or Seat 2.", true);
         return;
+    }
+
+    if (UiSettings::load().confirmSeatStop) {
+        const auto answer = QMessageBox::question(
+            this,
+            "Stop Seat application",
+            QString("Stop the application running on Seat %1?").arg(seatId),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel);
+        if (answer != QMessageBox::Yes) return;
     }
 
     std::string error;

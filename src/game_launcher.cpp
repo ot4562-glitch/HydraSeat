@@ -144,11 +144,11 @@ std::optional<std::filesystem::path> currentExecutableDirectory(
 }
 
 struct SeatInputDevices {
-    std::uintptr_t keyboardHandle{0};
-    std::uintptr_t mouseHandle{0};
+    std::vector<std::uintptr_t> keyboardHandles;
+    std::vector<std::uintptr_t> mouseHandles;
 
     bool configured() const noexcept {
-        return keyboardHandle != 0 || mouseHandle != 0;
+        return !keyboardHandles.empty() || !mouseHandles.empty();
     }
 };
 
@@ -170,12 +170,15 @@ std::optional<SeatInputDevices> resolveSeatInputDevices(
     const auto inventory = host.hardwareInventory();
     const auto resolve = [&](DeviceType type,
                              const std::wstring& persistentId,
-                             const char* label) -> std::optional<std::uintptr_t> {
-        if (persistentId.empty()) return std::uintptr_t{0};
+                             const char* label)
+        -> std::optional<std::vector<std::uintptr_t>> {
+        if (persistentId.empty()) {
+            return std::vector<std::uintptr_t>{};
+        }
         const auto found = std::find_if(
             inventory.begin(), inventory.end(), [&](const DeviceInfo& device) {
                 return device.type == type && device.id == persistentId &&
-                       device.nativeHandle != 0;
+                       (device.nativeHandle != 0 || !device.nativeHandles.empty());
             });
         if (found == inventory.end()) {
             if (error) {
@@ -184,7 +187,26 @@ std::optional<SeatInputDevices> resolveSeatInputDevices(
             }
             return std::nullopt;
         }
-        return found->nativeHandle;
+
+        auto handles = found->nativeHandles;
+        if (handles.empty() && found->nativeHandle != 0) {
+            handles.push_back(found->nativeHandle);
+        }
+        handles.erase(
+            std::remove(handles.begin(), handles.end(), std::uintptr_t{0}),
+            handles.end());
+        std::sort(handles.begin(), handles.end());
+        handles.erase(
+            std::unique(handles.begin(), handles.end()),
+            handles.end());
+        if (handles.empty()) {
+            if (error) {
+                *error = std::string("assigned ") + label +
+                         " has no live Raw Input collections";
+            }
+            return std::nullopt;
+        }
+        return handles;
     };
 
     const auto keyboard = resolve(
@@ -194,8 +216,8 @@ std::optional<SeatInputDevices> resolveSeatInputDevices(
         DeviceType::Mouse, configuration->mouseId, "mouse");
     if (!mouse) return std::nullopt;
 
-    result.keyboardHandle = *keyboard;
-    result.mouseHandle = *mouse;
+    result.keyboardHandles = *keyboard;
+    result.mouseHandles = *mouse;
     return result;
 }
 
@@ -810,6 +832,46 @@ void GameLauncher::setLastError(std::string message) {
     lastError_ = std::move(message);
 }
 
+void GameLauncher::reapExitedGames() noexcept {
+    std::lock_guard lock(processMutex_);
+#ifdef _WIN32
+    for (std::uint32_t seatId = 1; seatId <= 2; ++seatId) {
+        const auto index = seatIndex(seatId);
+        if (!index || !seatProcesses_[*index]) continue;
+
+        auto& session = *seatProcesses_[*index];
+        HANDLE job = toNativeHandle(session.jobHandle);
+        if (!job || job == INVALID_HANDLE_VALUE) continue;
+
+        DWORD activeProcesses = 0;
+        if (!queryActiveProcessCount(job, activeProcesses) ||
+            activeProcesses != 0) {
+            continue;
+        }
+
+        // The owned Job Object is already empty: this is reconciliation, not
+        // termination. Tear down per-Seat helpers first while the activation
+        // token is still valid, then return canonical authority to Idle.
+        session.inputSession.reset();
+        session.windowRuntime.reset();
+        session.controllerPipe.reset();
+
+        if (!endSeatActivation(session.token)) {
+            lastError_ =
+                "a naturally exited Seat process tree could not release runtime authority";
+            continue;
+        }
+
+        HANDLE process = toNativeHandle(session.processHandle);
+        if (process && process != INVALID_HANDLE_VALUE) {
+            CloseHandle(process);
+        }
+        CloseHandle(job);
+        seatProcesses_[*index].reset();
+    }
+#endif
+}
+
 bool GameLauncher::hasWorkspaceGame(std::uint32_t workspaceId) const {
     std::lock_guard lock(processMutex_);
     const auto index = seatIndex(workspaceId);
@@ -921,11 +983,17 @@ bool GameLauncher::launchGameForWorkspaceImpl(
          controllerBinding->api != controller::ApiSurface::XInput ||
          controllerBinding->sourceGeneration == 0 ||
          xinputPipeEndpoint->empty() || containsNul(*xinputPipeEndpoint))) {
+        lastError_ =
+            "controller launch configuration is incomplete or stale";
         return false;
     }
 
     const auto token = beginSeatActivation(workspace.workspaceId);
-    if (!token.valid()) return false;
+    if (!token.valid()) {
+        lastError_ =
+            "Seat runtime authority could not begin a new game activation";
+        return false;
+    }
 
     bool activationOwned = true;
     const auto endActivation = [&]() noexcept {
@@ -940,16 +1008,22 @@ bool GameLauncher::launchGameForWorkspaceImpl(
     DWORD creationFlags = CREATE_SUSPENDED;
     if (wantsXInput) {
         if (!bindController(token, *controllerBinding, *inventory)) {
+            lastError_ =
+                "the selected controller binding is no longer valid";
             endActivation();
             return false;
         }
         const auto mapping = virtualXInputMapping(token);
         if (!mapping) {
+            lastError_ =
+                "virtual XInput mapping could not be created for this Seat";
             endActivation();
             return false;
         }
         environment = xinputEnvironmentBlock(*mapping, *xinputPipeEndpoint);
         if (!environment) {
+            lastError_ =
+                "virtual XInput environment could not be constructed safely";
             endActivation();
             return false;
         }
@@ -978,6 +1052,10 @@ bool GameLauncher::launchGameForWorkspaceImpl(
         &processInfo);
 
     if (!created) {
+        const DWORD createError = GetLastError();
+        lastError_ =
+            "CreateProcessW failed for the selected executable (win32=" +
+            std::to_string(createError) + ")";
         controllerPipe.reset();
         endActivation();
         return false;
@@ -985,6 +1063,10 @@ bool GameLauncher::launchGameForWorkspaceImpl(
 
     HANDLE job = createStrictSeatJob();
     if (!job) {
+        const DWORD jobError = GetLastError();
+        lastError_ =
+            "strict Seat Job Object creation failed (win32=" +
+            std::to_string(jobError) + ")";
         terminateCreatedProcess(processInfo.hProcess);
         CloseHandle(processInfo.hThread);
         CloseHandle(processInfo.hProcess);
@@ -994,6 +1076,10 @@ bool GameLauncher::launchGameForWorkspaceImpl(
     }
 
     if (!AssignProcessToJobObject(job, processInfo.hProcess)) {
+        const DWORD jobAssignError = GetLastError();
+        lastError_ =
+            "game process could not be assigned to the strict Seat Job Object "
+            "(win32=" + std::to_string(jobAssignError) + ")";
         terminateCreatedProcess(processInfo.hProcess);
         CloseHandle(job);
         CloseHandle(processInfo.hThread);
@@ -1010,8 +1096,8 @@ bool GameLauncher::launchGameForWorkspaceImpl(
         {},
         std::move(controllerPipe),
         {},
-        inputDevices.keyboardHandle,
-        inputDevices.mouseHandle,
+        inputDevices.keyboardHandles,
+        inputDevices.mouseHandles,
         {}};
     activationOwned = false;
 
@@ -1026,12 +1112,16 @@ bool GameLauncher::launchGameForWorkspaceImpl(
     const auto identity =
         readProcessIdentity(processInfo.hProcess, processInfo.dwProcessId);
     if (!identity.valid()) {
+        lastError_ =
+            "the launched process identity could not be verified";
         rollback();
         return false;
     }
 
     seatProcesses_[*index]->identity = identity;
     if (!publishProcess(token, identity)) {
+        lastError_ =
+            "canonical Seat authority rejected the launched process identity";
         rollback();
         return false;
     }
@@ -1049,9 +1139,12 @@ bool GameLauncher::launchGameForWorkspaceImpl(
             std::move(*displayGroup),
             &windowError);
         if (!windowRuntime) {
+            lastError_ = windowError.empty()
+                ? "display/window ownership tracker could not be established"
+                : windowError;
             std::cerr
                 << "[GameLauncher] display/window tracker setup failed: "
-                << windowError << '\n';
+                << lastError_ << '\n';
             rollback();
             return false;
         }
@@ -1059,29 +1152,10 @@ bool GameLauncher::launchGameForWorkspaceImpl(
             std::move(windowRuntime);
     }
 
-    if (ResumeThread(processInfo.hThread) == static_cast<DWORD>(-1)) {
-        rollback();
-        return false;
-    }
-
-    CloseHandle(processInfo.hThread);
-    processInfo.hThread = nullptr;
-
-    if (seatProcesses_[*index]->windowRuntime) {
-        std::string placementError;
-        if (!seatProcesses_[*index]->windowRuntime->placeInitial(
-                &placementError)) {
-            lastError_ = placementError.empty()
-                ? "assigned display placement failed"
-                : placementError;
-            std::cerr
-                << "[GameLauncher] assigned display placement failed: "
-                << placementError << '\n';
-            rollback();
-            return false;
-        }
-    }
-
+    // Establish process-local keyboard/mouse isolation while the target's
+    // primary thread is still suspended. Resuming first creates an input-bleed
+    // window where the game can observe system Raw Input before the Gate-C shim
+    // is installed.
     if (inputDevices.configured()) {
         std::string inputError;
         const auto artifactDirectory = currentExecutableDirectory(&inputError);
@@ -1108,6 +1182,33 @@ bool GameLauncher::launchGameForWorkspaceImpl(
             return false;
         }
         seatProcesses_[*index]->inputSession = std::move(inputSession);
+    }
+
+    if (ResumeThread(processInfo.hThread) == static_cast<DWORD>(-1)) {
+        const DWORD resumeError = GetLastError();
+        lastError_ =
+            "the launched process could not be resumed safely (win32=" +
+            std::to_string(resumeError) + ")";
+        rollback();
+        return false;
+    }
+
+    CloseHandle(processInfo.hThread);
+    processInfo.hThread = nullptr;
+
+    if (seatProcesses_[*index]->windowRuntime) {
+        std::string placementError;
+        if (!seatProcesses_[*index]->windowRuntime->placeInitial(
+                &placementError)) {
+            lastError_ = placementError.empty()
+                ? "assigned display placement failed"
+                : placementError;
+            std::cerr
+                << "[GameLauncher] assigned display placement failed: "
+                << placementError << '\n';
+            rollback();
+            return false;
+        }
     }
 
     std::wcout << L"[GameLauncher] Started " << game.title
@@ -1139,9 +1240,15 @@ bool GameLauncher::routePhysicalInput(const RawInputEvent& event) {
             !candidate->inputSession->active()) {
             continue;
         }
+        const auto containsHandle = [&](const auto& handles) {
+            return std::find(
+                       handles.begin(),
+                       handles.end(),
+                       event.deviceHandle) != handles.end();
+        };
         const bool matches =
-            (keyboardEvent && candidate->keyboardHandle == event.deviceHandle) ||
-            (mouseEvent && candidate->mouseHandle == event.deviceHandle);
+            (keyboardEvent && containsHandle(candidate->keyboardHandles)) ||
+            (mouseEvent && containsHandle(candidate->mouseHandles));
         if (!matches) continue;
         if (target != nullptr) {
             lastError_ = "one physical input device resolved to more than one active Seat";

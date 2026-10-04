@@ -21,8 +21,10 @@ public:
 
 public slots:
     void updateState(const EngineStatePayload& payload);
+    void refreshApplications();
 
 private slots:
+    void onApplicationSelectionChanged(std::uint32_t seatId);
     void onLaunchRequested(std::uint32_t seatId);
     void onStopRequested(std::uint32_t seatId);
     void onConfigureRequested(std::uint32_t seatId);
@@ -55,7 +57,7 @@ private:
     void updateSeatData(
         std::uint32_t seatId,
         SeatWidgets& widgets);
-    void populateCombos(SeatWidgets& widgets);
+    void populateCombos(std::uint32_t seatId, SeatWidgets& widgets);
     const hydra::hostipc::SeatSnapshot* seatSnapshot(
         std::uint32_t seatId) const noexcept;
 };

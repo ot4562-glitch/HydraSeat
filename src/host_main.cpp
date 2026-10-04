@@ -39,6 +39,39 @@ std::optional<std::filesystem::path> seatConfigPath(std::string* error) {
 
 int main() {
 #if defined(_WIN32)
+    // There must be exactly one runtime authority per interactive Windows
+    // session. Multiple named-pipe server processes with the same pipe name
+    // would otherwise create split-brain host state.
+    DWORD sessionId = 0;
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &sessionId)) {
+        std::cerr << "hydra_host failed: unable to resolve Windows session\n";
+        return 1;
+    }
+
+    const std::wstring mutexName =
+        L"Local\\HydraSeat.Host.v2." + std::to_wstring(sessionId);
+    HANDLE instanceMutex =
+        CreateMutexW(nullptr, TRUE, mutexName.c_str());
+    if (instanceMutex == nullptr) {
+        std::cerr << "hydra_host failed: unable to create instance mutex (win32="
+                  << GetLastError() << ")\n";
+        return 1;
+    }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(instanceMutex);
+        return 0;
+    }
+
+    struct InstanceMutexGuard {
+        HANDLE handle;
+        ~InstanceMutexGuard() {
+            if (handle != nullptr) {
+                ReleaseMutex(handle);
+                CloseHandle(handle);
+            }
+        }
+    } instanceGuard{instanceMutex};
+
     std::string error;
     const auto configPath = seatConfigPath(&error);
     if (!configPath) {

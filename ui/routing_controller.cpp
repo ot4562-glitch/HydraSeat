@@ -1,5 +1,7 @@
 #include "ui/routing_controller.hpp"
 
+#include <QByteArray>
+
 namespace hydra::ui {
 namespace {
 
@@ -49,10 +51,13 @@ void RoutingController::requestRoute(
     }
 
     std::string error;
+    const QByteArray endpointUtf8 = endpointId.toUtf8();
     const auto status = m_hostControl->routeAudio(
         pid,
         creationIdentity,
-        endpointId.toStdString(),
+        std::string(
+            endpointUtf8.constData(),
+            static_cast<std::size_t>(endpointUtf8.size())),
         &error);
     if (!status) {
         emit routingCompleted(

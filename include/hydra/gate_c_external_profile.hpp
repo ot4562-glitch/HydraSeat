@@ -35,8 +35,14 @@ inline constexpr std::uint32_t kExternalBridgeAutoDetectApiMask =
     HYDRA_GATE_C_SHIM_ALL_API_MASK;
 
 constexpr bool validProfiledShimMask(std::uint32_t mask) noexcept {
+    // A real game may consume keyboard/mouse solely through Raw Input and have
+    // no GetAsyncKeyState/GetKeyState imports at all. Requiring a polling API
+    // made those otherwise supported targets fail during auto-detection.
+    constexpr std::uint32_t kInputApiMask =
+        HYDRA_GATE_C_SHIM_POLLING_API_MASK |
+        HYDRA_GATE_C_SHIM_RAW_INPUT_API_MASK;
     return mask != 0u &&
-           (mask & HYDRA_GATE_C_SHIM_POLLING_API_MASK) != 0u &&
+           (mask & kInputApiMask) != 0u &&
            (mask & ~HYDRA_GATE_C_SHIM_ALL_API_MASK) == 0u;
 }
 

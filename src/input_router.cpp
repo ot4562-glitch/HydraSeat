@@ -124,9 +124,11 @@ void InputRouter::handleRawInput(HRAWINPUT hRawInput) {
         if (raw->header.hDevice == NULL) {
             event.isTouchpad = true;
         }
-    } else if (raw->header.dwType == RIM_TYPEHID) {
-        event.messageType = WM_MOUSEMOVE;
-        event.isTouchpad = true;
+    } else {
+        // Generic HID input (controllers, consumer controls, digitizers, etc.)
+        // is not keyboard/mouse routing input. Do not reinterpret every HID
+        // report as a touchpad event.
+        return;
     }
 
     // Trigger device specific callback if registered
@@ -178,7 +180,12 @@ bool InputRouter::registerRawInputDevices(bool backgroundSink) {
 
     DWORD flags = backgroundSink ? (RIDEV_INPUTSINK | RIDEV_DEVNOTIFY) : RIDEV_DEVNOTIFY;
 
-    RAWINPUTDEVICE rid[3];
+    // Register only the two Raw Input top-level collections HydraSeat
+    // actually routes. Generic Desktop 0x05 is a GAME PAD, not a touchpad.
+    // Precision Touchpads use Digitizers page 0x0D / usage 0x05 and are
+    // system-owned; pointer-compatible touchpad activity already arrives
+    // through the normal mouse collection when Windows exposes it that way.
+    RAWINPUTDEVICE rid[2];
 
     // Keyboard
     rid[0].usUsagePage = 0x01; // Generic Desktop
@@ -192,13 +199,7 @@ bool InputRouter::registerRawInputDevices(bool backgroundSink) {
     rid[1].dwFlags = flags;
     rid[1].hwndTarget = m_hwnd;
 
-    // Touchpad / Precision Touchpad
-    rid[2].usUsagePage = 0x01; // Generic Desktop
-    rid[2].usUsage = 0x05;     // Touch Pad
-    rid[2].dwFlags = flags;
-    rid[2].hwndTarget = m_hwnd;
-
-    if (!RegisterRawInputDevices(rid, 3, sizeof(RAWINPUTDEVICE))) {
+    if (!RegisterRawInputDevices(rid, 2, sizeof(RAWINPUTDEVICE))) {
         return false;
     }
 #else
@@ -230,11 +231,10 @@ void InputRouter::stop() {
     m_running = false;
 #ifdef _WIN32
     if (m_hwnd) {
-        RAWINPUTDEVICE rid[3];
+        RAWINPUTDEVICE rid[2];
         rid[0].usUsagePage = 0x01; rid[0].usUsage = 0x06; rid[0].dwFlags = RIDEV_REMOVE; rid[0].hwndTarget = NULL;
         rid[1].usUsagePage = 0x01; rid[1].usUsage = 0x02; rid[1].dwFlags = RIDEV_REMOVE; rid[1].hwndTarget = NULL;
-        rid[2].usUsagePage = 0x01; rid[2].usUsage = 0x05; rid[2].dwFlags = RIDEV_REMOVE; rid[2].hwndTarget = NULL;
-        RegisterRawInputDevices(rid, 3, sizeof(RAWINPUTDEVICE));
+        RegisterRawInputDevices(rid, 2, sizeof(RAWINPUTDEVICE));
 
         DestroyWindow(m_hwnd);
         m_hwnd = nullptr;

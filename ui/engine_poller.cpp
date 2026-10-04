@@ -1,21 +1,113 @@
 #include "ui/engine_poller.hpp"
+#include "ui/host_bootstrap.hpp"
 
+#include <QString>
+
+#include <algorithm>
 #include <objbase.h>
+#include <utility>
 #include <windows.h>
 
 namespace hydra::ui {
 
-EnginePollerWorker::EnginePollerWorker(std::shared_ptr<hydra::HardwareDetector> hardwareDetector)
-    : m_hardwareDetector(std::move(hardwareDetector)) {}
+
+namespace {
+
+std::wstring fromUtf8(const std::string& value) {
+    return QString::fromUtf8(
+               value.data(), static_cast<qsizetype>(value.size()))
+        .toStdWString();
+}
+
+void applyHostHardwareInventory(
+    EngineStatePayload& payload,
+    const hydra::hostipc::HardwareInventory& inventory) {
+    payload.displays.clear();
+    payload.keyboards.clear();
+    payload.mice.clear();
+    payload.controllers.clear();
+
+    for (const auto& record : inventory.devices) {
+        hydra::DeviceInfo device;
+        device.id = fromUtf8(record.stableIdUtf8);
+        device.name = fromUtf8(record.displayNameUtf8);
+        if (device.id.empty()) continue;
+
+        switch (record.kind) {
+        case hydra::hostipc::HardwareDeviceKind::Display:
+            device.type = hydra::DeviceType::Display;
+            payload.displays.push_back(std::move(device));
+            break;
+        case hydra::hostipc::HardwareDeviceKind::Keyboard:
+            device.type = hydra::DeviceType::Keyboard;
+            payload.keyboards.push_back(std::move(device));
+            break;
+        case hydra::hostipc::HardwareDeviceKind::Mouse:
+            device.type = hydra::DeviceType::Mouse;
+            payload.mice.push_back(std::move(device));
+            break;
+        case hydra::hostipc::HardwareDeviceKind::Controller:
+            device.type = hydra::DeviceType::Controller;
+            payload.controllers.push_back(std::move(device));
+            break;
+        }
+    }
+}
+
+void keepHostOwnedAudioSessions(EngineStatePayload& payload) {
+    if (!payload.hostSnapshot) {
+        payload.audioSessions.clear();
+        return;
+    }
+
+    std::vector<hydra::windows::AudioSessionObservation> filtered;
+    for (const auto& session : payload.audioSessions) {
+        if (!session.processIdentity) continue;
+
+        bool owned = false;
+        for (const auto& seat : payload.hostSnapshot->seats) {
+            if (!seat.processOwned || seat.processId == 0 ||
+                seat.processCreationIdentity == 0) {
+                continue;
+            }
+            if (seat.processId == session.processIdentity->pid &&
+                seat.processCreationIdentity ==
+                    session.processIdentity->creationIdentity) {
+                owned = true;
+                break;
+            }
+        }
+        if (!owned) continue;
+
+        const auto existing = std::find_if(
+            filtered.begin(), filtered.end(),
+            [&](const auto& candidate) {
+                return candidate.processIdentity &&
+                       *candidate.processIdentity == *session.processIdentity;
+            });
+        if (existing == filtered.end()) {
+            filtered.push_back(session);
+        } else if (
+            existing->state != hydra::windows::AudioSessionState::Active &&
+            session.state == hydra::windows::AudioSessionState::Active) {
+            *existing = session;
+        }
+    }
+
+    payload.audioSessions = std::move(filtered);
+}
+
+} // namespace
 
 void EnginePollerWorker::doPoll() {
     EngineStatePayload payload;
 
+
     std::string hostError;
     if (!m_hostClient.connected()) {
-        if (!m_hostClient.connect(
+        if (!connectCanonicalHost(
+                m_hostClient,
                 hydra::hostipc::ClientRole::ReadOnly,
-                hydra::hostipc::kDefaultHostPipeTimeoutMs,
                 &hostError)) {
             payload.hostError = std::move(hostError);
         }
@@ -25,9 +117,42 @@ void EnginePollerWorker::doPoll() {
             hydra::hostipc::kDefaultHostPipeTimeoutMs,
             &hostError);
         if (snapshot) {
+            // A valid authority snapshot proves the canonical host connection
+            // itself is alive. Inventory failures are subsystem failures and
+            // must not make the status bar claim that the host disappeared.
             payload.hostConnected = true;
             payload.hostSnapshot = std::move(snapshot);
+
+            std::string inventoryError;
+            const auto inventory = m_hostClient.getHardwareInventory(
+                hydra::hostipc::kDefaultHostPipeTimeoutMs,
+                &inventoryError);
+            if (!inventory) {
+                payload.hardwareError = true;
+                payload.hostError = inventoryError.empty()
+                    ? "canonical host hardware inventory is unavailable"
+                    : std::move(inventoryError);
+            } else {
+                payload.hardwareError = false;
+                applyHostHardwareInventory(payload, *inventory);
+
+                for (std::uint32_t seatId = 1;
+                     seatId <= hydra::hostipc::kHostSeatCount;
+                     ++seatId) {
+                    std::string hardwareError;
+                    payload.seatHardware[seatId - 1u] =
+                        m_hostClient.getSeatHardware(
+                            seatId,
+                            hydra::hostipc::kDefaultHostPipeTimeoutMs,
+                            &hardwareError);
+                    if (!payload.seatHardware[seatId - 1u] &&
+                        payload.hostError.empty()) {
+                        payload.hostError = std::move(hardwareError);
+                    }
+                }
+            }
         } else {
+            payload.hardwareError = true;
             payload.hostError = std::move(hostError);
             m_hostClient.close();
         }
@@ -36,7 +161,6 @@ void EnginePollerWorker::doPoll() {
     const HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     const bool comInitialized = SUCCEEDED(hr);
     if (!comInitialized) {
-        payload.hardwareError = true;
         payload.audioEndpointError = true;
         payload.audioSessionError = true;
         emit pollCompleted(payload);
@@ -50,15 +174,6 @@ void EnginePollerWorker::doPoll() {
         }
     } comUninit{comInitialized};
 
-    if (m_hardwareDetector) {
-        payload.displays = m_hardwareDetector->detectDisplays();
-        payload.keyboards = m_hardwareDetector->detectKeyboards();
-        payload.mice = m_hardwareDetector->detectMice();
-        payload.controllers = m_hardwareDetector->detectControllers();
-        payload.hardwareError = false;
-    } else {
-        payload.hardwareError = true;
-    }
 
     const auto endpointsResult =
         hydra::windows::AudioEndpointInventory::enumerateRenderEndpoints();
@@ -72,6 +187,7 @@ void EnginePollerWorker::doPoll() {
         hydra::windows::AudioSessionObserver::enumerateSessions();
     if (sessionsResult.isSuccess()) {
         payload.audioSessions = sessionsResult.sessions;
+        keepHostOwnedAudioSessions(payload);
     } else {
         payload.audioSessionError = true;
     }
@@ -81,14 +197,12 @@ void EnginePollerWorker::doPoll() {
     emit pollCompleted(payload);
 }
 
-EnginePoller::EnginePoller(
-    std::shared_ptr<hydra::HardwareDetector> hardwareDetector,
-    QObject* parent)
+EnginePoller::EnginePoller(QObject* parent)
     : QObject(parent) {
     qRegisterMetaType<hydra::ui::EngineStatePayload>(
         "hydra::ui::EngineStatePayload");
 
-    m_worker = new EnginePollerWorker(std::move(hardwareDetector));
+    m_worker = new EnginePollerWorker();
     m_worker->moveToThread(&m_workerThread);
 
     connect(

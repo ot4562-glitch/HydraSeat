@@ -7,6 +7,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -106,13 +107,6 @@ std::optional<std::string> wideToUtf8(std::wstring_view value) {
     return result;
 }
 
-bool experimentalAudioPolicyEnabled() noexcept {
-    wchar_t value[8]{};
-    const DWORD length = GetEnvironmentVariableW(
-        L"HYDRA_EXPERIMENTAL_AUDIO_POLICY", value,
-        static_cast<DWORD>(std::size(value)));
-    return length == 1 && value[0] == L'1';
-}
 #else
 std::optional<std::wstring> utf8ToWide(std::string_view value) {
     std::wstring result;
@@ -263,6 +257,13 @@ Frame HostConnectionSession::handle(const Frame& request) {
             request.correlationId,
             ErrorCode::PermissionDenied,
             "control role is required for Seat mutation");
+    }
+
+    // Games may exit without an explicit Stop request. Reconcile completed Job
+    // Objects before serving state so the UI never remains stuck on Running and
+    // a Seat can be launched again after a normal game exit.
+    if (gameLauncher_ != nullptr) {
+        gameLauncher_->reapExitedGames();
     }
 
     switch (request.type) {
@@ -688,7 +689,20 @@ public:
     }
     ScopedHandle(const ScopedHandle&) = delete;
     ScopedHandle& operator=(const ScopedHandle&) = delete;
+    ScopedHandle(ScopedHandle&& other) noexcept
+        : value_(other.release()) {}
+    ScopedHandle& operator=(ScopedHandle&& other) noexcept {
+        if (this == &other) return *this;
+        if (valid()) CloseHandle(value_);
+        value_ = other.release();
+        return *this;
+    }
     HANDLE get() const noexcept { return value_; }
+    HANDLE release() noexcept {
+        HANDLE value = value_;
+        value_ = INVALID_HANDLE_VALUE;
+        return value;
+    }
     bool valid() const noexcept {
         return value_ != nullptr && value_ != INVALID_HANDLE_VALUE;
     }
@@ -707,11 +721,24 @@ bool waitOverlapped(
     std::uint32_t timeoutMs,
     DWORD& transferred) noexcept {
     const DWORD waitResult = WaitForSingleObject(overlapped.hEvent, timeoutMs);
-    if (waitResult != WAIT_OBJECT_0) {
-        CancelIoEx(handle, &overlapped);
+    if (waitResult == WAIT_OBJECT_0) {
+        return GetOverlappedResult(
+                   handle, &overlapped, &transferred, FALSE) != FALSE;
+    }
+
+    if (waitResult == WAIT_TIMEOUT) {
+        // An OVERLAPPED and its event must remain alive until cancellation has
+        // completed. Returning immediately after CancelIoEx risks a kernel I/O
+        // completion writing through stack/event storage that has gone away.
+        (void)CancelIoEx(handle, &overlapped);
+        DWORD ignored = 0;
+        (void)GetOverlappedResult(handle, &overlapped, &ignored, TRUE);
+        SetLastError(ERROR_TIMEOUT);
         return false;
     }
-    return GetOverlappedResult(handle, &overlapped, &transferred, FALSE) != FALSE;
+
+    // WAIT_FAILED already leaves the useful Win32 error in GetLastError().
+    return false;
 }
 
 bool readExact(
@@ -1387,6 +1414,13 @@ public:
             InputRouter router;
             router.setIsolationMode(true);
             router.setGlobalCallback([this](const RawInputEvent& event) {
+                if (event.rawDevType == RIM_TYPEKEYBOARD) {
+                    host.observePhysicalInput(
+                        DeviceType::Keyboard, event.devicePath);
+                } else if (event.rawDevType == RIM_TYPEMOUSE) {
+                    host.observePhysicalInput(
+                        DeviceType::Mouse, event.devicePath);
+                }
                 (void)gameLauncher.routePhysicalInput(event);
             });
 
@@ -1419,6 +1453,15 @@ public:
 #endif
     }
 
+    ~Impl() {
+#if defined(_WIN32)
+        stopRequested.store(true, std::memory_order_release);
+        inputThread.request_stop();
+        cancelActiveConnections();
+        joinConnectionWorkers();
+#endif
+    }
+
     runtime::RuntimeHost& host;
     GameLauncher gameLauncher;
 #if defined(_WIN32)
@@ -1429,27 +1472,36 @@ public:
     bool inputStartupOk{false};
     std::string inputStartupError;
     std::jthread inputThread;
+
+    struct ConnectionWorker {
+        std::shared_ptr<std::atomic<bool>> finished;
+        std::jthread thread;
+    };
+
+    std::mutex connectionWorkersMutex;
+    std::vector<ConnectionWorker> connectionWorkers;
+    std::mutex activePipesMutex;
+    std::vector<HANDLE> activePipes;
 #endif
     std::atomic<bool> stopRequested{false};
 
-    bool serveOne(std::uint32_t timeoutMs, std::string* error) {
 #if defined(_WIN32)
-        {
-            std::lock_guard lock(inputStartupMutex);
-            if (!inputStartupComplete || !inputStartupOk) {
-                setError(
-                    error,
-                    inputStartupError.empty()
-                        ? "host Raw Input router is unavailable"
-                        : inputStartupError);
-                return false;
-            }
-        }
+    bool inputReady(std::string* error) {
+        std::lock_guard lock(inputStartupMutex);
+        if (inputStartupComplete && inputStartupOk) return true;
+        setError(
+            error,
+            inputStartupError.empty()
+                ? "host Raw Input router is unavailable"
+                : inputStartupError);
+        return false;
+    }
 
+    ScopedHandle createServerPipe(std::string* error) {
         const auto endpoint = currentHostPipeName();
         if (endpoint.empty()) {
             setError(error, "unable to resolve current Windows session");
-            return false;
+            return ScopedHandle{};
         }
 
         const DWORD bufferBytes = static_cast<DWORD>(
@@ -1459,56 +1511,238 @@ public:
             PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
                 PIPE_REJECT_REMOTE_CLIENTS,
-            1,
+            PIPE_UNLIMITED_INSTANCES,
             bufferBytes,
             bufferBytes,
             0,
             nullptr));
         if (!pipe.valid()) {
             setError(error, windowsError("CreateNamedPipeW failed"));
+        }
+        return pipe;
+    }
+
+    void registerActivePipe(HANDLE pipe) {
+        std::lock_guard lock(activePipesMutex);
+        activePipes.push_back(pipe);
+    }
+
+    void unregisterActivePipe(HANDLE pipe) {
+        std::lock_guard lock(activePipesMutex);
+        std::erase(activePipes, pipe);
+    }
+
+    void cancelActiveConnections() noexcept {
+        std::lock_guard lock(activePipesMutex);
+        for (const HANDLE pipe : activePipes) {
+            if (pipe == nullptr || pipe == INVALID_HANDLE_VALUE) continue;
+            CancelIoEx(pipe, nullptr);
+            DisconnectNamedPipe(pipe);
+        }
+    }
+
+    void reapConnectionWorkers() {
+        std::vector<std::jthread> completed;
+        {
+            std::lock_guard lock(connectionWorkersMutex);
+            for (auto it = connectionWorkers.begin();
+                 it != connectionWorkers.end();) {
+                if (!it->finished->load(std::memory_order_acquire)) {
+                    ++it;
+                    continue;
+                }
+                completed.push_back(std::move(it->thread));
+                it = connectionWorkers.erase(it);
+            }
+        }
+        for (auto& thread : completed) {
+            if (thread.joinable()) thread.join();
+        }
+    }
+
+    void joinConnectionWorkers() {
+        std::vector<std::jthread> workers;
+        {
+            std::lock_guard lock(connectionWorkersMutex);
+            workers.reserve(connectionWorkers.size());
+            for (auto& worker : connectionWorkers) {
+                worker.thread.request_stop();
+                workers.push_back(std::move(worker.thread));
+            }
+            connectionWorkers.clear();
+        }
+        for (auto& thread : workers) {
+            if (thread.joinable()) thread.join();
+        }
+    }
+
+    bool serveConnected(
+        ScopedHandle pipe,
+        std::uint32_t ioTimeoutMs,
+        std::string* error) {
+        if (!pipe.valid()) {
+            setError(error, "connected host pipe is invalid");
             return false;
         }
 
+        const HANDLE nativePipe = pipe.get();
+        registerActivePipe(nativePipe);
+        struct ActivePipeRegistration {
+            Impl& owner;
+            HANDLE pipe;
+            ~ActivePipeRegistration() { owner.unregisterActivePipe(pipe); }
+        } activeRegistration{*this, nativePipe};
+
+        if (stopRequested.load(std::memory_order_acquire)) {
+            return true;
+        }
+
+        // Windows 11 is the v1 release target. Per-process routing uses the
+        // AudioPolicyConfig family used by established Windows audio tools.
+        // Exact process identity and active endpoint state are still validated
+        // before every mutation, and unsupported OS behavior fails closed.
+        auto session = std::make_unique<HostConnectionSession>(
+            host,
+            &audioRouter,
+            &gameLauncher);
+
+        bool result = true;
+        bool handledAny = false;
+        std::string localError;
+        for (;;) {
+            localError.clear();
+            const auto request = readFrame(nativePipe, ioTimeoutMs, &localError);
+            if (!request) {
+                if (stopRequested.load(std::memory_order_acquire) ||
+                    handledAny) {
+                    result = true;
+                } else {
+                    setError(error, std::move(localError));
+                    result = false;
+                }
+                break;
+            }
+            handledAny = true;
+
+            // RuntimeHost and GameLauncher own their own synchronization.
+            // Do not serialize every client request behind launch/stop work:
+            // a long game/window operation must not make the read-only poller
+            // time out and report the canonical host as unavailable.
+            Frame response = session->handle(*request);
+            if (!writeFrame(nativePipe, response, ioTimeoutMs, &localError)) {
+                if (stopRequested.load(std::memory_order_acquire)) {
+                    result = true;
+                } else {
+                    setError(error, std::move(localError));
+                    result = false;
+                }
+                break;
+            }
+        }
+
+        // RuntimeHost serializes connection-scoped lease release internally.
+        session.reset();
+
+        if (!stopRequested.load(std::memory_order_acquire)) {
+            FlushFileBuffers(nativePipe);
+        }
+        DisconnectNamedPipe(nativePipe);
+        return result;
+    }
+
+    bool dispatchConnectedPipe(ScopedHandle pipe, std::string* error) {
+        auto finished = std::make_shared<std::atomic<bool>>(false);
+        try {
+            std::jthread thread(
+                [this, finished, pipe = std::move(pipe)](
+                    std::stop_token stopToken) mutable {
+                    std::string ignored;
+                    if (!stopToken.stop_requested() &&
+                        !stopRequested.load(std::memory_order_acquire)) {
+                        // Production clients are persistent. INFINITE applies
+                        // only to the per-connection read/write wait; requestStop
+                        // cancels pending I/O explicitly.
+                        (void)serveConnected(
+                            std::move(pipe), INFINITE, &ignored);
+                    }
+                    finished->store(true, std::memory_order_release);
+                });
+
+            std::lock_guard lock(connectionWorkersMutex);
+            connectionWorkers.push_back(
+                ConnectionWorker{std::move(finished), std::move(thread)});
+            return true;
+        } catch (...) {
+            setError(error, "failed to create host client worker thread");
+            return false;
+        }
+    }
+#endif
+
+    bool serveOne(std::uint32_t timeoutMs, std::string* error) {
+#if defined(_WIN32)
+        if (!inputReady(error)) return false;
+
+        auto pipe = createServerPipe(error);
+        if (!pipe.valid()) return false;
         if (!connectServerPipe(pipe.get(), timeoutMs, error)) {
             return false;
         }
-
-        // The Windows AudioPolicyConfig factory is undocumented and has not yet
-        // passed HydraSeat's physical receiver-verification/rollback gate. Keep
-        // the implementation available for controlled experiments, but fail
-        // closed in normal production runs.
-        HostConnectionSession session(
-            host,
-            experimentalAudioPolicyEnabled() ? &audioRouter : nullptr,
-            &gameLauncher);
-        std::size_t handled = 0;
-        for (; handled < kMaxFramesPerConnection; ++handled) {
-            std::string readError;
-            const auto request = readFrame(pipe.get(), timeoutMs, &readError);
-            if (!request) {
-                if (handled != 0) {
-                    DisconnectNamedPipe(pipe.get());
-                    return true;
-                }
-                setError(error, std::move(readError));
-                DisconnectNamedPipe(pipe.get());
-                return false;
-            }
-
-            const auto response = session.handle(*request);
-            if (!writeFrame(pipe.get(), response, timeoutMs, error)) {
-                DisconnectNamedPipe(pipe.get());
-                return false;
-            }
-        }
-
-        FlushFileBuffers(pipe.get());
-        DisconnectNamedPipe(pipe.get());
-        return true;
+        return serveConnected(std::move(pipe), timeoutMs, error);
 #else
         (void)timeoutMs;
         setError(error, "host pipe transport is available only on Windows");
         return false;
+#endif
+    }
+
+    bool serve(std::string* error) {
+#if defined(_WIN32)
+        if (!inputReady(error)) return false;
+
+        while (!stopRequested.load(std::memory_order_acquire)) {
+            reapConnectionWorkers();
+
+            auto pipe = createServerPipe(error);
+            if (!pipe.valid()) {
+                cancelActiveConnections();
+                joinConnectionWorkers();
+                return false;
+            }
+
+            std::string connectError;
+            if (!connectServerPipe(pipe.get(), 250, &connectError)) {
+                if (stopRequested.load(std::memory_order_acquire)) break;
+                if (connectError == "timeout waiting for host client") {
+                    continue;
+                }
+                setError(error, std::move(connectError));
+                cancelActiveConnections();
+                joinConnectionWorkers();
+                return false;
+            }
+
+            if (!dispatchConnectedPipe(std::move(pipe), error)) {
+                cancelActiveConnections();
+                joinConnectionWorkers();
+                return false;
+            }
+        }
+
+        cancelActiveConnections();
+        joinConnectionWorkers();
+        return true;
+#else
+        setError(error, "host pipe transport is available only on Windows");
+        return false;
+#endif
+    }
+
+    void requestStop() noexcept {
+        stopRequested.store(true, std::memory_order_release);
+#if defined(_WIN32)
+        inputThread.request_stop();
+        cancelActiveConnections();
 #endif
     }
 };
@@ -1533,36 +1767,11 @@ bool HostPipeServer::serve(std::string* error) {
         setError(error, "host pipe server is unavailable");
         return false;
     }
-
-#if defined(_WIN32)
-    while (!impl_->stopRequested.load(std::memory_order_acquire)) {
-        std::string localError;
-        if (impl_->serveOne(250, &localError)) {
-            continue;
-        }
-        if (impl_->stopRequested.load(std::memory_order_acquire)) {
-            return true;
-        }
-        if (localError == "timeout waiting for host client") {
-            continue;
-        }
-        setError(error, std::move(localError));
-        return false;
-    }
-    return true;
-#else
-    setError(error, "host pipe transport is available only on Windows");
-    return false;
-#endif
+    return impl_->serve(error);
 }
-
 void HostPipeServer::requestStop() noexcept {
-    if (impl_) {
-        impl_->stopRequested.store(true, std::memory_order_release);
-#if defined(_WIN32)
-        impl_->inputThread.request_stop();
-#endif
-    }
+    if (impl_) impl_->requestStop();
 }
+
 
 } // namespace hydra::hostipc

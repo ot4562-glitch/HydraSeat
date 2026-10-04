@@ -44,8 +44,13 @@ struct ComPtr {
 // RAII wrapper for HSTRING
 struct ScopedHString {
     HSTRING hstr{nullptr};
-    ScopedHString(const std::wstring& str) {
-        WindowsCreateString(str.c_str(), static_cast<UINT32>(str.length()), &hstr);
+    explicit ScopedHString(const std::wstring& str) {
+        // AudioPolicyConfig uses a null HSTRING to clear a persisted endpoint.
+        // An allocated empty HSTRING is not the same API contract.
+        if (!str.empty()) {
+            WindowsCreateString(
+                str.c_str(), static_cast<UINT32>(str.length()), &hstr);
+        }
     }
     ~ScopedHString() {
         if (hstr) WindowsDeleteString(hstr);
@@ -198,13 +203,23 @@ static hydra::runtime::AudioRouteStatus callAudioPolicyConfigFactory(DWORD pid, 
         }
     }
 
-    if (is21H2) {
-        hr = factory21H2->SetPersistedDefaultAudioEndpoint(pid, eRender, eConsole, deviceId);
-    } else {
-        hr = factoryDownlevel->SetPersistedDefaultAudioEndpoint(pid, eRender, eConsole, deviceId);
-    }
+    const auto setRole = [&](ERole role) {
+        if (is21H2) {
+            return factory21H2->SetPersistedDefaultAudioEndpoint(
+                pid, eRender, role, deviceId);
+        }
+        return factoryDownlevel->SetPersistedDefaultAudioEndpoint(
+            pid, eRender, role, deviceId);
+    };
 
-    return SUCCEEDED(hr) ? hydra::runtime::AudioRouteStatus::Success : hydra::runtime::AudioRouteStatus::RoutingFailed;
+    // Windows' per-app output preference is role-specific. Set the same two
+    // render roles used by established Windows audio routing tools so ordinary
+    // games do not silently remain on the old multimedia endpoint.
+    const HRESULT multimedia = setRole(eMultimedia);
+    const HRESULT console = setRole(eConsole);
+    return SUCCEEDED(multimedia) && SUCCEEDED(console)
+        ? hydra::runtime::AudioRouteStatus::Success
+        : hydra::runtime::AudioRouteStatus::RoutingFailed;
 }
 
 } // namespace

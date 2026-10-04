@@ -43,8 +43,9 @@ if(WIN32)
     endif()
 endif()
 
-# Find Qt6 components if available
-find_package(Qt6 COMPONENTS Core Widgets QUIET)
+# Pranshu's Qt UI is the canonical HydraSeat UI. Never silently replace it
+# with a different fallback UI just because the build machine is missing Qt.
+find_package(Qt6 6.8 COMPONENTS Core Widgets REQUIRED)
 
 if(Qt6_FOUND)
     set(CMAKE_AUTOMOC ON)
@@ -52,9 +53,12 @@ if(Qt6_FOUND)
     set(CMAKE_AUTORCC ON)
     set(UI_SOURCES
         ui/app_window.cpp
+        ui/application_library.cpp
         ui/engine_poller.cpp
+        ui/host_bootstrap.cpp
         ui/host_control_client.cpp
         ui/routing_controller.cpp
+        ui/ui_settings.cpp
         ui/pages/dashboard_page.cpp
         ui/pages/seats_page.cpp
         ui/pages/settings_page.cpp
@@ -65,9 +69,12 @@ if(Qt6_FOUND)
     )
     set(UI_HEADERS
         ui/app_window.hpp
+        ui/application_library.hpp
         ui/engine_poller.hpp
+        ui/host_bootstrap.hpp
         ui/host_control_client.hpp
         ui/routing_controller.hpp
+        ui/ui_settings.hpp
         ui/pages/dashboard_page.hpp
         ui/pages/seats_page.hpp
         ui/pages/applications_page.hpp
@@ -80,6 +87,7 @@ endif()
 # Source files
 set(HYDRA_SOURCES
     src/hardware_detector.cpp
+    src/raw_input_utils.cpp
     src/input_router.cpp
     src/display_manager.cpp
     src/workspace_manager.cpp
@@ -173,6 +181,7 @@ if(WIN32)
         src/controller_io.cpp
         src/controller_inventory.cpp
         src/controller_identity.cpp
+        src/raw_input_utils.cpp
     )
     target_link_libraries(xinput_probe_game PRIVATE ${WIN32_LIBS})
     if(MINGW)
@@ -252,6 +261,7 @@ if(WIN32)
         src/controller_io.cpp
         src/controller_inventory.cpp
         src/controller_identity.cpp
+        src/raw_input_utils.cpp
     )
     target_link_libraries(xinput_process_isolation PRIVATE ${WIN32_LIBS})
     add_dependencies(xinput_process_isolation xinput_probe_game)
@@ -265,6 +275,7 @@ if(WIN32)
         src/controller_io.cpp
         src/controller_inventory.cpp
         src/controller_identity.cpp
+        src/raw_input_utils.cpp
     )
     target_link_libraries(xinput_adapter_process_isolation PRIVATE ${WIN32_LIBS})
     add_dependencies(
@@ -439,10 +450,14 @@ add_library(hydra_host_authority STATIC
     src/controller_io.cpp
     src/controller_virtual_xinput.cpp
     src/hardware_detector.cpp
+    src/raw_input_utils.cpp
     src/seat_hardware_store.cpp
 )
 target_include_directories(hydra_host_authority PUBLIC include)
-target_link_libraries(hydra_host_authority PUBLIC hydra_profile_schema)
+target_link_libraries(hydra_host_authority PUBLIC
+    hydra_profile_schema
+    hydra_process_display
+)
 if(WIN32)
     target_link_libraries(hydra_host_authority PUBLIC ${WIN32_LIBS})
 endif()
@@ -556,8 +571,8 @@ if(WIN32)
     )
 endif()
 
-# Every supported GUI is an IPC client of the canonical host. Neither the
-# Win32 release UI nor the optional Qt UI constructs runtime authority in-process.
+# Pranshu's canonical Qt GUI is an IPC client of the canonical host and never
+# constructs runtime authority in-process.
 target_link_libraries(HydraSeat PRIVATE hydra_host_transport)
 target_link_libraries(hydra_tests PRIVATE hydra_host_transport)
 

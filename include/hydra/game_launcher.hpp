@@ -7,6 +7,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "hydra/controller_inventory.hpp"
 #include "hydra/runtime_authority.hpp"
@@ -73,6 +74,10 @@ public:
         std::wstring xinputPipeEndpoint);
 
     bool stopWorkspaceGame(uint32_t workspaceId);
+    // Reconcile naturally exited process trees with canonical Seat authority.
+    // This never terminates a live process; it only releases runtime state once
+    // the strict Seat Job Object reports zero active processes.
+    void reapExitedGames() noexcept;
     bool hasWorkspaceGame(uint32_t workspaceId) const;
     bool routePhysicalInput(const RawInputEvent& event);
     std::string lastError() const;
@@ -88,8 +93,8 @@ private:
         runtime::ProcessIdentity identity{};
         std::shared_ptr<ControllerPipeRuntime> controllerPipe;
         std::shared_ptr<SeatWindowRuntime> windowRuntime;
-        std::uintptr_t keyboardHandle{0};
-        std::uintptr_t mouseHandle{0};
+        std::vector<std::uintptr_t> keyboardHandles;
+        std::vector<std::uintptr_t> mouseHandles;
         std::shared_ptr<gatec::ExternalInputSession> inputSession;
     };
 

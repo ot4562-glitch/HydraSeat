@@ -1,5 +1,7 @@
 #include "hydra/runtime_host.hpp"
+#include "hydra/raw_input_utils.hpp"
 
+#include <algorithm>
 #include <iterator>
 #include <utility>
 
@@ -60,12 +62,35 @@ std::optional<SeatRuntimeSnapshot> RuntimeHost::seatSnapshot(
 }
 
 controller::InventorySnapshot RuntimeHost::controllerInventorySnapshot() noexcept {
-    std::lock_guard lock(mutex_);
+    // XInput/SetupAPI enumeration can be slow on device churn. Keep it off the
+    // authority mutex so read-only snapshots cannot be starved by enumeration.
+    std::lock_guard lock(controllerInventoryMutex_);
     return controllerInventory_.scan();
 }
 
 std::vector<DeviceInfo> RuntimeHost::hardwareInventory() {
-    std::lock_guard lock(mutex_);
+    // Enumerate Windows devices without holding runtime authority. Only the
+    // tiny activity-confirmation filter needs the authority mutex.
+    auto displays = hardwareDetector_.detectDisplays();
+    auto keyboards = hardwareDetector_.detectKeyboards();
+    auto mice = hardwareDetector_.detectMice();
+    auto controllers = hardwareDetector_.detectControllers();
+
+    {
+        std::lock_guard lock(mutex_);
+        std::erase_if(
+            keyboards,
+            [this](const DeviceInfo& device) {
+                return device.requiresActivityConfirmation &&
+                       !confirmedKeyboardIds_.contains(device.id);
+            });
+        std::erase_if(
+            mice,
+            [this](const DeviceInfo& device) {
+                return device.requiresActivityConfirmation &&
+                       !confirmedMouseIds_.contains(device.id);
+            });
+    }
 
     std::vector<DeviceInfo> result;
     const auto append = [&result](std::vector<DeviceInfo> devices) {
@@ -75,11 +100,39 @@ std::vector<DeviceInfo> RuntimeHost::hardwareInventory() {
             std::make_move_iterator(devices.end()));
     };
 
-    append(hardwareDetector_.detectDisplays());
-    append(hardwareDetector_.detectKeyboards());
-    append(hardwareDetector_.detectMice());
-    append(hardwareDetector_.detectControllers());
+    append(std::move(displays));
+    append(std::move(keyboards));
+    append(std::move(mice));
+    append(std::move(controllers));
     return result;
+}
+
+void RuntimeHost::observePhysicalInput(
+    DeviceType type,
+    const std::wstring& devicePath) {
+#if defined(_WIN32)
+    if (devicePath.empty() ||
+        (type != DeviceType::Keyboard && type != DeviceType::Mouse)) {
+        return;
+    }
+
+    const auto category = type == DeviceType::Keyboard
+        ? std::wstring_view(L"keyboard")
+        : std::wstring_view(L"mouse");
+    const auto stableId =
+        win32::makeStableRawInputDeviceId(category, devicePath);
+    if (stableId.empty()) return;
+
+    std::lock_guard lock(mutex_);
+    auto& confirmed = type == DeviceType::Keyboard
+        ? confirmedKeyboardIds_
+        : confirmedMouseIds_;
+    const bool changed = confirmed.insert(stableId).second;
+    noteMutationLocked(changed);
+#else
+    (void)type;
+    (void)devicePath;
+#endif
 }
 
 std::optional<SeatHardwareConfiguration>
@@ -107,16 +160,35 @@ bool RuntimeHost::configureSeatHardware(
         return fail("invalid Seat hardware mutation authority");
     }
 
+    // Hardware discovery is not authority mutation and can involve SetupAPI/HID
+    // I/O. Do it before taking the host mutex so polling remains responsive.
+    const auto displays = hardwareDetector_.detectDisplays();
+    auto keyboards = hardwareDetector_.detectKeyboards();
+    auto mice = hardwareDetector_.detectMice();
+
     std::lock_guard lock(mutex_);
     const auto seat = controller_.snapshot(uiLease.seatId);
     if (!seat || !seat->uiLeaseActive ||
         seat->generation != uiLease.generation) {
         return fail("Seat UI lease is stale or no longer owned");
     }
+    if (seat->gameLeaseActive) {
+        return fail(
+            "stop the running Seat game before changing its hardware assignment");
+    }
 
-    const auto displays = hardwareDetector_.detectDisplays();
-    const auto keyboards = hardwareDetector_.detectKeyboards();
-    const auto mice = hardwareDetector_.detectMice();
+    std::erase_if(
+        keyboards,
+        [this](const DeviceInfo& device) {
+            return device.requiresActivityConfirmation &&
+                   !confirmedKeyboardIds_.contains(device.id);
+        });
+    std::erase_if(
+        mice,
+        [this](const DeviceInfo& device) {
+            return device.requiresActivityConfirmation &&
+                   !confirmedMouseIds_.contains(device.id);
+        });
 
     const auto contains = [](const std::vector<DeviceInfo>& devices,
                              const std::wstring& stableId) {
@@ -215,9 +287,20 @@ bool RuntimeHost::pairController(
         return false;
     }
 
-    std::lock_guard lock(mutex_);
-    const auto snapshot = controllerInventory_.scan();
+    controller::InventorySnapshot snapshot;
+    {
+        std::lock_guard inventoryLock(controllerInventoryMutex_);
+        snapshot = controllerInventory_.scan();
+    }
     if (!snapshot.authoritative) return false;
+
+    std::lock_guard lock(mutex_);
+    const auto seat = controller_.snapshot(uiLease.seatId);
+    if (!seat || !seat->uiLeaseActive ||
+        seat->generation != uiLease.generation ||
+        seat->gameLeaseActive) {
+        return false;
+    }
 
     std::wstring persistentId(
         persistentControllerId.begin(), persistentControllerId.end());

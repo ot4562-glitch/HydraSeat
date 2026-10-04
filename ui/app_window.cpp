@@ -9,6 +9,7 @@
 #include "ui/pages/hardware_page.hpp"
 #include "ui/pages/diagnostics_page.hpp"
 #include "ui/pages/settings_page.hpp"
+#include "ui/ui_settings.hpp"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -19,16 +20,21 @@ namespace hydra::ui {
 AppWindow::AppWindow(QWidget* parent)
     : QMainWindow(parent) {
     m_hostControl = std::make_shared<HostControlClient>();
-    m_hardwareDetector = std::make_shared<hydra::HardwareDetector>();
     m_routingController =
         std::make_unique<RoutingController>(m_hostControl, this);
     m_enginePoller =
-        std::make_unique<EnginePoller>(m_hardwareDetector, this);
+        std::make_unique<EnginePoller>(this);
 
     setupUi();
 
     QTimer::singleShot(0, this, [this]() {
-        m_enginePoller->startPolling(2000);
+        // Establish the control connection first so GUI startup has a single,
+        // deterministic canonical-host bootstrap path. The read-only poller can
+        // then attach as a second persistent client without racing host launch.
+        std::string ignored;
+        (void)m_hostControl->ensureConnected(&ignored);
+        m_enginePoller->startPolling(
+            UiSettings::load().refreshIntervalMs);
     });
 }
 
@@ -41,7 +47,26 @@ void AppWindow::setupUi() {
 
     setStyleSheet(R"(
         QMainWindow { background-color: #0A0A0A; color: #F5F5F5; font-family: 'Segoe UI', Arial, sans-serif; }
-        QLabel { color: #F5F5F5; font-family: 'Segoe UI', Arial, sans-serif; }
+        QWidget { color: #F5F5F5; font-family: 'Segoe UI', Arial, sans-serif; }
+        QLabel { color: #F5F5F5; }
+        QPushButton, QCheckBox, QRadioButton { color: #F5F5F5; }
+        QLineEdit, QComboBox, QSpinBox {
+            color: #F5F5F5;
+            selection-color: #F5F5F5;
+            selection-background-color: #E10600;
+        }
+        QComboBox QAbstractItemView {
+            background-color: #151515;
+            color: #F5F5F5;
+            selection-background-color: #292929;
+            selection-color: #F5F5F5;
+            border: 1px solid #333333;
+        }
+        QToolTip {
+            background-color: #202020;
+            color: #F5F5F5;
+            border: 1px solid #444444;
+        }
         QScrollBar:vertical { background: #101010; width: 10px; margin: 0px; }
         QScrollBar::handle:vertical { background: #333333; border-radius: 5px; min-height: 30px; }
         QScrollBar::handle:vertical:hover { background: #444444; }
@@ -101,6 +126,23 @@ void AppWindow::setupUi() {
 
     auto* settingsPageNode = new SettingsPage(m_workspaceStack);
     m_workspaceStack->addWidget(settingsPageNode);
+
+    connect(
+        applicationsPage,
+        &ApplicationsPage::applicationLibraryChanged,
+        seatsPage,
+        &SeatsPage::refreshApplications);
+
+    connect(
+        settingsPageNode,
+        &SettingsPage::preferencesChanged,
+        this,
+        [this]() {
+            if (m_enginePoller) {
+                m_enginePoller->startPolling(
+                    UiSettings::load().refreshIntervalMs);
+            }
+        });
 
     connect(m_enginePoller.get(), &EnginePoller::stateUpdated, dashboardPage, &DashboardPage::updateState);
     connect(m_enginePoller.get(), &EnginePoller::stateUpdated, seatsPage, &SeatsPage::updateState);

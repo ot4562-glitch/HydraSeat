@@ -81,7 +81,7 @@ void HardwarePage::addSection(const QString& title, const std::vector<hydra::Dev
 }
 
 void HardwarePage::addControllerSection(const hydra::controller::InventorySnapshot& inventory) {
-    if (inventory.physicalControllers.empty() && inventory.sources.empty()) {
+    if (inventory.physicalControllers.empty()) {
         auto* emptyLbl = new QLabel("NO CONTROLLERS DETECTED\nConnect a controller and it will appear here.");
         emptyLbl->setStyleSheet("font-size: 13px; color: #777777; font-family: 'Segoe UI', sans-serif;");
         m_listLayout->insertWidget(m_listLayout->count() - 1, emptyLbl);

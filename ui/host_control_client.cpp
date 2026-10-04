@@ -1,4 +1,5 @@
 #include "ui/host_control_client.hpp"
+#include "ui/host_bootstrap.hpp"
 
 #include <utility>
 
@@ -19,10 +20,8 @@ bool HostControlClient::ensureConnected(std::string* error) {
     if (client_.connected()) return true;
 
     ownedUiLeases_.fill(false);
-    return client_.connect(
-        hostipc::ClientRole::Control,
-        hostipc::kDefaultHostPipeTimeoutMs,
-        error);
+    return connectCanonicalHost(
+        client_, hostipc::ClientRole::Control, error);
 }
 
 bool HostControlClient::connected() const noexcept {
@@ -102,6 +101,36 @@ bool HostControlClient::ensureUiLeaseForSeat(
         return false;
     }
     return acquireUiLease(seatId, error).has_value();
+}
+
+std::optional<hostipc::SeatHardwareAssignment> HostControlClient::seatHardware(
+    std::uint32_t seatId,
+    std::string* error) {
+    if (seatId == 0 || seatId > ownedUiLeases_.size()) {
+        setError(error, "invalid Seat id");
+        return std::nullopt;
+    }
+    if (!ensureConnected(error)) return std::nullopt;
+    return client_.getSeatHardware(
+        seatId, hostipc::kDefaultHostPipeTimeoutMs, error);
+}
+
+std::optional<hostipc::SeatHardwareAssignment>
+HostControlClient::assignSeatHardware(
+    std::uint32_t seatId,
+    const std::string& displayIdUtf8,
+    const std::string& keyboardIdUtf8,
+    const std::string& mouseIdUtf8,
+    std::string* error) {
+    if (!ensureUiLeaseForSeat(seatId, error)) return std::nullopt;
+
+    hostipc::SeatHardwareAssignment assignment;
+    assignment.seatId = seatId;
+    assignment.displayIdUtf8 = displayIdUtf8;
+    assignment.keyboardIdUtf8 = keyboardIdUtf8;
+    assignment.mouseIdUtf8 = mouseIdUtf8;
+    return client_.assignSeatHardware(
+        assignment, hostipc::kDefaultHostPipeTimeoutMs, error);
 }
 
 std::optional<hostipc::HostSnapshot> HostControlClient::pairController(
@@ -202,7 +231,7 @@ std::optional<hostipc::HostSnapshot> HostControlClient::launchGame(
     request.workingDirectoryUtf8 = workingDirectoryUtf8;
     return client_.launchGame(
         request,
-        hostipc::kDefaultHostPipeTimeoutMs,
+        hostipc::kHostLaunchTimeoutMs,
         error);
 }
 
@@ -212,7 +241,7 @@ std::optional<hostipc::HostSnapshot> HostControlClient::stopGame(
     if (!ensureUiLeaseForSeat(seatId, error)) return std::nullopt;
     return client_.stopGame(
         seatId,
-        hostipc::kDefaultHostPipeTimeoutMs,
+        hostipc::kHostStopTimeoutMs,
         error);
 }
 

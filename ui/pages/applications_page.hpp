@@ -27,6 +27,10 @@ public:
 
 public slots:
     void updateState(const EngineStatePayload& payload);
+    void selectSeat(std::uint32_t seatId);
+
+signals:
+    void applicationLibraryChanged();
 
 private slots:
     void onBrowseExecutable();

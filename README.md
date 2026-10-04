@@ -46,7 +46,7 @@ HydraSeat UI / control surface
       +-- rollback   +-- rollback
 ```
 
-`hydra_host.exe` is the sole runtime authority on the reviewed v1 path. Each `SeatRuntime` owns only its Seat-local mutable state. `HydraSeat.exe` is an IPC client: the dependency-free Win32 release UI commits stable hardware assignments, performs explicit controller pairing, and launches/stops each Seat through the canonical host instead of constructing process-local runtime authority.
+`hydra_host.exe` is the sole runtime authority on the reviewed v1 path. Each `SeatRuntime` owns only its Seat-local mutable state. `HydraSeat.exe` is an IPC client: Pranshu's Qt UI commits stable hardware assignments, performs explicit controller pairing, and launches/stops each Seat through the canonical host instead of constructing process-local runtime authority.
 
 Core rules:
 
@@ -63,7 +63,7 @@ See [Architecture](docs/ARCHITECTURE.md) and the stricter [Collaboration Contrac
 
 The current release-candidate branch contains the two-Seat configuration model, stable display/keyboard/mouse/controller identity, connection-scoped UI leases, generation-scoped `SessionController` / `SeatRuntime` ownership, exact process/window claims, host-owned launch/stop, Windows audio routing, and the x64 Gate-C external session/bridge path.
 
-The Win32 UI is the reviewed default release UI. Qt remains an opt-in development UI and is disabled by default so release payloads do not silently depend on whatever Qt runtime happens to be installed on the build machine.
+Pranshu's Qt Widgets UI is the canonical HydraSeat UI. The build therefore requires Qt 6.8+ instead of silently replacing that interface with a fallback UI when Qt is absent. A distributable package must deploy the matching Qt runtime/plugins beside `HydraSeat.exe`; the current first-party-only release allowlist does not yet satisfy that clean-machine packaging requirement, so it remains an explicit release blocker rather than a hidden dependency.
 
 The dated breakdown is maintained in [Current Status](docs/STATUS.md). Future sequencing is in [Roadmap](docs/ROADMAP.md).
 
@@ -85,7 +85,7 @@ Unsupported or ambiguous scenarios should be reported as unsupported rather than
 - **Compiler:** a C++20-capable Windows toolchain. The current local RC evidence was produced with MinGW-w64; an MSVC release build should still be qualified before GA;
 - **Build system:** CMake 3.20+;
 - **Windows SDK/APIs:** Win32 Raw Input, SetupAPI, DXGI, HID/XInput and related APIs;
-- **Qt 6:** optional development UI only. Enable it explicitly with `-DHYDRA_ENABLE_QT_UI=ON`; the reviewed release UI does not require Qt.
+- **Qt 6.8+:** required for the canonical Pranshu UI. Source builds must provide Qt Core/Widgets; release packaging must also deploy the required Qt runtime/plugins for clean-machine startup.
 
 Typical MSVC configuration:
 
