@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "releaseScope": "HydraSeat v1 owned end-user release artifacts only; tests, probes, labs, third-party binaries, and drivers are excluded until separately reviewed.",
+  "releaseScope": "HydraSeat v1 owned end-user release artifacts plus the bounded Qt 6.8.3 runtime deployed by windeployqt; tests, probes, labs, unrelated third-party binaries, and drivers are excluded.",
   "artifacts": [
     {
       "id": "main-ui",
@@ -14,6 +14,13 @@
       "kind": "cmake-executable",
       "target": "hydra_host",
       "fileName": "hydra_host.exe",
+      "architectures": ["x64"]
+    },
+    {
+      "id": "xinput-adapter",
+      "kind": "cmake-shared-library",
+      "target": "hydra_xinput_adapter",
+      "fileName": "hydra_xinput_adapter.dll",
       "architectures": ["x64"]
     },
     {
@@ -76,7 +83,7 @@
   "excludedArtifactClasses": [
     "test executables",
     "diagnostic/lab/probe tools not in the end-user package",
-    "third-party binaries",
+    "third-party binaries other than the reviewed Qt 6.8.3 runtime",
     "drivers until a separately reviewed signed driver artifact is selected"
   ]
 }

@@ -5,17 +5,10 @@
 
 namespace hydra {
 
-static InputRouter* g_routerInstance = nullptr;
-
-InputRouter::InputRouter() {
-    g_routerInstance = this;
-}
+InputRouter::InputRouter() = default;
 
 InputRouter::~InputRouter() {
     stop();
-    if (g_routerInstance == this) {
-        g_routerInstance = nullptr;
-    }
 }
 
 bool InputRouter::postInputToWindow(uint64_t hwndVal, const RawInputEvent& evt) {
@@ -44,11 +37,37 @@ bool InputRouter::postInputToWindow(uint64_t hwndVal, const RawInputEvent& evt) 
 }
 
 #ifdef _WIN32
-LRESULT CALLBACK InputRouter::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (msg == WM_INPUT && g_routerInstance) {
-        g_routerInstance->handleRawInput(reinterpret_cast<HRAWINPUT>(lParam));
-        return DefWindowProcW(hwnd, msg, wParam, lParam);
+LRESULT CALLBACK InputRouter::WndProc(
+    HWND hwnd,
+    UINT msg,
+    WPARAM wParam,
+    LPARAM lParam) {
+    InputRouter* router = reinterpret_cast<InputRouter*>(
+        GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    if (msg == WM_NCCREATE) {
+        const auto* create =
+            reinterpret_cast<const CREATESTRUCTW*>(lParam);
+        router = create
+            ? static_cast<InputRouter*>(create->lpCreateParams)
+            : nullptr;
+        if (router != nullptr) {
+            SetWindowLongPtrW(
+                hwnd,
+                GWLP_USERDATA,
+                reinterpret_cast<LONG_PTR>(router));
+        }
     }
+
+    if (msg == WM_INPUT && router != nullptr) {
+        router->handleRawInput(
+            reinterpret_cast<HRAWINPUT>(lParam));
+    }
+
+    if (msg == WM_NCDESTROY) {
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+    }
+
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
@@ -157,10 +176,18 @@ bool InputRouter::initialize(uint64_t targetHwndVal) {
         RegisterClassExW(&wc);
 
         m_hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW, L"HydraSeatRawInputHost", L"HydraSeat Input Router",
-            WS_POPUP, 0, 0, 0, 0,
-            NULL, NULL, GetModuleHandle(NULL), NULL
-        );
+            WS_EX_TOOLWINDOW,
+            L"HydraSeatRawInputHost",
+            L"HydraSeat Input Router",
+            WS_POPUP,
+            0,
+            0,
+            0,
+            0,
+            nullptr,
+            nullptr,
+            GetModuleHandle(nullptr),
+            this);
 
         if (!m_hwnd) {
             return false;

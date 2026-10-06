@@ -45,7 +45,7 @@ endif()
 
 # Pranshu's Qt UI is the canonical HydraSeat UI. Never silently replace it
 # with a different fallback UI just because the build machine is missing Qt.
-find_package(Qt6 6.8 COMPONENTS Core Widgets REQUIRED)
+find_package(Qt6 6.8.3 EXACT COMPONENTS Core Widgets Concurrent REQUIRED)
 
 if(Qt6_FOUND)
     set(CMAKE_AUTOMOC ON)
@@ -162,7 +162,7 @@ if(WIN32)
 endif()
 
 if(Qt6_FOUND)
-    target_link_libraries(HydraSeat PRIVATE Qt6::Core Qt6::Widgets)
+    target_link_libraries(HydraSeat PRIVATE Qt6::Core Qt6::Widgets Qt6::Concurrent)
     target_compile_definitions(HydraSeat PRIVATE HYDRA_HAS_QT=1)
 endif()
 
@@ -217,7 +217,9 @@ if(WIN32)
     target_compile_definitions(
         hydra_xinput_adapter PRIVATE HYDRA_VIRTUAL_XINPUT_CLIENT_ONLY=1)
     set_target_properties(
-        hydra_xinput_adapter PROPERTIES OUTPUT_NAME "hydra_xinput_adapter")
+        hydra_xinput_adapter PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "hydra_xinput_adapter")
     add_dependencies(xinput_adapter_exports hydra_xinput_adapter)
 endif()
 
@@ -284,13 +286,14 @@ if(WIN32)
         hydra_xinput_adapter)
 endif()
 if(Qt6_FOUND)
-    target_link_libraries(hydra_tests PRIVATE Qt6::Core Qt6::Widgets)
+    target_link_libraries(hydra_tests PRIVATE Qt6::Core Qt6::Widgets Qt6::Concurrent)
 endif()
 add_test(NAME EngineUnitTests COMMAND hydra_tests)
 if(WIN32)
     add_executable(hydra_process_owner_child
         tests/process_owner_child.cpp
     )
+    target_link_libraries(hydra_process_owner_child PRIVATE Xinput9_1_0.lib)
     if(MINGW)
         target_link_options(hydra_process_owner_child PRIVATE -municode)
     endif()
@@ -462,9 +465,9 @@ if(WIN32)
     target_link_libraries(hydra_host_authority PUBLIC ${WIN32_LIBS})
 endif()
 
-add_executable(host_protocol_v2_tests tests/test_host_protocol_v2.cpp)
-target_link_libraries(host_protocol_v2_tests PRIVATE hydra_host_authority)
-add_test(NAME HostProtocolV2Tests COMMAND host_protocol_v2_tests)
+add_executable(host_protocol_v3_tests tests/test_host_protocol_v3.cpp)
+target_link_libraries(host_protocol_v3_tests PRIVATE hydra_host_authority)
+add_test(NAME HostProtocolV3Tests COMMAND host_protocol_v3_tests)
 
 add_executable(runtime_host_v1_tests tests/test_runtime_host_v1.cpp)
 target_link_libraries(runtime_host_v1_tests PRIVATE hydra_host_authority)
@@ -764,6 +767,7 @@ if(WIN32)
         src/gate_c_cursor_focus_shim.cpp
         src/gate_c_raw_input_shim.cpp
         src/gate_c_shim_iat.cpp
+        src/xinput_iat_redirect.cpp
     )
     target_include_directories(hydra_gate_c_shim_support PUBLIC include)
 
@@ -849,6 +853,7 @@ if(WIN32)
         hydra_gate_c_external_session
     )
     add_dependencies(hydra_host
+        hydra_xinput_adapter
         hydra_gate_c_adapter
         hydra_gate_c_shim
         hydra_gate_c_external_bridge
@@ -892,6 +897,14 @@ if(WIN32)
         hydra_gate_c_shim_support
     )
 
+    add_executable(xinput_iat_redirect_backend_tests
+        tests/test_xinput_iat_redirect.cpp
+    )
+    target_link_libraries(xinput_iat_redirect_backend_tests PRIVATE
+        hydra_gate_c_shim_support
+        ${WIN32_LIBS}
+    )
+
     add_test(NAME GateCAdapterBackendTests
         COMMAND gate_c_adapter_backend_tests
     )
@@ -906,6 +919,9 @@ if(WIN32)
     )
     add_test(NAME GateCRawInputShimBackendTests
         COMMAND gate_c_raw_input_shim_backend_tests
+    )
+    add_test(NAME XInputIatRedirectBackendTests
+        COMMAND xinput_iat_redirect_backend_tests
     )
     add_test(NAME GateCTargetBackendSelfTest
         COMMAND hydra_gate_c_target --self-test
@@ -1338,6 +1354,14 @@ if(WIN32)
     target_link_libraries(hydra_game_runtime_requirement_resolver PRIVATE Bcrypt.lib)
 endif()
 
+# Production consumers must reach the trusted requirement authority through the
+# canonical resolver target; merely compiling the resolver for pipeline tests is
+# not sufficient release evidence.
+target_link_libraries(HydraSeat PRIVATE hydra_game_runtime_requirement_resolver)
+if(WIN32)
+    target_link_libraries(hydra_host PRIVATE hydra_game_runtime_requirement_resolver)
+endif()
+
 # Local evidence collection, persistence, and publication remain separate
 # authorities. Controlled/synthetic evidence is never promoted to Physical.
 add_library(hydra_local_compatibility_evidence STATIC
@@ -1392,23 +1416,20 @@ target_link_libraries(hydraseat_community_validate PRIVATE
     hydra_setup_package
 )
 
-foreach(test_name IN ITEMS
-    provider_launch_plan
-    plan_preflight
-    profile_migration
-    profile_cli
-    compatibility_aggregation
-    community_package
-    community_setup
-    compatibility_catalog
-    catalog_cache
-    community_submission
-    compatibility_share_model
-    compatibility_local_store
-    game_runtime_requirement_resolver
-)
-    add_executable(${test_name}_pipeline_tests tests/test_${test_name}.cpp)
-endforeach()
+add_executable(provider_launch_plan_pipeline_tests tests/test_provider_launch_plan.cpp)
+add_executable(plan_preflight_pipeline_tests tests/test_plan_preflight.cpp)
+add_executable(profile_migration_pipeline_tests tests/test_profile_migration.cpp)
+add_executable(profile_cli_pipeline_tests tests/test_profile_cli.cpp)
+add_executable(compatibility_aggregation_pipeline_tests tests/test_compatibility_aggregation.cpp)
+add_executable(community_package_pipeline_tests tests/test_community_package.cpp)
+add_executable(community_setup_pipeline_tests tests/test_community_setup.cpp)
+add_executable(compatibility_catalog_pipeline_tests tests/test_compatibility_catalog.cpp)
+add_executable(catalog_cache_pipeline_tests tests/test_catalog_cache.cpp)
+add_executable(community_submission_pipeline_tests tests/test_community_submission.cpp)
+add_executable(compatibility_share_model_pipeline_tests tests/test_compatibility_share_model.cpp)
+add_executable(compatibility_local_store_pipeline_tests tests/test_compatibility_local_store.cpp)
+add_executable(game_runtime_requirement_resolver_pipeline_tests
+    tests/test_game_runtime_requirement_resolver.cpp)
 
 target_link_libraries(provider_launch_plan_pipeline_tests PRIVATE hydra_provider_launch_plan)
 target_link_libraries(plan_preflight_pipeline_tests PRIVATE hydra_plan_preflight)

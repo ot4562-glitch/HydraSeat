@@ -22,12 +22,6 @@ int main(int argc, char** argv) {
     assert(argv[1] != nullptr);
     const std::string controlledChildPath = argv[1];
 
-    // Production default: the undocumented Windows AudioPolicyConfig path is
-    // unavailable until explicitly enabled for controlled physical validation.
-    assert(SetEnvironmentVariableW(
-        L"HYDRA_EXPERIMENTAL_AUDIO_POLICY", nullptr) != FALSE ||
-        GetLastError() == ERROR_ENVVAR_NOT_FOUND);
-
     RuntimeHost host;
     const auto activation = host.beginSeatActivation(1);
     assert(activation.valid());
@@ -82,8 +76,9 @@ int main(int argc, char** argv) {
         process.pid, process.creationIdentity,
         "{0.0.0.00000000}.{00000000-0000-0000-0000-000000000000}",
         5000, &clientError);
-    assert(!audioStatus.has_value());
-    assert(!clientError.empty());
+    assert(audioStatus.has_value());
+    assert(*audioStatus != AudioMutationStatus::Success);
+    assert(clientError.empty());
 
     snapshot = client.releaseUiLease(1, 5000, &clientError);
     assert(snapshot.has_value());

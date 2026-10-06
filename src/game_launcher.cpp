@@ -833,7 +833,11 @@ void GameLauncher::setLastError(std::string message) {
 }
 
 void GameLauncher::reapExitedGames() noexcept {
-    std::lock_guard lock(processMutex_);
+    // Reconciliation runs on every host request, including read-only polling.
+    // Never let a long launch/stop operation make GetSnapshot wait behind the
+    // GameLauncher mutex and falsely report the canonical host as unavailable.
+    std::unique_lock lock(processMutex_, std::try_to_lock);
+    if (!lock.owns_lock()) return;
 #ifdef _WIN32
     for (std::uint32_t seatId = 1; seatId <= 2; ++seatId) {
         const auto index = seatIndex(seatId);
@@ -884,15 +888,33 @@ bool GameLauncher::launchGameForWorkspace(
     std::lock_guard lock(processMutex_);
     lastError_.clear();
 #ifdef _WIN32
-    // Production host launch automatically carries forward a controller binding
-    // already established by the connection-scoped UI configuration lease.
+    // Stable physical controller identity is persisted with the Seat; the
+    // XInput slot is runtime-only and must be paired for the current session.
     if (host_) {
+        const auto hardware =
+            host_->seatHardwareConfiguration(workspace.workspaceId);
         const auto snapshot = host_->seatSnapshot(workspace.workspaceId);
-        if (snapshot && snapshot->controllerBinding) {
+
+        if (hardware && !hardware->controllerId.empty()) {
+            if (!snapshot || !snapshot->controllerBinding ||
+                !snapshot->controllerBinding->persistentControllerId ||
+                *snapshot->controllerBinding->persistentControllerId !=
+                    hardware->controllerId) {
+                lastError_ =
+                    "the assigned controller is not paired to a current XInput source; pair it in Seats and try again";
+                return false;
+            }
+
             auto inventory = host_->controllerInventorySnapshot();
-            if (!inventory.authoritative ||
-                !controller::bindingMatchesInventory(
+            if (!inventory.authoritative) {
+                lastError_ =
+                    "controller inventory is unavailable; reconnect the controller and try again";
+                return false;
+            }
+            if (!controller::bindingMatchesInventory(
                     *snapshot->controllerBinding, inventory)) {
+                lastError_ =
+                    "the paired controller disconnected or its XInput slot changed; pair it again";
                 return false;
             }
             const auto endpoint = hostXInputPipeEndpoint(
@@ -1152,11 +1174,12 @@ bool GameLauncher::launchGameForWorkspaceImpl(
             std::move(windowRuntime);
     }
 
-    // Establish process-local keyboard/mouse isolation while the target's
-    // primary thread is still suspended. Resuming first creates an input-bleed
-    // window where the game can observe system Raw Input before the Gate-C shim
-    // is installed.
-    if (inputDevices.configured()) {
+    // Establish every process-local input boundary while the target's
+    // primary thread is still suspended. Resuming first creates a bleed window:
+    // keyboard/mouse can observe system Raw Input and an XInput title can bind
+    // directly to the machine-wide controller slots before HydraSeat redirects
+    // its reviewed static imports.
+    if (inputDevices.configured() || wantsXInput) {
         std::string inputError;
         const auto artifactDirectory = currentExecutableDirectory(&inputError);
         if (!artifactDirectory) {
@@ -1172,11 +1195,15 @@ bool GameLauncher::launchGameForWorkspaceImpl(
         options.processHandle = fromNativeHandle(processInfo.hProcess);
         options.processId = processInfo.dwProcessId;
         options.artifactDirectory = *artifactDirectory;
+        options.enableXInputRedirect = wantsXInput;
 
-        auto inputSession = gatec::ExternalInputSession::attach(options, &inputError);
+        auto inputSession =
+            gatec::ExternalInputSession::attach(options, &inputError);
         if (!inputSession) {
             lastError_ = inputError.empty()
-                ? "process-local keyboard/mouse isolation could not be established"
+                ? (wantsXInput
+                       ? "process-local input/XInput isolation could not be established"
+                       : "process-local keyboard/mouse isolation could not be established")
                 : std::move(inputError);
             rollback();
             return false;
@@ -1288,9 +1315,19 @@ bool GameLauncher::routePhysicalInput(const RawInputEvent& event) {
 
     std::string error;
     if (!target->inputSession->sendInput(message, &error)) {
-        lastError_ = error.empty()
+        const std::uint32_t failedSeatId = target->token.seatId;
+        const std::string deliveryError = error.empty()
             ? "process-local input delivery failed"
             : "process-local input delivery failed: " + error;
+
+        // Once the process-local bridge cannot accept Seat input, continuing the
+        // owned process tree would be fail-open: a launcher-handoff child could
+        // outlive the injected root with no proven input isolation. The launcher
+        // mutex is recursive by design, so stop the exact Seat Job synchronously.
+        const bool stopped = stopWorkspaceGame(failedSeatId);
+        lastError_ = stopped
+            ? deliveryError + "; Seat process tree terminated fail closed"
+            : deliveryError + "; Seat process tree termination also failed";
         return false;
     }
     return true;
@@ -1316,11 +1353,10 @@ bool GameLauncher::stopWorkspaceGame(std::uint32_t workspaceId) {
         return false;
     }
 
-    // Stop process-local input virtualization before terminating the exact owned
-    // process tree, then restore/stop window tracking while the process is live.
-    session.inputSession.reset();
-    session.windowRuntime.reset();
-
+    // Keep Seat-local isolation/tracking alive until the exact owned process
+    // tree is confirmed stopped. If termination or verification fails, returning
+    // with the game still running must not silently drop keyboard/mouse isolation
+    // or window ownership.
     DWORD activeProcesses = 0;
     if (!queryActiveProcessCount(job, activeProcesses)) return false;
     if (activeProcesses != 0 && !TerminateJobObject(job, ERROR_CANCELLED)) {
@@ -1330,6 +1366,8 @@ bool GameLauncher::stopWorkspaceGame(std::uint32_t workspaceId) {
     if (!waitForJobEmpty(job, 5000)) return false;
     if (WaitForSingleObject(process, 5000) != WAIT_OBJECT_0) return false;
 
+    session.inputSession.reset();
+    session.windowRuntime.reset();
     session.controllerPipe.reset();
     if (!endSeatActivation(session.token)) return false;
 

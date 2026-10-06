@@ -86,9 +86,29 @@ bool SeatRuntime::bindController(const ActivationToken& token,
 
     std::lock_guard lock(mutex_);
     if (!ownsTokenLocked(token)) return false;
-    if (controllerBinding_ && *controllerBinding_ != binding) return false;
+
+    // A UI configuration lease may replace a stale/runtime-only controller
+    // mapping while no game owns the Seat. A live game lease must keep the
+    // exact binding frozen for its whole activation.
+    if (controllerBinding_ && *controllerBinding_ != binding) {
+        if (token.leaseClass != LeaseClass::UiConfiguration ||
+            gameLeaseActive_) {
+            return false;
+        }
+    }
 
     controllerBinding_ = binding;
+    return true;
+}
+
+bool SeatRuntime::clearController(const ActivationToken& token) noexcept {
+    std::lock_guard lock(mutex_);
+    if (!ownsTokenLocked(token) ||
+        token.leaseClass != LeaseClass::UiConfiguration ||
+        gameLeaseActive_) {
+        return false;
+    }
+    controllerBinding_.reset();
     return true;
 }
 
@@ -210,6 +230,13 @@ bool SessionController::bindController(
     }
 
     return runtime->bindController(token, binding);
+}
+
+bool SessionController::clearController(
+    const ActivationToken& token) noexcept {
+    std::lock_guard lock(mutex_);
+    const auto runtime = seat(token.seatId);
+    return runtime && runtime->clearController(token);
 }
 
 controller::PollResult SessionController::pollController(

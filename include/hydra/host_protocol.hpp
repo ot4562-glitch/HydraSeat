@@ -12,7 +12,7 @@
 namespace hydra::hostipc {
 
 constexpr std::uint32_t kHostProtocolMagic = 0x31505348u; // "HSP1"
-constexpr std::uint16_t kHostProtocolVersion = 2u;
+constexpr std::uint16_t kHostProtocolVersion = 3u;
 constexpr std::size_t kHostProtocolHeaderBytes = 24u;
 constexpr std::size_t kHostProtocolMaxPayloadBytes = 64u * 1024u;
 constexpr std::size_t kHostProtocolMaxDiagnosticBytes = 2048u;
@@ -158,6 +158,7 @@ struct SeatHardwareAssignment {
     std::string displayIdUtf8;
     std::string keyboardIdUtf8;
     std::string mouseIdUtf8;
+    std::string controllerIdUtf8;
 
     bool operator==(const SeatHardwareAssignment&) const = default;
 };

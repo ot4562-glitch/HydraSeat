@@ -54,42 +54,37 @@ void applyHostHardwareInventory(
     }
 }
 
-void keepHostOwnedAudioSessions(EngineStatePayload& payload) {
-    if (!payload.hostSnapshot) {
-        payload.audioSessions.clear();
-        return;
-    }
-
+void deduplicateAudioSessionsByProcess(EngineStatePayload& payload) {
     std::vector<hydra::windows::AudioSessionObservation> filtered;
     for (const auto& session : payload.audioSessions) {
-        if (!session.processIdentity) continue;
-
-        bool owned = false;
-        for (const auto& seat : payload.hostSnapshot->seats) {
-            if (!seat.processOwned || seat.processId == 0 ||
-                seat.processCreationIdentity == 0) {
-                continue;
-            }
-            if (seat.processId == session.processIdentity->pid &&
-                seat.processCreationIdentity ==
-                    session.processIdentity->creationIdentity) {
-                owned = true;
-                break;
-            }
+        // Process identity is required for stable UI matching and for any
+        // mutation. Sessions whose PID cannot be creation-time validated are
+        // not useful as application records and are intentionally omitted.
+        if (!session.processIdentity ||
+            !session.processIdentity->valid()) {
+            continue;
         }
-        if (!owned) continue;
 
         const auto existing = std::find_if(
             filtered.begin(), filtered.end(),
             [&](const auto& candidate) {
                 return candidate.processIdentity &&
-                       *candidate.processIdentity == *session.processIdentity;
+                       *candidate.processIdentity ==
+                           *session.processIdentity;
             });
         if (existing == filtered.end()) {
             filtered.push_back(session);
-        } else if (
-            existing->state != hydra::windows::AudioSessionState::Active &&
-            session.state == hydra::windows::AudioSessionState::Active) {
+            continue;
+        }
+
+        // A process can expose sessions on multiple render endpoints. Present
+        // one application row/card, preferring an active session over an
+        // inactive/expired one. Host ownership is evaluated by the UI against
+        // the authoritative snapshot; do not delete unassigned applications.
+        if (existing->state !=
+                hydra::windows::AudioSessionState::Active &&
+            session.state ==
+                hydra::windows::AudioSessionState::Active) {
             *existing = session;
         }
     }
@@ -158,6 +153,13 @@ void EnginePollerWorker::doPoll() {
         }
     }
 
+    // Controller discovery is independent from Core Audio/COM. Do it before
+    // entering the audio apartment so a transient COM failure cannot make
+    // controllers disappear from an otherwise healthy hardware snapshot.
+    payload.controllerInventory = m_controllerInventory.scan();
+    payload.controllerInventoryError =
+        !payload.controllerInventory.authoritative;
+
     const HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     const bool comInitialized = SUCCEEDED(hr);
     if (!comInitialized) {
@@ -185,14 +187,15 @@ void EnginePollerWorker::doPoll() {
 
     const auto sessionsResult =
         hydra::windows::AudioSessionObserver::enumerateSessions();
-    if (sessionsResult.isSuccess()) {
+    if (sessionsResult.isSuccess() && sessionsResult.isComplete) {
         payload.audioSessions = sessionsResult.sessions;
-        keepHostOwnedAudioSessions(payload);
+        deduplicateAudioSessionsByProcess(payload);
     } else {
+        // A partial Core Audio walk is not authoritative absence. Publishing a
+        // truncated list makes running Seat applications blink out of the UI.
         payload.audioSessionError = true;
+        payload.audioSessions.clear();
     }
-
-    payload.controllerInventory = m_controllerInventory.scan();
 
     emit pollCompleted(payload);
 }
@@ -220,7 +223,7 @@ EnginePoller::EnginePoller(QObject* parent)
         m_worker,
         &EnginePollerWorker::pollCompleted,
         this,
-        &EnginePoller::stateUpdated,
+        &EnginePoller::onPollCompleted,
         Qt::QueuedConnection);
 
     m_triggerTimer = new QTimer(this);
@@ -228,7 +231,7 @@ EnginePoller::EnginePoller(QObject* parent)
         m_triggerTimer,
         &QTimer::timeout,
         this,
-        &EnginePoller::triggerPoll);
+        &EnginePoller::requestPoll);
 
     m_workerThread.start();
 }
@@ -240,12 +243,27 @@ EnginePoller::~EnginePoller() {
 }
 
 void EnginePoller::startPolling(int intervalMs) {
-    emit triggerPoll();
     m_triggerTimer->start(intervalMs);
+    requestPoll();
 }
 
 void EnginePoller::stopPolling() {
     m_triggerTimer->stop();
+}
+
+void EnginePoller::requestPoll() {
+    // Hardware, audio-session and controller discovery can legitimately take
+    // longer than the configured refresh interval during device churn. Queueing
+    // another poll for every timer tick would make stale snapshots arrive late
+    // and can visually flap a healthy host between old/new states.
+    if (m_pollInFlight || !m_workerThread.isRunning()) return;
+    m_pollInFlight = true;
+    emit triggerPoll();
+}
+
+void EnginePoller::onPollCompleted(EngineStatePayload payload) {
+    m_pollInFlight = false;
+    emit stateUpdated(std::move(payload));
 }
 
 } // namespace hydra::ui

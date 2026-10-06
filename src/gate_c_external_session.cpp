@@ -172,14 +172,38 @@ bool injectLibrary(
     }
 
     const DWORD wait = WaitForSingleObject(thread, kHandshakeTimeoutMs);
+    if (wait == WAIT_TIMEOUT) {
+        // The remote LoadLibraryW thread may still be reading `remote`. Freeing
+        // that buffer here races the live target thread and can crash the game.
+        // The caller owns a kill-on-close Seat Job and will terminate the still-
+        // suspended target after this fail-closed attach error, which also
+        // releases the remote allocation safely with the process address space.
+        CloseHandle(thread);
+        setError(error, "Gate C artifact load timed out; target launch aborted fail closed");
+        return false;
+    }
+    if (wait != WAIT_OBJECT_0) {
+        const auto code = GetLastError();
+        // As above, do not free a buffer that an unobserved remote thread may
+        // still reference. Launch rollback terminates the target process tree.
+        CloseHandle(thread);
+        setError(
+            error,
+            "Gate C artifact loader wait failed (win32=" +
+                std::to_string(code) + ")");
+        return false;
+    }
+
     DWORD moduleResult = 0;
-    const bool loaded =
-        wait == WAIT_OBJECT_0 &&
-        GetExitCodeThread(thread, &moduleResult) != FALSE &&
-        moduleResult != 0;
-    const auto code = loaded ? ERROR_SUCCESS : GetLastError();
+    const BOOL readExitCode = GetExitCodeThread(thread, &moduleResult);
+    const auto code = readExitCode != FALSE
+        ? (moduleResult != 0 ? ERROR_SUCCESS : ERROR_DLL_INIT_FAILED)
+        : GetLastError();
+    const bool loaded = readExitCode != FALSE && moduleResult != 0;
 
     CloseHandle(thread);
+    // The loader thread is signaled, so the remote path buffer is no longer in
+    // use and can now be released without racing LoadLibraryW.
     VirtualFreeEx(process, remote, 0, MEM_RELEASE);
 
     if (!loaded) {
@@ -321,9 +345,13 @@ std::shared_ptr<ExternalInputSession> ExternalInputSession::attach(
         options.artifactDirectory / L"hydra_gate_c_shim.dll";
     const auto bridgePath =
         options.artifactDirectory / L"hydra_gate_c_external_bridge.dll";
+    const auto xinputAdapterPath =
+        options.artifactDirectory / L"hydra_xinput_adapter.dll";
     if (!fileExists(adapterPath) ||
         !fileExists(shimPath) ||
-        !fileExists(bridgePath)) {
+        !fileExists(bridgePath) ||
+        (options.enableXInputRedirect &&
+         !fileExists(xinputAdapterPath))) {
         setError(
             error,
             "Gate C runtime artifacts are not installed beside hydra_host.exe");
@@ -352,6 +380,8 @@ std::shared_ptr<ExternalInputSession> ExternalInputSession::attach(
             pipeName,
             options.requiredApiMask,
             error) ||
+        (options.enableXInputRedirect &&
+         !injectLibrary(process, xinputAdapterPath, error)) ||
         !injectLibrary(process, adapterPath, error) ||
         !injectLibrary(process, shimPath, error) ||
         !injectLibrary(process, bridgePath, error) ||

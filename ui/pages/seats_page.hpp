@@ -6,7 +6,9 @@
 #include <QScrollArea>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
+#include "hydra/controller_pairing.hpp"
 #include "ui/engine_poller.hpp"
 #include "ui/host_control_client.hpp"
 
@@ -28,6 +30,7 @@ private slots:
     void onLaunchRequested(std::uint32_t seatId);
     void onStopRequested(std::uint32_t seatId);
     void onConfigureRequested(std::uint32_t seatId);
+    void onControllerSelectionChanged(std::uint32_t seatId);
 
 private:
     struct SeatWidgets {
@@ -46,6 +49,11 @@ private:
         QPushButton* launchBtn{nullptr};
         QPushButton* stopBtn{nullptr};
         QPushButton* reconfigureBtn{nullptr};
+
+        std::optional<hydra::controller::XInputPairingSnapshot>
+            controllerPairingBaseline;
+        QString controllerPairingId;
+        bool operationInFlight{false};
     };
 
     std::shared_ptr<HostControlClient> m_hostControl;

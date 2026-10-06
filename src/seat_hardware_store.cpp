@@ -51,7 +51,10 @@ bool validateExclusive(
             configurations[1].keyboardId) ||
         conflicts(
             configurations[0].mouseId,
-            configurations[1].mouseId)) {
+            configurations[1].mouseId) ||
+        conflicts(
+            configurations[0].controllerId,
+            configurations[1].controllerId)) {
         setError(error, "one physical device cannot belong to both Seats");
         return false;
     }
@@ -177,6 +180,11 @@ bool SeatHardwareStore::toConfigurations(
                 seat.mouseIds,
                 target.mouseId,
                 "mouse",
+                error) ||
+            !boundedSingle(
+                seat.controllerIds,
+                target.controllerId,
+                "controller",
                 error)) {
             return false;
         }
@@ -227,6 +235,7 @@ bool SeatHardwareStore::applyConfigurations(
         found->displayIds.clear();
         found->keyboardIds.clear();
         found->mouseIds.clear();
+        found->controllerIds.clear();
         found->primaryDisplayId.reset();
 
         if (!configuration.displayId.empty()) {
@@ -238,6 +247,9 @@ bool SeatHardwareStore::applyConfigurations(
         }
         if (!configuration.mouseId.empty()) {
             found->mouseIds.push_back(configuration.mouseId);
+        }
+        if (!configuration.controllerId.empty()) {
+            found->controllerIds.push_back(configuration.controllerId);
         }
     }
 

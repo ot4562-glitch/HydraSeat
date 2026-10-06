@@ -16,6 +16,7 @@ struct ExternalInputSessionOptions {
     std::uint32_t processId{0};
     std::filesystem::path artifactDirectory;
     std::uint32_t requiredApiMask{kExternalBridgeAutoDetectApiMask};
+    bool enableXInputRedirect{false};
 };
 
 class ExternalInputSession final {

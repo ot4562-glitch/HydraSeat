@@ -28,11 +28,11 @@ AppWindow::AppWindow(QWidget* parent)
     setupUi();
 
     QTimer::singleShot(0, this, [this]() {
-        // Establish the control connection first so GUI startup has a single,
-        // deterministic canonical-host bootstrap path. The read-only poller can
-        // then attach as a second persistent client without racing host launch.
-        std::string ignored;
-        (void)m_hostControl->ensureConnected(&ignored);
+        // Host bootstrap belongs on the poller's worker thread. The shared
+        // bootstrap path already serializes sibling-host launch attempts, so a
+        // control connection does not need to block the GUI for up to the pipe
+        // timeout during startup. The control client connects lazily on the
+        // first user mutation after the host snapshot becomes available.
         m_enginePoller->startPolling(
             UiSettings::load().refreshIntervalMs);
     });
@@ -165,8 +165,20 @@ void AppWindow::setupUi() {
             if (!m_connectionLabel || !m_statusLabel) return;
             if (payload.hostConnected) {
                 m_connectionLabel->setText("Canonical host connected");
-                m_statusLabel->setText("● Running");
-                m_statusLabel->setToolTip({});
+                const bool subsystemDegraded =
+                    payload.hardwareError ||
+                    payload.controllerInventoryError ||
+                    payload.audioEndpointError ||
+                    payload.audioSessionError;
+                m_statusLabel->setText(
+                    subsystemDegraded ? "● Degraded" : "● Running");
+                m_statusLabel->setToolTip(
+                    subsystemDegraded
+                        ? (payload.hostError.empty()
+                               ? QStringLiteral(
+                                     "One or more runtime subsystems are unavailable.")
+                               : QString::fromStdString(payload.hostError))
+                        : QString{});
             } else {
                 m_connectionLabel->setText("Canonical host unavailable");
                 m_statusLabel->setText("● Degraded");
@@ -231,7 +243,7 @@ void AppWindow::setupStatusbar() {
     m_connectionLabel = new QLabel("Canonical host connecting", statusContainer);
     m_connectionLabel->setStyleSheet("font-size: 12px; color: #777777; border: none; margin-left: 12px;");
 
-    m_statusLabel = new QLabel("● Running", statusContainer);
+    m_statusLabel = new QLabel("● Connecting", statusContainer);
     m_statusLabel->setStyleSheet("font-size: 12px; color: #E10600; font-weight: bold; border: none;");
 
     statusLayout->addWidget(brandLabel);

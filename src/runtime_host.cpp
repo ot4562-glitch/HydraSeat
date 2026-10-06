@@ -78,17 +78,39 @@ std::vector<DeviceInfo> RuntimeHost::hardwareInventory() {
 
     {
         std::lock_guard lock(mutex_);
+        const auto isPersistedKeyboard = [this](const std::wstring& id) {
+            return std::any_of(
+                hardwareConfigurations_.cbegin(),
+                hardwareConfigurations_.cend(),
+                [&](const SeatHardwareConfiguration& configuration) {
+                    return !id.empty() && configuration.keyboardId == id;
+                });
+        };
+        const auto isPersistedMouse = [this](const std::wstring& id) {
+            return std::any_of(
+                hardwareConfigurations_.cbegin(),
+                hardwareConfigurations_.cend(),
+                [&](const SeatHardwareConfiguration& configuration) {
+                    return !id.empty() && configuration.mouseId == id;
+                });
+        };
+
+        // Activity confirmation prevents composite HID receivers from exposing
+        // phantom roles. A previously persisted assignment is already explicit
+        // user intent, so do not make it disappear after every host restart.
         std::erase_if(
             keyboards,
-            [this](const DeviceInfo& device) {
+            [this, &isPersistedKeyboard](const DeviceInfo& device) {
                 return device.requiresActivityConfirmation &&
-                       !confirmedKeyboardIds_.contains(device.id);
+                       !confirmedKeyboardIds_.contains(device.id) &&
+                       !isPersistedKeyboard(device.id);
             });
         std::erase_if(
             mice,
-            [this](const DeviceInfo& device) {
+            [this, &isPersistedMouse](const DeviceInfo& device) {
                 return device.requiresActivityConfirmation &&
-                       !confirmedMouseIds_.contains(device.id);
+                       !confirmedMouseIds_.contains(device.id) &&
+                       !isPersistedMouse(device.id);
             });
     }
 
@@ -165,6 +187,7 @@ bool RuntimeHost::configureSeatHardware(
     const auto displays = hardwareDetector_.detectDisplays();
     auto keyboards = hardwareDetector_.detectKeyboards();
     auto mice = hardwareDetector_.detectMice();
+    const auto controllers = hardwareDetector_.detectControllers();
 
     std::lock_guard lock(mutex_);
     const auto seat = controller_.snapshot(uiLease.seatId);
@@ -177,17 +200,21 @@ bool RuntimeHost::configureSeatHardware(
             "stop the running Seat game before changing its hardware assignment");
     }
 
+    const auto currentIndex = configuration.seatId - 1u;
+    const auto& currentConfiguration = hardwareConfigurations_[currentIndex];
     std::erase_if(
         keyboards,
-        [this](const DeviceInfo& device) {
+        [this, &currentConfiguration](const DeviceInfo& device) {
             return device.requiresActivityConfirmation &&
-                   !confirmedKeyboardIds_.contains(device.id);
+                   !confirmedKeyboardIds_.contains(device.id) &&
+                   device.id != currentConfiguration.keyboardId;
         });
     std::erase_if(
         mice,
-        [this](const DeviceInfo& device) {
+        [this, &currentConfiguration](const DeviceInfo& device) {
             return device.requiresActivityConfirmation &&
-                   !confirmedMouseIds_.contains(device.id);
+                   !confirmedMouseIds_.contains(device.id) &&
+                   device.id != currentConfiguration.mouseId;
         });
 
     const auto contains = [](const std::vector<DeviceInfo>& devices,
@@ -208,6 +235,9 @@ bool RuntimeHost::configureSeatHardware(
     if (!contains(mice, configuration.mouseId)) {
         return fail("selected mouse is no longer connected");
     }
+    if (!contains(controllers, configuration.controllerId)) {
+        return fail("selected controller is no longer connected");
+    }
 
     const auto otherIndex = configuration.seatId == 1u ? 1u : 0u;
     const auto& other = hardwareConfigurations_[otherIndex];
@@ -224,10 +254,16 @@ bool RuntimeHost::configureSeatHardware(
     if (conflicts(configuration.mouseId, other.mouseId)) {
         return fail("selected mouse already belongs to the other Seat");
     }
+    if (conflicts(configuration.controllerId, other.controllerId)) {
+        return fail("selected controller already belongs to the other Seat");
+    }
 
     const auto index = configuration.seatId - 1u;
     if (hardwareConfigurations_[index] == configuration) return true;
 
+    const bool controllerChanged =
+        hardwareConfigurations_[index].controllerId != configuration.controllerId;
+    const auto previous = hardwareConfigurations_;
     auto candidate = hardwareConfigurations_;
     candidate[index] = configuration;
 
@@ -236,6 +272,35 @@ bool RuntimeHost::configureSeatHardware(
     if (seatHardwareStore_ &&
         !seatHardwareStore_->save(candidate, error)) {
         return false;
+    }
+
+    // Runtime XInput identity is intentionally not persisted. If the stable
+    // physical controller assignment changed (including to None), discard any
+    // old runtime slot binding before publishing the new configuration.
+    //
+    // clearController() should be guaranteed by the validated UI lease while
+    // this host mutex is held. Still, fail closed if that invariant is ever
+    // violated and roll durable state back to the previous configuration.
+    if (controllerChanged && !controller_.clearController(uiLease)) {
+        if (seatHardwareStore_) {
+            std::string rollbackError;
+            if (seatHardwareStore_->save(previous, &rollbackError)) {
+                return fail(
+                    "controller assignment was not changed because the stale runtime binding could not be cleared");
+            }
+
+            // The durable rollback itself failed. Match in-memory state to the
+            // last successful durable write so later reads never claim the old
+            // configuration. Launch still fails closed on a stale/mismatched
+            // controller binding.
+            hardwareConfigurations_ = std::move(candidate);
+            noteMutationLocked(true);
+            return fail(
+                "controller assignment changed on disk but the stale runtime binding could not be cleared; restart hydra_host before launching");
+        }
+
+        return fail(
+            "controller assignment was not changed because the stale runtime binding could not be cleared");
     }
 
     hardwareConfigurations_ = std::move(candidate);
@@ -304,6 +369,13 @@ bool RuntimeHost::pairController(
 
     std::wstring persistentId(
         persistentControllerId.begin(), persistentControllerId.end());
+    const auto configuredIndex = uiLease.seatId - 1u;
+    if (configuredIndex >= hardwareConfigurations_.size() ||
+        hardwareConfigurations_[configuredIndex].controllerId.empty() ||
+        hardwareConfigurations_[configuredIndex].controllerId != persistentId) {
+        return false;
+    }
+
     const auto paired = controller::pairPhysicalControllerToXInput(
         uiLease.seatId, persistentId, runtimeXInputSlot, snapshot);
     if (paired.status != controller::PairingStatus::Ok || !paired.binding) {
@@ -326,18 +398,47 @@ AudioRouteStatus RuntimeHost::routeAudio(
         return AudioRouteStatus::InvalidProcess;
     }
 
-    // Keep the host authority lock through the OS mutation. This intentionally
-    // serializes lifecycle changes with audio mutation so a Seat cannot release
-    // or replace the exact process between ownership verification and routing.
-    std::lock_guard lock(mutex_);
-    const auto snapshot = controller_.snapshot(uiLease.seatId);
-    if (!snapshot || !snapshot->uiLeaseActive || !snapshot->gameLeaseActive ||
-        snapshot->generation != uiLease.generation || !snapshot->process ||
-        *snapshot->process != expectedProcess) {
+    const auto stillOwned = [&]() {
+        std::lock_guard lock(mutex_);
+        const auto snapshot = controller_.snapshot(uiLease.seatId);
+        return snapshot && snapshot->uiLeaseActive &&
+               snapshot->gameLeaseActive &&
+               snapshot->generation == uiLease.generation &&
+               snapshot->process &&
+               *snapshot->process == expectedProcess;
+    };
+
+    if (!stillOwned()) {
         return AudioRouteStatus::InvalidProcess;
     }
 
-    return router.assignEndpoint(expectedProcess, endpoint);
+    // Windows AudioPolicyConfig can block inside COM/device policy code. Keep it
+    // off the authority mutex so read-only snapshots and unrelated Seat state
+    // remain responsive. Audio mutations themselves stay serialized.
+    std::lock_guard audioLock(audioMutationMutex_);
+
+    // Revalidate after waiting for the audio lane; the Seat may have stopped or
+    // changed while another audio request was in flight.
+    if (!stillOwned()) {
+        return AudioRouteStatus::InvalidProcess;
+    }
+
+    const auto status = router.assignEndpoint(expectedProcess, endpoint);
+    if (status != AudioRouteStatus::Success) {
+        return status;
+    }
+
+    // If the exact Seat generation/process disappeared during the OS call,
+    // remove the just-written assignment for that exact process identity. The
+    // router revalidates PID+creation identity, so this cannot clear a reused PID.
+    if (!stillOwned()) {
+        const auto rollback = router.clearAssignment(expectedProcess);
+        return rollback == AudioRouteStatus::Success
+            ? AudioRouteStatus::IdentityMismatch
+            : AudioRouteStatus::RoutingFailed;
+    }
+
+    return AudioRouteStatus::Success;
 }
 
 AudioRouteStatus RuntimeHost::resetAudio(
@@ -349,15 +450,36 @@ AudioRouteStatus RuntimeHost::resetAudio(
         return AudioRouteStatus::InvalidProcess;
     }
 
-    std::lock_guard lock(mutex_);
-    const auto snapshot = controller_.snapshot(uiLease.seatId);
-    if (!snapshot || !snapshot->uiLeaseActive || !snapshot->gameLeaseActive ||
-        snapshot->generation != uiLease.generation || !snapshot->process ||
-        *snapshot->process != expectedProcess) {
+    const auto stillOwned = [&]() {
+        std::lock_guard lock(mutex_);
+        const auto snapshot = controller_.snapshot(uiLease.seatId);
+        return snapshot && snapshot->uiLeaseActive &&
+               snapshot->gameLeaseActive &&
+               snapshot->generation == uiLease.generation &&
+               snapshot->process &&
+               *snapshot->process == expectedProcess;
+    };
+
+    if (!stillOwned()) {
         return AudioRouteStatus::InvalidProcess;
     }
 
-    return router.clearAssignment(expectedProcess);
+    std::lock_guard audioLock(audioMutationMutex_);
+    if (!stillOwned()) {
+        return AudioRouteStatus::InvalidProcess;
+    }
+
+    const auto status = router.clearAssignment(expectedProcess);
+    if (status != AudioRouteStatus::Success) {
+        return status;
+    }
+
+    // Clearing an assignment for the exact process is safe even if it exits
+    // during the call, but report the authority race instead of claiming the
+    // mutation belongs to a still-active Seat.
+    return stillOwned()
+        ? AudioRouteStatus::Success
+        : AudioRouteStatus::IdentityMismatch;
 }
 
 ActivationToken RuntimeHost::beginSeatActivation(std::uint32_t seatId) noexcept {

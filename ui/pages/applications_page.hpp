@@ -51,6 +51,7 @@ private:
     QLineEdit* m_searchBox{nullptr};
     QComboBox* m_filterCombo{nullptr};
     QVBoxLayout* m_listLayout{nullptr};
+    bool m_operationInFlight{false};
 
     static QString getAssignedSeat(
         const std::optional<hydra::runtime::ProcessIdentity>& identity,

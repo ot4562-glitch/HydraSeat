@@ -46,10 +46,6 @@ AudioMutationStatus toProtocolAudioStatus(
     return AudioMutationStatus::OsApiError;
 }
 
-std::wstring widenAscii(std::string_view value) {
-    return std::wstring(value.begin(), value.end());
-}
-
 HardwareDeviceKind toProtocolHardwareKind(DeviceType type) noexcept {
     switch (type) {
     case DeviceType::Display:
@@ -155,12 +151,16 @@ std::optional<SeatHardwareAssignment> toProtocolSeatHardware(
     const auto displayId = wideToUtf8(configuration.displayId);
     const auto keyboardId = wideToUtf8(configuration.keyboardId);
     const auto mouseId = wideToUtf8(configuration.mouseId);
-    if (!displayId || !keyboardId || !mouseId) return std::nullopt;
+    const auto controllerId = wideToUtf8(configuration.controllerId);
+    if (!displayId || !keyboardId || !mouseId || !controllerId) {
+        return std::nullopt;
+    }
     return SeatHardwareAssignment{
         configuration.seatId,
         *displayId,
         *keyboardId,
         *mouseId,
+        *controllerId,
     };
 }
 
@@ -169,12 +169,16 @@ std::optional<runtime::SeatHardwareConfiguration> toRuntimeSeatHardware(
     const auto displayId = utf8ToWide(assignment.displayIdUtf8);
     const auto keyboardId = utf8ToWide(assignment.keyboardIdUtf8);
     const auto mouseId = utf8ToWide(assignment.mouseIdUtf8);
-    if (!displayId || !keyboardId || !mouseId) return std::nullopt;
+    const auto controllerId = utf8ToWide(assignment.controllerIdUtf8);
+    if (!displayId || !keyboardId || !mouseId || !controllerId) {
+        return std::nullopt;
+    }
     return runtime::SeatHardwareConfiguration{
         assignment.seatId,
         *displayId,
         *keyboardId,
         *mouseId,
+        *controllerId,
     };
 }
 
@@ -527,8 +531,15 @@ Frame HostConnectionSession::handle(const Frame& request) {
                 "native audio routing backend is unavailable");
         }
 
+        const auto endpointId = utf8ToWide(route->endpointId);
+        if (!endpointId || endpointId->empty()) {
+            return error(
+                request.correlationId,
+                ErrorCode::Malformed,
+                "audio endpoint identifier is not valid UTF-8");
+        }
         const runtime::AudioEndpointIdentity endpoint{
-            widenAscii(route->endpointId),
+            *endpointId,
             std::nullopt};
         const auto status = host_.routeAudio(
             *lease, process, endpoint, *audioRouter_);
@@ -668,7 +679,7 @@ Frame HostConnectionSession::handle(const Frame& request) {
         return error(
             request.correlationId,
             ErrorCode::Unsupported,
-            "request direction is not enabled by host protocol v2");
+            "request direction is not enabled by host protocol v3");
     }
 }
 
@@ -925,7 +936,7 @@ std::wstring currentHostPipeName() {
     if (!ProcessIdToSessionId(GetCurrentProcessId(), &sessionId)) {
         return {};
     }
-    return L"\\\\.\\pipe\\HydraSeat.Host.v2." + std::to_wstring(sessionId);
+    return L"\\\\.\\pipe\\HydraSeat.Host.v3." + std::to_wstring(sessionId);
 #else
     return {};
 #endif

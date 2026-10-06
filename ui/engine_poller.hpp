@@ -32,6 +32,7 @@ struct EngineStatePayload {
     std::string hostError;
     bool hostConnected{false};
     bool hardwareError{false};
+    bool controllerInventoryError{false};
     bool audioEndpointError{false};
     bool audioSessionError{false};
 };
@@ -67,10 +68,15 @@ signals:
     void stateUpdated(hydra::ui::EngineStatePayload payload);
     void triggerPoll();
 
+private slots:
+    void requestPoll();
+    void onPollCompleted(hydra::ui::EngineStatePayload payload);
+
 private:
     QThread m_workerThread;
     EnginePollerWorker* m_worker{nullptr};
     QTimer* m_triggerTimer{nullptr};
+    bool m_pollInFlight{false};
 };
 
 } // namespace hydra::ui

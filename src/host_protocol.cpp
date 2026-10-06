@@ -650,6 +650,10 @@ std::vector<std::byte> encodeSeatHardwareAssignment(
         !validUtf8(
             assignment.mouseIdUtf8,
             kHostProtocolMaxHardwareDeviceIdBytes,
+            true) ||
+        !validUtf8(
+            assignment.controllerIdUtf8,
+            kHostProtocolMaxHardwareDeviceIdBytes,
             true)) {
         return {};
     }
@@ -660,6 +664,7 @@ std::vector<std::byte> encodeSeatHardwareAssignment(
     appendString(out, assignment.displayIdUtf8);
     appendString(out, assignment.keyboardIdUtf8);
     appendString(out, assignment.mouseIdUtf8);
+    appendString(out, assignment.controllerIdUtf8);
     if (out.size() > kHostProtocolMaxPayloadBytes) return {};
     return out;
 }
@@ -696,6 +701,12 @@ std::optional<SeatHardwareAssignment> decodeSeatHardwareAssignment(
             kHostProtocolMaxHardwareDeviceIdBytes,
             true,
             assignment.mouseIdUtf8) ||
+        !readString(
+            payload,
+            offset,
+            kHostProtocolMaxHardwareDeviceIdBytes,
+            true,
+            assignment.controllerIdUtf8) ||
         offset != payload.size()) {
         return std::nullopt;
     }

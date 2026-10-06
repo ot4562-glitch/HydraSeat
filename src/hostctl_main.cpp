@@ -32,6 +32,7 @@ void printSeatHardware(
         << " display_id=" << assignment.displayIdUtf8
         << " keyboard_id=" << assignment.keyboardIdUtf8
         << " mouse_id=" << assignment.mouseIdUtf8
+        << " controller_id=" << assignment.controllerIdUtf8
         << '\n';
 }
 
@@ -170,7 +171,8 @@ int runAssignHardware(
     std::uint32_t seatId,
     std::wstring_view displayId,
     std::wstring_view keyboardId,
-    std::wstring_view mouseId) {
+    std::wstring_view mouseId,
+    std::optional<std::wstring_view> controllerId) {
     const auto convert = [](std::wstring_view value)
         -> std::optional<std::string> {
         if (value == L"-") return std::string{};
@@ -179,7 +181,10 @@ int runAssignHardware(
     const auto display = convert(displayId);
     const auto keyboard = convert(keyboardId);
     const auto mouse = convert(mouseId);
-    if (!display || !keyboard || !mouse) {
+    const auto requestedController =
+        controllerId ? convert(*controllerId) : std::optional<std::string>{};
+    if (!display || !keyboard || !mouse ||
+        (controllerId && !requestedController)) {
         std::cerr << "hardware identifiers are not valid Unicode\n";
         return 2;
     }
@@ -195,9 +200,21 @@ int runAssignHardware(
         return 1;
     }
 
+    std::string controller;
+    if (controllerId) {
+        controller = *requestedController;
+    } else {
+        const auto current = client.getSeatHardware(seatId, 5000, &error);
+        if (!current) {
+            std::cerr << "read current hardware failed: " << error << '\n';
+            return 1;
+        }
+        controller = current->controllerIdUtf8;
+    }
+
     const auto assignment = client.assignSeatHardware(
         hydra::hostipc::SeatHardwareAssignment{
-            seatId, *display, *keyboard, *mouse},
+            seatId, *display, *keyboard, *mouse, controller},
         5000,
         &error);
     if (!assignment) {
@@ -293,11 +310,14 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     if (command == L"assign-hardware") {
-        if (argc != 6 || argv[2] == nullptr || argv[3] == nullptr ||
-            argv[4] == nullptr || argv[5] == nullptr) {
+        if ((argc != 6 && argc != 7) ||
+            argv[2] == nullptr || argv[3] == nullptr ||
+            argv[4] == nullptr || argv[5] == nullptr ||
+            (argc == 7 && argv[6] == nullptr)) {
             std::cerr
                 << "usage: hydraseat_hostctl assign-hardware "
-                   "<seat:1|2> <display-id|-> <keyboard-id|-> <mouse-id|->\n";
+                   "<seat:1|2> <display-id|-> <keyboard-id|-> <mouse-id|-> "
+                   "[controller-id|-]\n";
             return 2;
         }
         const auto seat = parseSeat(argv[2]);
@@ -306,7 +326,13 @@ int wmain(int argc, wchar_t** argv) {
             return 2;
         }
         return runAssignHardware(
-            *seat, argv[3], argv[4], argv[5]);
+            *seat,
+            argv[3],
+            argv[4],
+            argv[5],
+            argc == 7
+                ? std::optional<std::wstring_view>{argv[6]}
+                : std::nullopt);
     }
 
     if (command == L"launch") {

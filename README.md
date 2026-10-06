@@ -63,7 +63,7 @@ See [Architecture](docs/ARCHITECTURE.md) and the stricter [Collaboration Contrac
 
 The current release-candidate branch contains the two-Seat configuration model, stable display/keyboard/mouse/controller identity, connection-scoped UI leases, generation-scoped `SessionController` / `SeatRuntime` ownership, exact process/window claims, host-owned launch/stop, Windows audio routing, and the x64 Gate-C external session/bridge path.
 
-Pranshu's Qt Widgets UI is the canonical HydraSeat UI. The build therefore requires Qt 6.8+ instead of silently replacing that interface with a fallback UI when Qt is absent. A distributable package must deploy the matching Qt runtime/plugins beside `HydraSeat.exe`; the current first-party-only release allowlist does not yet satisfy that clean-machine packaging requirement, so it remains an explicit release blocker rather than a hidden dependency.
+Pranshu's Qt Widgets UI is the canonical HydraSeat UI. The build therefore requires exact Qt 6.8.3 instead of silently replacing that interface with a fallback UI when Qt is absent. Release tooling now stages the provenance-bound Qt runtime/plugins beside `HydraSeat.exe` and packages the Microsoft-signed x64 Visual C++ Redistributable as an installer prerequisite. This packaging path remains unverified until the current hardening pass completes its Windows-native validation.
 
 The dated breakdown is maintained in [Current Status](docs/STATUS.md). Future sequencing is in [Roadmap](docs/ROADMAP.md).
 

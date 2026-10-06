@@ -90,6 +90,7 @@ private:
 
     mutable std::mutex mutex_;
     mutable std::mutex controllerInventoryMutex_;
+    mutable std::mutex audioMutationMutex_;
     SessionController controller_;
     controller::ControllerInventory controllerInventory_;
     HardwareDetector hardwareDetector_;

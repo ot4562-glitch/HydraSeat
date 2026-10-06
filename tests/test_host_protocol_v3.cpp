@@ -118,11 +118,27 @@ int main() {
     assert(encodeHardwareInventory(invalidHardwareInventory).empty());
 
     const SeatHardwareAssignment seatHardware{
-        1, "display:stable-a", "keyboard:stable-b", "mouse:stable-c"};
+        1,
+        "display:stable-a",
+        "keyboard:stable-b",
+        "mouse:stable-c",
+        "container:{12345678-1234-1234-1234-1234567890AB}"};
     const auto seatHardwareBytes =
         encodeSeatHardwareAssignment(seatHardware);
     assert(!seatHardwareBytes.empty());
     assert(decodeSeatHardwareAssignment(seatHardwareBytes) == seatHardware);
+
+    // Protocol v3 requires the controller-id field, even when its value is
+    // empty. A v2-shaped payload must fail closed rather than being interpreted
+    // as a v3 hardware mutation with an implicit controller clear.
+    SeatHardwareAssignment withoutController = seatHardware;
+    withoutController.controllerIdUtf8.clear();
+    auto legacySeatHardwareBytes =
+        encodeSeatHardwareAssignment(withoutController);
+    assert(legacySeatHardwareBytes.size() >= sizeof(std::uint32_t));
+    legacySeatHardwareBytes.resize(
+        legacySeatHardwareBytes.size() - sizeof(std::uint32_t));
+    assert(!decodeSeatHardwareAssignment(legacySeatHardwareBytes).has_value());
 
     auto invalidSeatHardware = seatHardware;
     invalidSeatHardware.seatId = 3;

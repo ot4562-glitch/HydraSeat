@@ -49,7 +49,7 @@ int main() {
     }
 
     const std::wstring mutexName =
-        L"Local\\HydraSeat.Host.v2." + std::to_wstring(sessionId);
+        L"Local\\HydraSeat.Host.v3." + std::to_wstring(sessionId);
     HANDLE instanceMutex =
         CreateMutexW(nullptr, TRUE, mutexName.c_str());
     if (instanceMutex == nullptr) {

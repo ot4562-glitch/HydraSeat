@@ -3,14 +3,16 @@
 #include "hydra/host_transport.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 
 namespace hydra::ui {
 
 // One persistent Control-role connection for the whole UI process.
-// UI configuration leases are connection-scoped in host IPC v2, so every
+// UI configuration leases are connection-scoped in host IPC v3, so every
 // mutating UI action must pass through this object instead of constructing
 // process-local runtime authority.
 class HostControlClient final {
@@ -42,6 +44,7 @@ public:
         const std::string& displayIdUtf8,
         const std::string& keyboardIdUtf8,
         const std::string& mouseIdUtf8,
+        const std::string& controllerIdUtf8,
         std::string* error = nullptr);
     std::optional<hostipc::HostSnapshot> pairController(
         std::uint32_t seatId,
@@ -80,9 +83,12 @@ private:
         std::uint32_t processId,
         std::uint64_t creationIdentity,
         std::string* error);
+    void clearOwnedUiLeases() noexcept;
+    void clearOwnedUiLeasesIfDisconnected() noexcept;
 
+    mutable std::recursive_mutex mutex_;
     hostipc::HostPipeClient client_;
-    std::array<bool, hostipc::kHostSeatCount> ownedUiLeases_{};
+    std::array<std::atomic_bool, hostipc::kHostSeatCount> ownedUiLeases_{};
 };
 
 } // namespace hydra::ui

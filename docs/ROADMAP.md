@@ -16,7 +16,7 @@ Snapshot alignment: **2026-10-01**. This roadmap separates implemented software 
 - [x] portable two-player setup model.
 - [x] diagnostics and provider/profile/compatibility pipeline foundations.
 - [x] release acceptance and validation tooling.
-- [x] host/client authority split with host IPC v2.
+- [x] host/client authority split with host IPC v3.
 - [x] host-owned Windows audio mutation path.
 - [x] host-owned custom-executable launch/stop path with strict Seat Job ownership and exact process publication.
 - [x] signed installer bootstrap, local compatibility evidence/runner, and runtime-requirement authority targets activated and tested.

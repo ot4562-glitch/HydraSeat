@@ -11,6 +11,7 @@ struct SeatHardwareConfiguration {
     std::wstring displayId;
     std::wstring keyboardId;
     std::wstring mouseId;
+    std::wstring controllerId;
 
     bool operator==(const SeatHardwareConfiguration&) const = default;
 };

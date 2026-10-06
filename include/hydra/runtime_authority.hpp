@@ -62,6 +62,7 @@ public:
                            std::uintptr_t expectedHwnd) noexcept;
     bool bindController(const ActivationToken& token,
                         const controller::SeatBinding& binding) noexcept;
+    bool clearController(const ActivationToken& token) noexcept;
     bool releaseLease(const ActivationToken& token) noexcept;
     bool endActivation(const ActivationToken& token) noexcept {
         return releaseLease(token);
@@ -101,6 +102,7 @@ public:
     bool bindController(const ActivationToken& token,
                         const controller::SeatBinding& binding,
                         const controller::InventorySnapshot& inventory) noexcept;
+    bool clearController(const ActivationToken& token) noexcept;
     controller::PollResult pollController(
         const ActivationToken& token,
         const controller::InventorySnapshot& inventory) noexcept;

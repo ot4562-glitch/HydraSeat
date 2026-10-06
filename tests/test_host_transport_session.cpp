@@ -83,6 +83,7 @@ int main() {
         assert(decodedSeatHardware->displayIdUtf8.empty());
         assert(decodedSeatHardware->keyboardIdUtf8.empty());
         assert(decodedSeatHardware->mouseIdUtf8.empty());
+        assert(decodedSeatHardware->controllerIdUtf8.empty());
 
         const auto inventory = readOnly.handle(Frame{
             MessageType::GetHardwareInventory, 23, {}});
@@ -93,7 +94,7 @@ int main() {
             MessageType::AssignSeatHardware,
             24,
             encodeSeatHardwareAssignment(
-                SeatHardwareAssignment{1, "", "", ""})});
+                SeatHardwareAssignment{1, "", "", "", ""})});
         assert(deniedAssignment.type == MessageType::Error);
         const auto deniedAssignmentError =
             decodeError(deniedAssignment.payload);
@@ -145,7 +146,7 @@ int main() {
             MessageType::AssignSeatHardware,
             701,
             encodeSeatHardwareAssignment(
-                SeatHardwareAssignment{1, "", "", ""})});
+                SeatHardwareAssignment{1, "", "", "", ""})});
         assert(assignedHardware.type ==
                MessageType::AssignSeatHardwareResult);
         const auto assignedHardwareValue =

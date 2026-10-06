@@ -19,6 +19,7 @@ ALLOWED_ARCHITECTURES = {"x64"}
 EXPECTED_TARGETS = {
     "HydraSeat": "HydraSeat.exe",
     "hydra_host": "hydra_host.exe",
+    "hydra_xinput_adapter": "hydra_xinput_adapter.dll",
     "hydra_gate_c_adapter": "hydra_gate_c_adapter.dll",
     "hydra_gate_c_shim": "hydra_gate_c_shim.dll",
     "hydra_gate_c_external_bridge": "hydra_gate_c_external_bridge.dll",

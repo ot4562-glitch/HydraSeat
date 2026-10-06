@@ -150,7 +150,19 @@ void HardwarePage::updateState(const EngineStatePayload& payload) {
     addSection("DISPLAYS", payload.displays);
     addSection("KEYBOARDS", payload.keyboards);
     addSection("MICE", payload.mice);
-    addControllerSection(payload.controllerInventory);
+    if (payload.controllerInventoryError) {
+        auto* err = new QLabel(
+            "CONTROLLER INVENTORY UNAVAILABLE\n" +
+            QString::fromStdString(
+                payload.controllerInventory.error.empty()
+                    ? "Windows controller discovery failed."
+                    : payload.controllerInventory.error));
+        err->setStyleSheet(
+            "color: #E10600; font-size: 13px; font-weight: bold;");
+        m_listLayout->insertWidget(m_listLayout->count() - 1, err);
+    } else {
+        addControllerSection(payload.controllerInventory);
+    }
 }
 
 } // namespace hydra::ui

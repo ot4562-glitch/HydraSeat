@@ -55,9 +55,17 @@ int main() {
 
         SeatHardwareConfigurations configured{{
             SeatHardwareConfiguration{
-                1, L"display:one", L"keyboard:one", L"mouse:one"},
+                1,
+                L"display:one",
+                L"keyboard:one",
+                L"mouse:one",
+                L"container:{11111111-1111-1111-1111-111111111111}"},
             SeatHardwareConfiguration{
-                2, L"display:two", L"keyboard:two", L"mouse:two"},
+                2,
+                L"display:two",
+                L"keyboard:two",
+                L"mouse:two",
+                L"container:{22222222-2222-2222-2222-222222222222}"},
         }};
         assert(store.save(configured, &error));
 
@@ -68,6 +76,10 @@ int main() {
 
         auto conflicting = configured;
         conflicting[1].keyboardId = conflicting[0].keyboardId;
+        assert(!reloaded.save(conflicting, &error));
+
+        conflicting = configured;
+        conflicting[1].controllerId = conflicting[0].controllerId;
         assert(!reloaded.save(conflicting, &error));
 
         SeatHardwareStore preserved(path);
