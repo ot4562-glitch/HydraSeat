@@ -1,0 +1,143 @@
+name: Build pinned HydraSeat Windows demo archive
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-demo:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact upstream release source
+        uses: actions/checkout@v4
+        with:
+          repository: Pranshu45883/HydraSeat
+          ref: c8163f5308f90a1fca3a05effb48de87c1168e1c
+          persist-credentials: false
+
+      - name: Configure MSVC toolchain
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt 6.8.3
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Configure CMake
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Windows Release binaries
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Run full registered CTest suite
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Package reviewed binaries with the Qt runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = 'HydraSeat-v0.1.0-demo.1-win11-x64-portable'
+          $sourceDir = Join-Path $env:GITHUB_WORKSPACE 'build\Release'
+          $stage = Join-Path $env:RUNNER_TEMP $name
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+          $binaries = @(
+            'HydraSeat.exe',
+            'hydra_host.exe',
+            'hydra_xinput_adapter.dll',
+            'hydra_gate_c_adapter.dll',
+            'hydra_gate_c_shim.dll',
+            'hydra_gate_c_external_bridge.dll',
+            'hydra_watchdog.exe',
+            'hydra_reset.exe',
+            'hydraseat_profilectl.exe',
+            'hydraseat_community_validate.exe'
+          )
+          foreach ($binary in $binaries) {
+            $source = Join-Path $sourceDir $binary
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "Required release binary missing: $binary"
+            }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $stage $binary) -ErrorAction Stop
+          }
+
+          $tool = Get-Command windeployqt -ErrorAction Stop
+          & $tool.Source --release --no-translations --no-compiler-runtime --dir $stage (Join-Path $stage 'HydraSeat.exe')
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed with exit code $LASTEXITCODE" }
+
+          foreach ($path in @('Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Concurrent.dll','platforms\qwindows.dll')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $stage $path) -PathType Leaf)) {
+              throw "Required Qt runtime component missing: $path"
+            }
+          }
+
+          foreach ($binary in $binaries) {
+            $path = Join-Path $stage $binary
+            $bytes = [IO.File]::ReadAllBytes($path)
+            if ($bytes.Length -lt 256 -or [BitConverter]::ToUInt16($bytes,0) -ne 0x5A4D) {
+              throw "Not a valid Windows PE binary: $binary"
+            }
+            $offset = [BitConverter]::ToInt32($bytes, 0x3C)
+            if ($offset -lt 64 -or ($offset + 6) -gt $bytes.Length -or [BitConverter]::ToUInt32($bytes, $offset) -ne 0x00004550 -or [BitConverter]::ToUInt16($bytes, $offset + 4) -ne 0x8664) {
+              throw "Not an x64 PE binary: $binary"
+            }
+          }
+
+          Copy-Item -LiteralPath 'LICENSE' -Destination (Join-Path $stage 'LICENSE') -ErrorAction Stop
+          New-Item -ItemType Directory -Path (Join-Path $stage 'licenses') -Force | Out-Null
+          Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/qt/qtbase/v6.8.3/LICENSES/LGPL-3.0-only.txt' -OutFile (Join-Path $stage 'licenses\LGPL-3.0-only.txt')
+          Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/qt/qtbase/v6.8.3/LICENSES/GPL-3.0-only.txt' -OutFile (Join-Path $stage 'licenses\GPL-3.0-only.txt')
+
+          @'
+          HydraSeat v0.1.0-demo.1 - experimental portable binary preview
+          Windows 11 x64
+          Source repository: https://github.com/Pranshu45883/HydraSeat
+          Source commit: c8163f5308f90a1fca3a05effb48de87c1168e1c
+          License: MIT (see LICENSE)
+
+          QUICK START
+          1. Extract the complete ZIP to a local folder. Do NOT run HydraSeat.exe directly from inside the archive.
+          2. On Windows 11 x64, install Microsoft's supported Visual C++ Redistributable (x64) if it is not already installed:
+             https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist
+          3. Launch HydraSeat.exe normally (not as Administrator). hydra_host.exe must remain beside it.
+          4. Do not install drivers, disable Windows security, or test on a primary PC to work around unsupported features.
+
+          LIMITATIONS
+          - UNSIGNED experimental preview. Windows may warn about unrecognized applications. Do not bypass security controls.
+          - Not an installer; never run the privileged production installer from this preview.
+          - Two-physical-seat game/input/audio isolation, clean-machine startup, recovery, anti-cheat and production signing remain unvalidated.
+          - Test only on a backed-up, recoverable Windows test machine. This ZIP does not include a driver.
+
+          QT THIRD-PARTY NOTICE
+          Qt 6.8.3 dynamic libraries/plugins are redistributed separately from the MIT-licensed HydraSeat program.
+          See licenses/LGPL-3.0-only.txt and licenses/GPL-3.0-only.txt and Qt's license terms.
+          You may replace the dynamic Qt DLLs with compatible builds.
+          Qt source: https://code.qt.io/cgit/qt/qtbase.git/tag/?h=v6.8.3
+          Qt licensing: https://www.qt.io/licensing/open-source-lgpl-obligations
+          'License' does not apply automatically to third-party DLLs.
+          '@ | Set-Content -LiteralPath (Join-Path $stage 'README-DEMO.txt') -Encoding utf8
+
+          $zip = Join-Path $env:RUNNER_TEMP ($name + '.zip')
+          if (Test-Path -LiteralPath $zip) { throw 'Release output already exists' }
+          Compress-Archive -LiteralPath $stage -DestinationPath $zip -CompressionLevel Optimal
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw 'ZIP was not created' }
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name.zip" | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'SHA256SUMS') -Encoding ascii
+          Write-Host "Demo zip: $zip"
+          Write-Host "SHA256: $hash"
+          Write-Host "Archive bytes: $((Get-Item -LiteralPath $zip).Length)"
+
+      - name: Publish release candidate ZIP as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HydraSeat-v0.1.0-demo.1-win11-x64-portable
+          path: |
+            ${{ runner.temp }}/HydraSeat-v0.1.0-demo.1-win11-x64-portable.zip
+            ${{ runner.temp }}/SHA256SUMS
+          retention-days: 14
+          if-no-files-found: error
