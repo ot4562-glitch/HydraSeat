@@ -70,7 +70,8 @@ jobs:
           & $tool.Source --release --no-translations --no-compiler-runtime --dir $stage (Join-Path $stage 'HydraSeat.exe')
           if ($LASTEXITCODE -ne 0) { throw "windeployqt failed with exit code $LASTEXITCODE" }
 
-          foreach ($path in @('Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Concurrent.dll','platforms\qwindows.dll')) {
+          # The deployed Qt DLL list follows windeployqt; QtConcurrent is not a linked dependency here.
+          foreach ($path in @('Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','platforms\qwindows.dll')) {
             if (-not (Test-Path -LiteralPath (Join-Path $stage $path) -PathType Leaf)) {
               throw "Required Qt runtime component missing: $path"
             }
