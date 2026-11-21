@@ -140,5 +140,5 @@ jobs:
           path: |
             ${{ runner.temp }}/HydraSeat-v0.1.0-demo.1-win11-x64-portable.zip
             ${{ runner.temp }}/SHA256SUMS
-          retention-days: 14
+          retention-days: 7
           if-no-files-found: error
